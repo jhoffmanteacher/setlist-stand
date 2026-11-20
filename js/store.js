@@ -18,6 +18,7 @@ async function tx(store, mode, fn){
   return new Promise((res, rej) => {
     const t = d.transaction(store, mode); const r = fn(t.objectStore(store));
     t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('aborted'));     // a full disk at commit aborts without an error event
   });
 }
 export const put = (st, k, v) => MEM ? (MEM[st].set(k, v), Promise.resolve()) : tx(st, 'readwrite', s => s.put(v, k));
@@ -25,17 +26,56 @@ export const get = (st, k) => MEM ? Promise.resolve(MEM[st].get(k)) : tx(st, 're
 export const del = (st, k) => MEM ? (MEM[st].delete(k), Promise.resolve()) : tx(st, 'readwrite', s => s.delete(k));
 export const all = st => MEM ? Promise.resolve([...MEM[st].values()]) : tx(st, 'readonly', s => s.getAll());
 
+/* Every ink page key of a song ("id:1", "id:2", …). */
+const inkRange = songId => [songId + ':', songId + ':￿'];
 /* Writes many records in ONE transaction: all of them are saved or none are (a reload, a full disk or a crash
-   part-way leaves the stores exactly as they were). ops: [{store, key, value}]. */
+   part-way leaves the stores exactly as they were). Runs in order. ops:
+   {store, key, value} saves, {store, key, delete:true} removes, {deleteInkFor:songId} removes every ink page of that song. */
 export async function putAll(ops){
-  if(MEM){ for(const o of ops) MEM[o.store].set(o.key, o.value); return; }
+  const storeOf = o => o.deleteInkFor != null ? 'ink' : o.store;
+  if(MEM){
+    for(const o of ops){
+      if(o.deleteInkFor != null){ const [lo, hi] = inkRange(o.deleteInkFor); for(const k of [...MEM.ink.keys()]) if(k >= lo && k <= hi) MEM.ink.delete(k); }
+      else if(o.delete) MEM[o.store].delete(o.key);
+      else MEM[o.store].set(o.key, o.value);
+    }
+    return;
+  }
+  if(!ops.length) return;
   const d = await db();
   await new Promise((res, rej) => {
-    const stores = [...new Set(ops.map(o => o.store))], t = d.transaction(stores, 'readwrite');
-    for(const o of ops) t.objectStore(o.store).put(o.value, o.key);
+    const stores = [...new Set(ops.map(storeOf))], t = d.transaction(stores, 'readwrite');
     t.oncomplete = () => res();
     t.onerror = () => rej(t.error);
     t.onabort = () => rej(t.error || new Error('aborted'));
+    /* A key range delete is one request, so it stays in order with the puts around it (a cursor would not).
+       A request that throws (say a value that cannot be stored) aborts the whole transaction: the earlier ops are undone too. */
+    try{
+      for(const o of ops){
+        const st = t.objectStore(storeOf(o));
+        if(o.deleteInkFor != null) st.delete(IDBKeyRange.bound(...inkRange(o.deleteInkFor)));
+        else if(o.delete) st.delete(o.key);
+        else st.put(o.value, o.key);
+      }
+    }catch(err){ try{ t.abort(); }catch(e){} rej(err); }
+  });
+}
+/* Reads one record and writes fn(record) back in ONE transaction, so nothing written in between is lost.
+   fn returns the new record, or undefined to leave it as it is. Resolves to what was written (or undefined). */
+export async function update(store, key, fn){
+  if(MEM){ const v = fn(MEM[store].get(key)); if(v !== undefined) MEM[store].set(key, v); return v; }
+  const d = await db();
+  return new Promise((res, rej) => {
+    const t = d.transaction(store, 'readwrite'), st = t.objectStore(store);
+    let out;
+    t.oncomplete = () => res(out);
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('aborted'));
+    const r = st.get(key);
+    r.onsuccess = () => {
+      try{ out = fn(r.result); if(out !== undefined) st.put(out, key); }
+      catch(err){ try{ t.abort(); }catch(e){} rej(err); }
+    };
   });
 }
 
@@ -103,7 +143,10 @@ export async function ensureHashes(){
   for(const s of state.songs){
     if(s.hash) continue;
     const f = await get('files', s.id); if(!f) continue;
-    s.hash = await sha256(await f.arrayBuffer()); await put('songs', s.id, s); n++;
+    const hash = await sha256(await f.arrayBuffer());
+    /* Hashing takes a while: write onto the record as it is NOW (an edit made meanwhile stays), and never revive a deleted song. */
+    const saved = await update('songs', s.id, cur => cur && !cur.deleted && !cur.hash ? {...cur, hash} : undefined);
+    if(saved){ s.hash = hash; n++; }
   }
   return n;
 }
@@ -111,14 +154,20 @@ export async function ensureHashes(){
 /* ---------- ink ---------- */
 export const liveStrokes = arr => (arr || []).filter(s => !s.deleted);
 export const inkRecord = (strokes) => ({updated:now(), strokes});
-/* Older data stored a bare array of strokes with no ids. Give them ids and save once. */
+/* Older data stored a bare array of strokes with no ids. Give them ids and save once.
+   Anything else that is not {updated, strokes:[...]} (a damaged or hand-made record) becomes an empty page;
+   stroke entries that are not objects are dropped and `updated` is always a number. */
+const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 export function upgradeInk(v){
   if(!v) return {record:{updated:0, strokes:[]}, changed:false};
   if(Array.isArray(v)){
     const t = now();
-    return {record:{updated:t, strokes:v.map(s => ({...s, id:s.id || uid(), updated:s.updated || t}))}, changed:true};
+    return {record:{updated:t, strokes:v.filter(isObj).map(s => ({...s, id:s.id || uid(), updated:s.updated || t}))}, changed:true};
   }
-  return {record:v, changed:false};
+  if(!isObj(v) || !Array.isArray(v.strokes)) return {record:{updated:Number(isObj(v) && v.updated) || 0, strokes:[]}, changed:true};
+  const strokes = v.strokes.filter(isObj), updated = Number(v.updated) || 0;
+  if(strokes.length === v.strokes.length && updated === v.updated) return {record:v, changed:false};
+  return {record:{...v, updated, strokes}, changed:true};
 }
 export async function getInk(songId, pn){
   const key = songId + ':' + pn, v = await get('ink', key);
@@ -128,13 +177,14 @@ export async function getInk(songId, pn){
 }
 /* Removes every ink page record of a song, whatever its page count was. */
 export async function delInkFor(songId){
-  const lo = songId + ':', hi = songId + ':\uffff';
+  const [lo, hi] = inkRange(songId);
   if(MEM){ for(const k of [...MEM.ink.keys()]) if(k >= lo && k <= hi) MEM.ink.delete(k); return; }
   const d = await db();
   await new Promise((res, rej) => {
     const t = d.transaction('ink', 'readwrite'), st = t.objectStore('ink');
     st.openKeyCursor(IDBKeyRange.bound(lo, hi)).onsuccess = e => { const c = e.target.result; if(c){ st.delete(c.key); c.continue(); } };
     t.oncomplete = res; t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('aborted'));
   });
 }
 export const putInk = (songId, pn, strokes) => put('ink', songId + ':' + pn, inkRecord(strokes));

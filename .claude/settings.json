@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/stop-checks.mjs\"",
+            "timeout": 90,
+            "statusMessage": "Running node tools/checks.mjs..."
+          }
+        ]
+      }
+    ]
+  }
+}

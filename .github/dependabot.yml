@@ -1,0 +1,17 @@
+# Opens a pull request when a building block has a newer version, so the checks do not quietly rot:
+# the actions in .github/workflows/ (pinned by SHA; Dependabot proposes the new SHA and updates the comment)
+# and the one npm devDependency (playwright, for tools/smoke.mjs and tools/loops.mjs). Nothing here ships:
+# the app's libraries are vendored by hand in vendor/ (CLAUDE.md "Stack rules"). ESLint is pinned in
+# eslint.config.mjs, not package.json, so Dependabot does not see it: bump it by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    allow:
+      - dependency-type: development

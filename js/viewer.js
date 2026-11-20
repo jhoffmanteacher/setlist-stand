@@ -1,7 +1,7 @@
 import {$, toast, hooks} from './util.js';
-import {get, getInk, state, songById, cropOf} from './store.js';
+import {get, getInk, songById, cropOf} from './store.js';
 import {openCropper} from './crop.js';
-import {paint, setAnnot, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
+import {paint, setAnnot, inkBusy, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
 export const V = {queue:[], qi:0, brk:null, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
@@ -19,6 +19,7 @@ export async function openViewer(entries, qi, page = 1){
   V.queue = entries; V.hist = [];
   viewer.classList.add('on'); viewer.classList.remove('hide');
   document.body.style.overflow = 'hidden';
+  document.body.classList.add('playing');      // hides the "Updated. Tap to reload" banner: a stray tap mid-song must not reload the app
   lock();
   await show(qi, page);
 }
@@ -29,10 +30,11 @@ export function resumeState(){
 export function closeViewer(){
   setAnnot(false);
   viewer.classList.remove('on');
-  V.tok++; V.dt++; V.brk = null;
+  V.tok++; V.dt++; V.brk = null; gest = null;
   if(V.doc){ V.doc.destroy(); V.doc = null; }
   V.cache.clear(); stage.innerHTML = '';
   document.body.style.overflow = '';
+  document.body.classList.remove('playing');
   unlock();
   if(document.fullscreenElement) document.exitFullscreen().catch(() => {});
   hooks.render();
@@ -146,24 +148,29 @@ async function goTo(qi, page){
   V.busy = true;
   try{ await show(qi, page); } finally{ V.busy = false; }
 }
+/* No turn while a stroke, an erase or a note drag is under way (pedal, keys, buttons or a second finger): the mark
+   belongs to the page it started on, and that page must stay on the screen until the pen lifts. */
 export async function next(){
-  if(V.busy || (!V.doc && !V.brk)) return;
+  if(V.busy || inkBusy() || (!V.doc && !V.brk)) return;
   if(!V.brk && V.page + V.per <= V.n){ V.page += V.per; draw(); }
   else if(V.qi < V.queue.length - 1) await goTo(V.qi + 1, 1);
   else toast(V.queue.length > 1 ? 'End of set' : 'Last page');
 }
 export async function prev(){
-  if(V.busy || (!V.doc && !V.brk)) return;
+  if(V.busy || inkBusy() || (!V.doc && !V.brk)) return;
   if(!V.brk && V.page > 1){ V.page = Math.max(1, V.page - V.per); draw(); }
   else if(V.qi > 0) await goTo(V.qi - 1, 'last');
 }
 
 /* ---------- pointers: drawing goes to ink.js, everything else is page turning ---------- */
+/* One swipe or tap at a time. A primary pointerdown starts a new one even if the last never ended (its pointerup can
+   be lost when the page under the finger is replaced mid-touch); another finger is ignored while a gesture under
+   2 s old is open, and starts a new one after that. */
 let gest = null;
 stage.addEventListener('pointerdown', e => {
   if(inkPointerDown(e)) return;
-  if(gest) return;
-  gest = {id:e.pointerId, x:e.clientX, y:e.clientY};
+  if(gest && !e.isPrimary && Date.now() - gest.t < 2000) return;
+  gest = {id:e.pointerId, x:e.clientX, y:e.clientY, t:Date.now()};
 });
 stage.addEventListener('pointermove', inkPointerMove);
 stage.addEventListener('pointerup', e => {

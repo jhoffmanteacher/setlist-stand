@@ -1,0 +1,95 @@
+#!/bin/sh
+# Setlist Stand: pre-push guard (offline; ported from guitar-class).
+#
+# A push to main runs `node tools/checks.mjs` first and is refused if any check fails. Git hands this hook one
+# line per ref on stdin: <local ref> <local sha> <remote ref> <remote sha>. Only lines whose remote ref is
+# refs/heads/main are checked:
+#   - a branch push (wo/loops, ci-try/...) is let through unchecked;
+#   - a delete (local sha all zeros) is let through (it sends nothing);
+#   - a push to main must send HEAD with no uncommitted changes to tracked files, because checks.mjs reads this
+#     checkout's files: it can only vouch for that commit. Anything else is refused (push HEAD:main from a clean
+#     checkout, as CLAUDE.md says).
+# The "VERSION bumped vs origin/main" FAIL is let through ONLY when none of the precached files it names is
+# changed by the commits being pushed (git diff <remote sha> <local sha>), i.e. the push itself changes no
+# precached file. checks.mjs decides which files those are; this hook does not re-decide it.
+#
+# What it cannot do: it compares with origin/main as this clone last fetched it (git fetch first, as CLAUDE.md
+# says); it does not run when the push uses --no-verify, when core.hooksPath is not .githooks (enable once per
+# clone: git config core.hooksPath .githooks), when node is missing (it warns), or for edits made on GitHub's
+# web site. GitHub's .github/workflows/checks.yml runs the same checks after every push to main (a red run, not
+# a block).
+#
+# Bypass once: git push --no-verify
+
+ROOT=$(git rev-parse --show-toplevel) || exit 0
+HEAD_SHA=$(git rev-parse HEAD)
+red() { printf '\033[31m%s\033[0m\n' "$1"; }
+
+main=0; refused=""; bases=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = "refs/heads/main" ] || continue
+  case "$local_sha" in
+    *[!0]*) ;;
+    *) echo "pre-push: deleting main sends nothing; not checked"; continue ;;
+  esac
+  main=1
+  commit=$(git rev-parse -q --verify "$local_sha^{commit}" 2>/dev/null)
+  if [ "$commit" != "$HEAD_SHA" ]; then
+    refused="$local_ref ($local_sha) is not this checkout's HEAD ($HEAD_SHA)"
+    continue
+  fi
+  case "$remote_sha" in
+    *[!0]*) git cat-file -e "$remote_sha^{commit}" 2>/dev/null && bases="$remote_sha" ;;
+  esac
+done
+[ "$main" -eq 1 ] || exit 0
+
+if [ -n "$refused" ]; then
+  red "pre-push: refused: $refused. The checks read this checkout's files, so they can only vouch for HEAD. Check it out and push HEAD:main."
+  exit 1
+fi
+if ! git diff --quiet HEAD -- 2>/dev/null; then
+  red "pre-push: refused: tracked files differ from the commit being pushed (the checks would read the wrong files): $(git diff --name-only HEAD -- | head -5 | tr '\n' ' ')"
+  echo "  Commit or stash them, then push again."
+  exit 1
+fi
+
+NODE=""
+if command -v node >/dev/null 2>&1; then NODE=node
+else
+  for c in /usr/local/bin/node /opt/homebrew/bin/node "/c/Program Files/nodejs/node.exe"; do
+    if [ -x "$c" ]; then NODE="$c"; break; fi
+  done
+fi
+if [ -z "$NODE" ]; then
+  printf '\033[33m!\033[0m pre-push: node not found, checks NOT run (run node tools/checks.mjs yourself)\n'
+  exit 0
+fi
+if [ ! -f "$ROOT/tools/checks.mjs" ]; then
+  printf '\033[33m!\033[0m pre-push: tools/checks.mjs is missing, checks NOT run\n'
+  exit 0
+fi
+
+echo "pre-push: push to main, running node tools/checks.mjs on $HEAD_SHA"
+out=$(NO_COLOR=1 "$NODE" "$ROOT/tools/checks.mjs" 2>&1)
+status=$?
+printf '%s\n' "$out" | sed 's/^/    /'
+[ "$status" -eq 0 ] && exit 0
+
+fails=$(printf '%s\n' "$out" | grep '^FAIL ')
+others=$(printf '%s\n' "$fails" | grep -v '^FAIL VERSION bumped vs origin/main:')
+if [ -z "$others" ] && [ -n "$fails" ]; then
+  # Only the VERSION line failed. Let it through if the pushed commits change none of the files it names.
+  named=$(printf '%s\n' "$fails" | sed -n 's/.* but changed: \(.*\) (run: .*/\1/p' | tr ',' '\n' | sed 's/^ *//')
+  if [ -n "$bases" ]; then pushed=$(git diff --name-only "$bases" "$HEAD_SHA")
+  else pushed=$(git diff --name-only origin/main "$HEAD_SHA" 2>/dev/null); fi
+  hit=$(printf '%s\n' "$named" | while IFS= read -r f; do [ -n "$f" ] && printf '%s\n' "$pushed" | grep -qxF "$f" && echo "$f"; done)
+  if [ -n "$named" ] && [ -z "$hit" ]; then
+    echo "pre-push: the VERSION line is not about this push (it changes none of: $(printf '%s' "$named" | tr '\n' ' ')); let through"
+    exit 0
+  fi
+fi
+
+red "pre-push: refused, checks fail: $(printf '%s\n' "${fails:-$out}" | head -1)"
+echo "  Fix the cause (a VERSION line: node tools/checks.mjs --bump, then commit), and push again. Bypass: git push --no-verify"
+exit 1

@@ -56,6 +56,7 @@ Running list of what the app must do. Source for the work orders.
 - Same user on two tablets: save each stroke with its own id and merge by id when syncing (deleted strokes kept as markers), so marks made on both tablets offline are never lost.
 - Duplicate matching on import: fingerprint each PDF file's contents.
 - MobileSheets setlist order = SetlistSong row order (no position column).
+- Known limit: a restore holds the zip and every PDF in memory before it writes (about 3 times the zip's size), so a very large backup can fail on a tablet with little memory; nothing is changed when it does.
 
 ## Open questions
 - Share package: include crop settings and song details (title, key), or PDFs only?

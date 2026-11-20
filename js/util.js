@@ -15,7 +15,7 @@ if(window.pdfjsLib && !window.pdfjsLib.noEval){
 }
 
 export const $ = s => document.querySelector(s);
-export const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+export const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 /* Modules call hooks.render() to redraw the home screen; main.js fills it in. */
@@ -77,7 +77,7 @@ export function ask(title, val = ''){
     const done = v => { m.remove(); res(v); };
     m.querySelector('[data-x]').onclick = () => done(null);
     m.querySelector('[data-ok]').onclick = () => done(i.value.trim() || null);
-    i.onkeydown = e => { if(e.key === 'Enter') done(i.value.trim() || null); if(e.key === 'Escape') done(null); };
+    i.onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); done(i.value.trim() || null); } if(e.key === 'Escape') done(null); };   // see form()
   });
 }
 /* A dialog with several text fields. fields: [{key, label, value}]. Resolves to {key: value} or null. */
@@ -88,12 +88,15 @@ export function form(title, fields){
     const done = ok => { const v = ok ? Object.fromEntries(ins.map(i => [i.dataset.k, i.value.trim()])) : null; m.remove(); res(v); };
     m.querySelector('[data-x]').onclick = () => done(false);
     m.querySelector('[data-ok]').onclick = () => done(true);
-    m.onkeydown = e => { if(e.key === 'Enter') done(true); if(e.key === 'Escape') done(false); };
+    /* Enter saves only from a text field: on Cancel (or any other button) it presses that button, as a click would.
+       preventDefault: otherwise the same key press goes on to "click" the button focus returns to (Edit), which
+       opens the dialog again. */
+    m.onkeydown = e => { if(e.key === 'Enter' && e.target.matches('input[type=text]')){ e.preventDefault(); done(true); } if(e.key === 'Escape') done(false); };
   });
 }
 export function pick(songs){
   return new Promise(res => {
-    const m = modal(`<h2>Add songs</h2><div class="pick">${songs.map(s => `<label><input type="checkbox" value="${s.id}">${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>'}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Add</button></div>`);
+    const m = modal(`<h2>Add songs</h2><div class="pick">${songs.map(s => `<label><input type="checkbox" value="${esc(s.id)}">${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>'}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Add</button></div>`);
     m.querySelector('[data-x]').onclick = () => { m.remove(); res([]); };
     m.querySelector('[data-ok]').onclick = () => { const ids = [...m.querySelectorAll('input:checked')].map(c => c.value); m.remove(); res(ids); };
   });

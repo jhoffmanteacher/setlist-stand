@@ -22,6 +22,8 @@ import {makeSiteCopy, removeCopy, missing404, goOffline, cacheName, precachePath
 
 const subText = page => page.locator('#vSub').textContent();
 const bannerShown = page => page.evaluate(() => { const b = document.querySelector('#update'); return !!b && !b.hidden && b.getBoundingClientRect().height > 0; });
+/* The app decided to offer the update (the banner is not [hidden]); it may still be out of sight while a song is on screen. */
+const bannerOffered = page => page.evaluate(() => { const b = document.querySelector('#update'); return !!b && !b.hidden; });
 const marker = page => page.evaluate(() => document.querySelector('meta[name=ss-marker]')?.content || null);
 
 /* Collects failed checks so one run reports all of them; done() throws with every one. */
@@ -107,7 +109,7 @@ export const loops = [
   }
 },
 {
-  name: 'update b: banner, no automatic reload, one reload on tap, and the open song comes back',
+  name: 'update b: banner waits out the song, no automatic reload, one reload on tap after Back',
   async run(ctx){
     const v2 = makeSiteCopy(ctx.root, {marker: 'v2'});
     const {s, nav} = await firstVisit(ctx);
@@ -122,7 +124,9 @@ export const loops = [
       const v1Name = cacheName(ctx.root), v2Name = cacheName(v2);
       ctx.server.root = v2;
       nav.reset();
-      await updateUntil(page, () => bannerShown(page), '#update did not appear');
+      await updateUntil(page, () => bannerOffered(page), '#update was not offered');
+      /* a song is on screen: the banner must be out of sight (a stray tap mid-song must not reload the app) */
+      c.check(!(await bannerShown(page)), 'the update banner is visible over a song that is playing');
       /* the page must not reload by itself */
       const t0 = Date.now();
       while(Date.now() - t0 < 8000){
@@ -136,7 +140,9 @@ export const loops = [
       c.check(kept === 'still here', 'in-page variable lost before the tap (page was replaced)');
       c.check(/^Page 2 of 3$/.test(await subText(page)), `viewer moved before the tap: #vSub "${await subText(page)}"`);
       c.check(await marker(page) === null, 'version 2 marker in the DOM before the tap');
-      /* tap */
+      /* Back to the library: now the banner shows, and the tap reloads once */
+      await page.click('#vBack');
+      await until(() => bannerShown(page), 'the update banner did not show after going Back', 5000);
       nav.reset();
       await page.click('#update');
       await waitNewDoc(page, nav).catch(e => c.check(false, `after the tap: ${e.message} (${nav.text()})`));
@@ -154,10 +160,11 @@ export const loops = [
       const d = diff(before, await snapshot(page));
       c.check(!d.length, 'library changed across the update: ' + d.join('; '));
       c.check(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
-      /* the song that was open comes back, on the same page (a reload in the middle of a gig must not lose the place) */
-      await page.waitForSelector('#viewer.on #stage .sheet canvas', {timeout: 10000}).catch(() => {});
-      const placed = await page.evaluate(() => ({on: !!document.querySelector('#viewer.on'), title: document.querySelector('#vTitle')?.textContent, sub: document.querySelector('#vSub')?.textContent}));
-      c.check(placed.on && placed.title === 'Three-page' && /Page 2 of 3/.test(placed.sub || ''), `after the update reload the song was not put back: viewer ${placed.on ? 'open' : 'closed'}, "${placed.title}", "${placed.sub}" (it was Three-page, Page 2 of 3)`);
+      /* The update was taken from the library, so no song reopens. (A song that IS open when a reload happens, which only the
+         kill switch can cause now, comes back: kill-switch.loop.mjs checks that.) */
+      await sleep(1500);
+      const placed = await page.evaluate(() => ({on: !!document.querySelector('#viewer.on'), lib: !!document.querySelector('#libList [data-open]'), playing: document.body.classList.contains('playing')}));
+      c.check(!placed.on && placed.lib && !placed.playing, `after the update reload from the library: viewer ${placed.on ? 'open' : 'closed'}, library ${placed.lib ? 'shown' : 'missing'}, body.playing ${placed.playing}`);
       c.done();
     } finally { ctx.server.root = ctx.root; nav.close(); await s.close(); removeCopy(v2); }
   }

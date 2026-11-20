@@ -9,7 +9,7 @@
  *   fall back to the cached index.html so the app opens offline.
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-19-5';
+const VERSION = '2026-11-19-6';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -45,8 +45,12 @@ const PRECACHE = [
   'icons/apple-touch-icon.png',
 ];
 
+/* {cache:'reload'}: every file comes from the server, never from the browser's HTTP cache. GitHub Pages sends
+   max-age=600, so a plain addAll() during a second deploy within ten minutes could store the OLD files under the NEW
+   VERSION. addAll() still fails the whole install if any file does not arrive. */
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)));
+  event.waitUntil(caches.open(CACHE).then((cache) =>
+    cache.addAll(PRECACHE.map((url) => new Request(url, { cache: 'reload' })))));
 });
 
 self.addEventListener('message', (event) => {

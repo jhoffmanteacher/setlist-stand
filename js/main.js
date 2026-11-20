@@ -38,10 +38,11 @@ $('#view').addEventListener('click', async e => {
    A new version waits until Jonathan taps "Updated. Tap to reload" (never in the middle of a song). Only the tab whose
    banner was tapped reloads; another open tab keeps running and shows its own banner. The first install also fires
    controllerchange (clients.claim) and must not reload anything. If a song was open, the reload puts it back. */
+let reloaded = false;
+const reloadNow = () => { if(reloaded) return; reloaded = true; saveResume(); location.reload(); };
 function watchUpdates(reg){
   const note = $('#update');
-  let asked = false, reloaded = false;
-  const reloadNow = () => { if(reloaded) return; reloaded = true; saveResume(); location.reload(); };
+  let asked = false;
   const show = w => {
     note.hidden = false;
     note.onclick = () => {
@@ -50,14 +51,22 @@ function watchUpdates(reg){
       else w.postMessage('skip-waiting');            // the new worker takes over, controllerchange follows
     };
   };
+  /* A new worker that finishes installing gets the banner. It may already be installing when register() resolves
+     (its updatefound fired before this ran), so that one is followed too. */
+  const track = w => {
+    if(!w) return;
+    const check = () => { if(w.state === 'installed' && navigator.serviceWorker.controller) show(w); };
+    w.addEventListener('statechange', check); check();
+  };
   if(reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
-  reg.addEventListener('updatefound', () => {
-    const w = reg.installing; if(!w) return;
-    w.addEventListener('statechange', () => { if(w.state === 'installed' && navigator.serviceWorker.controller) show(w); });
-  });
+  track(reg.installing);
+  reg.addEventListener('updatefound', () => track(reg.installing));
   navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked) reloadNow(); });
 }
 if('serviceWorker' in navigator){
+  /* The kill switch (tools/kill-switch/kill-sw.js, BREAK-GLASS.md) emptied the cache and took over: reload this tab once
+     so it runs from the network. Listened for from the start, so the message is not missed before load. */
+  navigator.serviceWorker.addEventListener('message', e => { if(e.data && e.data.type === 'ss-sw-killed') reloadNow(); });
   addEventListener('load', () => { navigator.serviceWorker.register('sw.js').then(watchUpdates).catch(() => {}); });
 }
 

@@ -2,7 +2,7 @@
    so marks never move when a crop changes. A canvas carries the crop it is drawn through in cv._crop. */
 import {$, esc, toast, armed, uid, modal} from './util.js';
 import {explainError} from './errors.js';
-import {putInk, reconcile, liveStrokes} from './store.js';
+import {putInk, getInk, reconcile, liveStrokes} from './store.js';
 import {V, stage, viewer, draw} from './viewer.js';
 
 const FULL = {x:0, y:0, w:1, h:1};
@@ -38,32 +38,54 @@ function tidy(s){
   return {...s, p};
 }
 function saveInk(id, pn, strokes){ putInk(id, pn, strokes).catch(err => toast(explainError(err, 'Could not save that mark. Your music is safe.'))); }
-/* pointer position as fractions of the full page */
+/* pointer position as fractions of the full page; null when it cannot be measured (a canvas no longer on the
+   screen has zero size, and x / 0 would store Infinity, which no printer can draw) */
 function ptOn(cv, e){
   const r = cv.getBoundingClientRect(), cr = cropOfCv(cv);
-  return [cr.x + (e.clientX - r.left) / r.width * cr.w, cr.y + (e.clientY - r.top) / r.height * cr.h];
+  if(!cv.isConnected || !(r.width > 0) || !(r.height > 0)) return null;
+  const p = [cr.x + (e.clientX - r.left) / r.width * cr.w, cr.y + (e.clientY - r.top) / r.height * cr.h];
+  return Number.isFinite(p[0]) && Number.isFinite(p[1]) ? p : null;
 }
 const toScreen = (cv, r, p) => { const cr = cropOfCv(cv); return [(p[0] - cr.x) / cr.w * r.width, (p[1] - cr.y) / cr.h * r.height]; };
 
+/* The gesture in progress: everything it needs is captured at pointerdown (song id, page, its strokes in c.arr,
+   the canvas, the tool), so nothing that changes meanwhile (the song or page on screen, the tool) can send the mark
+   to another page or throw. The viewer refuses page turns while it is set (inkBusy). */
 let cur = null, raf = 0;
+export const inkBusy = () => !!cur;
+/* The canvas the gesture draws on. If the viewer redrew the same page (a resize), the new canvas for it. */
+function curCv(c){
+  if(c.cv.isConnected || V.id !== c.id) return c.cv;
+  const cv = stage.querySelector(`.ink[data-pn="${c.pn}"]`);
+  if(cv) c.cv = cv;
+  return c.cv;
+}
+/* Shows c.arr on screen and in V.ink, only while that song is still the one open. */
+function showArr(c, arr){
+  if(V.id !== c.id) return;
+  V.ink.set(c.pn, arr);
+  const cv = curCv(c); if(cv.isConnected) paint(cv, arr);
+}
 function live(){
   if(raf) return;
-  raf = requestAnimationFrame(() => { raf = 0; if(cur && cur.s) paint(cur.cv, (V.ink.get(cur.pn) || []).concat([cur.s])); });
+  raf = requestAnimationFrame(() => { raf = 0; if(cur && cur.s && V.id === cur.id){ const cv = curCv(cur); if(cv.isConnected) paint(cv, cur.arr.concat([cur.s])); } });
 }
 function eraseAt(e){
-  const r = cur.cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, cr = cropOfCv(cur.cv);
-  const arr = V.ink.get(cur.pn) || [];
-  const hit = s => !s.deleted && s.t !== 'text' && s.p.some(p => { const [sx, sy] = toScreen(cur.cv, r, p); return Math.hypot(sx - x, sy - y) < 14 + s.w * r.width / cr.w / 2; });
+  const cv = curCv(cur); if(!cv.isConnected) return;
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, cr = cropOfCv(cv);
+  if(!(r.width > 0)) return;
+  const arr = cur.arr;
+  const hit = s => !s.deleted && s.t !== 'text' && Array.isArray(s.p) && s.p.some(p => { const [sx, sy] = toScreen(cv, r, p); return Math.hypot(sx - x, sy - y) < 14 + s.w * r.width / cr.w / 2; });
   if(arr.some(hit)){
     const t = Date.now(), keep = arr.map(s => hit(s) ? {id:s.id, deleted:true, updated:t} : s);
-    V.ink.set(cur.pn, keep); cur.changed = true; paint(cur.cv, keep);
+    cur.arr = keep; cur.changed = true; showArr(cur, keep);
   }
 }
 function endStroke(){
   const c = cur; cur = null;
-  if(c.s && c.s.p.length){ V.ink.set(c.pn, (V.ink.get(c.pn) || []).concat([tidy(c.s)])); c.changed = true; }
-  if(c.changed){ V.hist.push({id:c.id, pn:c.pn, before:c.before}); saveInk(c.id, c.pn, V.ink.get(c.pn)); }
-  paint(c.cv, V.ink.get(c.pn) || []);
+  if(c.s && c.s.p.length){ c.arr = c.arr.concat([tidy(c.s)]); c.changed = true; }
+  if(c.changed){ V.hist.push({id:c.id, pn:c.pn, before:c.before}); saveInk(c.id, c.pn, c.arr); }
+  showArr(c, c.arr);
 }
 
 /* ---------- text notes ---------- */
@@ -123,14 +145,16 @@ export function inkPointerDown(e){
   if(V.annot && cv && !cur && (e.pointerType !== 'touch' || V.finger)){
     e.preventDefault();
     try{ stage.setPointerCapture(e.pointerId); }catch(err){}
-    const pn = +cv.dataset.pn;
-    cur = {pid:e.pointerId, cv, pn, id:V.id, before:(V.ink.get(pn) || []).slice(), changed:false, s:null};
-    if(V.tool === 'text'){
+    const pn = +cv.dataset.pn, pt = ptOn(cv, e);
+    if(!pt) return true;
+    const arr = (V.ink.get(pn) || []).slice();
+    cur = {pid:e.pointerId, cv, pn, id:V.id, tool:V.tool, arr, before:arr.slice(), changed:false, s:null};
+    if(cur.tool === 'text'){
       const note = noteAt(cv, e);
-      Object.assign(cur, {kind:'note', note, pos:ptOn(cv, e), x0:e.clientX, y0:e.clientY, moved:false});
+      Object.assign(cur, {kind:'note', note, pos:pt, x0:e.clientX, y0:e.clientY, moved:false});
     }
-    else if(V.tool === 'erase') eraseAt(e);
-    else { cur.s = {id:uid(), updated:Date.now(), t:V.tool, c:V.color, w:V.tool === 'hl' ? .02 : .003, p:[ptOn(cv, e)]}; live(); }
+    else if(cur.tool === 'erase') eraseAt(e);
+    else { cur.s = {id:uid(), updated:Date.now(), t:cur.tool, c:V.color, w:cur.tool === 'hl' ? .02 : .003, p:[pt]}; live(); }
     return true;
   }
   return false;
@@ -140,27 +164,30 @@ export function inkPointerMove(e){
   if(cur.kind === 'note'){
     if(!cur.note) return;
     if(!cur.moved && Math.hypot(e.clientX - cur.x0, e.clientY - cur.y0) < 8) return;
+    const p = ptOn(curCv(cur), e); if(!p) return;
     if(!cur.moved){                   // first move: work on a copy so the undo snapshot keeps the old position
       const copy = {...cur.note};
-      V.ink.set(cur.pn, (V.ink.get(cur.pn) || []).map(s => s.id === copy.id ? copy : s)); cur.note = copy;
+      cur.arr = cur.arr.map(s => s.id === copy.id ? copy : s); cur.note = copy;
     }
     cur.moved = true;
-    const p = ptOn(cur.cv, e), start = cur.pos, n = cur.note;
+    const start = cur.pos, n = cur.note;
     n.x = r4(Math.min(1, Math.max(0, n.x + p[0] - start[0]))); n.y = r4(Math.min(1, Math.max(0, n.y + p[1] - start[1]))); cur.pos = p;
-    paint(cur.cv, V.ink.get(cur.pn) || []);
+    showArr(cur, cur.arr);
     return;
   }
-  if(V.tool === 'erase'){ eraseAt(e); return; }
-  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-  for(const ev of (evs.length ? evs : [e])) cur.s.p.push(ptOn(cur.cv, ev));
+  if(cur.tool === 'erase'){ eraseAt(e); return; }
+  if(!cur.s) return;
+  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e], cv = curCv(cur);
+  for(const ev of (evs.length ? evs : [e])){ const p = ptOn(cv, ev); if(p) cur.s.p.push(p); }
   live();
 }
 function endNote(c, cancelled){
-  if(cancelled){ V.ink.set(c.pn, c.before); paint(c.cv, c.before); return; }
+  if(cancelled){ showArr(c, c.before); return; }
   if(c.note && c.moved){            // moved: the note object was edited in place, so save it as one step
-    const t = Date.now(), next = (V.ink.get(c.pn) || []).map(s => s.id === c.note.id ? {...s, updated:t} : s);
-    V.ink.set(c.pn, next); V.hist.push({id:c.id, pn:c.pn, before:c.before}); saveInk(c.id, c.pn, next); paint(c.cv, next);
-  } else {
+    const t = Date.now(), next = c.arr.map(s => s.id === c.note.id ? {...s, updated:t} : s);
+    V.hist.push({id:c.id, pn:c.pn, before:c.before}); saveInk(c.id, c.pn, next); showArr(c, next);
+  } else if(V.id === c.id && curCv(c).isConnected){   // a tap: the note dialog, only while that page is still shown
+    c.cv = curCv(c);
     const orig = c.note && c.before.find(s => s.id === c.note.id);
     noteTap(c.cv, c.pn, orig || null, c.pos);
   }
@@ -190,6 +217,10 @@ function markTool(){
     b.setAttribute('aria-pressed', b.dataset.tool === V.tool && (V.tool === 'erase' || V.tool === 'text' || b.dataset.color === V.color));
 }
 export function initInk(){
+  /* Backstop: a pointerup or pointercancel that never reached the stage (it bubbles here after the stage's own
+     handler) still ends the gesture, so page turns, refused while inkBusy(), can never stay blocked. */
+  addEventListener('pointerup', e => { if(cur && e.pointerId === cur.pid) inkPointerUp(e); });
+  addEventListener('pointercancel', e => { if(cur && e.pointerId === cur.pid) inkPointerCancel(e); });
   $('#tools').addEventListener('click', e => {
     const b = e.target.closest('[data-tool]'); if(!b) return;
     if(b.dataset.tool === 'text'){
@@ -205,7 +236,12 @@ export function initInk(){
       const back = reconcile(V.ink.get(h.pn) || [], h.before);
       saveInk(h.id, h.pn, back); V.ink.set(h.pn, back);
       const cv = stage.querySelector(`.ink[data-pn="${h.pn}"]`); if(cv) paint(cv, back); else { V.page = h.pn; draw(); }
-    } else saveInk(h.id, h.pn, h.before);
+    } else {
+      /* that song is not open: undo against what is stored now, so strokes added since become deletion markers
+         (a raw snapshot would drop them with no marker, and a backup merge would bring them back) */
+      getInk(h.id, h.pn).then(stored => saveInk(h.id, h.pn, reconcile(stored, h.before)))
+        .catch(err => toast(explainError(err, 'Could not undo that mark. Your music is safe.')));
+    }
   };
   $('#tClear').onclick = e => {
     if(!armed(e.currentTarget)) return;

@@ -1,0 +1,72 @@
+#!/bin/sh
+# Setlist Stand: pre-commit guard (fast, offline, read-only; ported from guitar-class).
+#
+# Refuses a commit that stages:
+#   (a) private or copyrighted files (CLAUDE.md "Never": no music, no PDFs outside tests/fixtures/, no .msb):
+#       any *.msb, any *.zip or *.pdf outside tests/fixtures/, anything under "Claude outputs/".
+#       .gitignore already hides most of these; this catches `git add -f` and a changed .gitignore.
+#   (b) a JavaScript file that does not parse (node --check on the STAGED content, not the working copy):
+#       js/**/*.js and other *.js as ES modules, sw.js as a classic script, *.mjs as modules, *.cjs as scripts.
+#
+# It does not run tools/checks.mjs (the VERSION line fails on every change until --bump, which happens last);
+# .githooks/pre-push runs that before a push to main.
+# Enable once per clone:  git config core.hooksPath .githooks
+# Bypass once:            git commit --no-verify
+
+red() { printf '\033[31m%s\033[0m\n' "$1"; }
+
+# (a) Forbidden files. Names are read one per line (core.quotePath=false keeps spaces and accents as they are).
+bad=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR | while IFS= read -r f; do
+  case "$f" in
+    ("Claude outputs/"*) echo "$f (Claude outputs/ is private, never committed)" ;;
+    (*.msb|*.MSB) echo "$f (MobileSheets files are private, never committed)" ;;
+    (tests/fixtures/*) ;;
+    (*.pdf|*.PDF) echo "$f (no PDFs outside tests/fixtures/: no music in the repo, ever)" ;;
+    (*.zip|*.ZIP) echo "$f (no .zip outside tests/fixtures/: a backup holds music)" ;;
+  esac
+done)
+if [ -n "$bad" ]; then
+  red "pre-commit: refused, these files must never be committed:"
+  printf '%s\n' "$bad" | sed 's/^/    /'
+  echo "  Unstage them (git restore --staged <file>). Bypass, only if you are sure: git commit --no-verify"
+  exit 1
+fi
+
+# (b) Syntax of staged JavaScript.
+js=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR -- '*.js' '*.mjs' '*.cjs')
+[ -z "$js" ] && exit 0
+
+NODE=""
+if command -v node >/dev/null 2>&1; then NODE=node
+else
+  for c in /usr/local/bin/node /opt/homebrew/bin/node "/c/Program Files/nodejs/node.exe"; do
+    if [ -x "$c" ]; then NODE="$c"; break; fi
+  done
+fi
+if [ -z "$NODE" ]; then
+  printf '\033[33m!\033[0m pre-commit: node not found, JavaScript syntax not checked (run node tools/checks.mjs before pushing)\n'
+  exit 0
+fi
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/ss-precommit.XXXXXX") || exit 0
+trap 'rm -rf "$tmp"' EXIT
+fails=$(printf '%s\n' "$js" | while IFS= read -r f; do
+  case "$f" in
+    (sw.js|*.cjs) ext=cjs ;;   # sw.js is a classic service-worker script
+    (*) ext=mjs ;;             # js/*.js, tools/*.mjs: ES modules (package.json "type": "module")
+  esac
+  out="$tmp/staged.$ext"
+  git show ":$f" > "$out" 2>/dev/null || continue
+  err=$("$NODE" --check "$out" 2>&1 >/dev/null) || {
+    line=$(printf '%s\n' "$err" | sed -n "s|^.*/staged\.$ext:\([0-9][0-9]*\)$|\1|p" | head -1)
+    msg=$(printf '%s\n' "$err" | grep -m1 'Error' || echo 'syntax error')
+    echo "$f${line:+:$line} $msg"
+  }
+done)
+if [ -n "$fails" ]; then
+  red "pre-commit: refused, staged JavaScript does not parse:"
+  printf '%s\n' "$fails" | sed 's/^/    /'
+  echo "  Fix it and stage again. Bypass: git commit --no-verify"
+  exit 1
+fi
+exit 0

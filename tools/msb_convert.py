@@ -104,6 +104,40 @@ def convert_crops(rows,sizes,known,rep):
         if same: out[k]={'all':first,'pages':{}}; rep['crops_song_wide']+=1
         else: out[k]={'all':None,'pages':{str(p):v for p,v in sorted(pages.items())}}; rep['crops_per_page_songs']+=1; rep['crops_per_page']+=len(pages)
     return out
+def parse_page_order(order,n):
+    """MobileSheets' PageOrder ("1-3,5,7-8", "5-3" = pages 5,4,3) as 0-based page indexes into a file of n pages.
+    '' / None = every page in order. Returns None when the order cannot be read or names a page the file does not have."""
+    if not order or not order.strip(): return list(range(n))
+    out=[]
+    for part in order.split(','):
+        part=part.strip()
+        if not part: continue
+        m=re.fullmatch(r'(\d+)\s*-\s*(\d+)',part)
+        if m:
+            a,b=int(m.group(1)),int(m.group(2))
+            out+=list(range(a,b+1) if a<=b else range(a,b-1,-1))
+        elif re.fullmatch(r'\d+',part): out.append(int(part))
+        else: return None
+    if not out or any(p<1 or p>n for p in out): return None
+    return [p-1 for p in out]
+def classify(has_row,blobs):
+    """What a song's file is: ('break', None) when it has no Files row at all (MobileSheets' "Set 2" placeholders),
+    ('missing_file', None) when the row has no stored bytes, ('not_pdf', None) when no stored bytes are a readable PDF,
+    else ('ok', (bytes, PdfReader))."""
+    if not has_row: return 'break',None
+    if not blobs: return 'missing_file',None
+    for b in blobs:
+        if b[:5]!=b'%PDF-': continue
+        try:
+            r=pypdf.PdfReader(io.BytesIO(b))
+            if len(r.pages): return 'ok',(b,r)
+        except Exception: pass
+    return 'not_pdf',None
+def trim(data,reader,idx):
+    """The PDF with only the pages idx (0-based, in that order)."""
+    w=pypdf.PdfWriter()
+    for i in idx: w.add_page(reader.pages[i])
+    bio=io.BytesIO(); w.write(bio); return bio.getvalue()
 def main(msb,out):
     d=open(msb,'rb').read()
     s=d.find(b'SQLite format 3\x00'); ln=struct.unpack('>Q',d[s-8:s])[0]
@@ -114,18 +148,18 @@ def main(msb,out):
         sid=struct.unpack('>Q',d[p+8:p+16])[0]
         if d[p+16:p+24]==marker or p+24>len(d): p+=16; continue
         n=struct.unpack('>Q',d[p+16:p+24])[0]; blobs.setdefault(sid,[]).append(d[p+24:p+24+n]); p+=24+n
-    songs=[];ink={};nofile={};sizes={};rep={'skipped':[],'trimmed':[],'textboxes':0,'textboxes_converted':0,'textboxes_blank':0,'stamps':0,'breaks':{},'crop_rows_total':0,'crop_rows_with_a_crop':0,'crops_song_wide':0,'crops_per_page_songs':0,'crops_per_page':0}
+    songs=[];ink={};nofile={};sizes={};rep={'skipped':[],'missing_file':[],'not_pdf':[],'page_order_unsupported':[],'trimmed':[],'textboxes':0,'textboxes_converted':0,'textboxes_blank':0,'stamps':0,'breaks':{},'crop_rows_total':0,'crop_rows_with_a_crop':0,'crops_song_wide':0,'crops_per_page_songs':0,'crops_per_page':0}
     z=zipfile.ZipFile(out,'w',zipfile.ZIP_STORED)
     for sid,title,created in c.execute('select Id,Title,CreationDate from Songs').fetchall():
         f=c.execute('select PageOrder,SourceFilePageCount from Files where SongId=? and Type=1',(sid,)).fetchone()
-        data=next((b for b in blobs.get(sid,[]) if b[:5]==b'%PDF-'),None)
-        if not f or data is None: rep['skipped'].append(title); nofile[sid]=title; continue
-        order,pages=f
-        if order and order!='1-%d'%pages and '-' in order and ',' not in order:
-            a,b=map(int,order.split('-')); r=pypdf.PdfReader(io.BytesIO(data)); w=pypdf.PdfWriter()
-            for i in range(a-1,b): w.add_page(r.pages[i])
-            bio=io.BytesIO(); w.write(bio); data=bio.getvalue(); pages=b-a+1; rep['trimmed'].append(title)
-        id='ms%d'%sid; z.writestr('files/%s.pdf'%id,data); sizes[id]=page_sizes(data)
+        kind,got=classify(f is not None,blobs.get(sid,[]))
+        if kind=='break': rep['skipped'].append(title); nofile[sid]=title; continue
+        if kind!='ok': rep[kind].append(title); continue          # a song whose PDF is missing or unreadable: reported, never a break
+        data,r=got; n=len(r.pages)
+        idx=parse_page_order(f[0],n)
+        if idx is None: rep['page_order_unsupported'].append(title)        # converted with every page, as stored
+        elif idx!=list(range(n)): data=trim(data,r,idx); rep['trimmed'].append(title)
+        id='ms%d'%sid; z.writestr('files/%s.pdf'%id,data); sizes[id]=page_sizes(data); pages=len(sizes[id])
         t,a,v=split_name(title)
         songs.append({'id':id,'title':filename(t,a,v)[:-4],'song':t,'artist':a,'version':v,'file':filename(t,a,v),'pages':pages,'added':created or 0})
     known={x['id'] for x in songs}
@@ -142,8 +176,9 @@ def main(msb,out):
             rep['textboxes_converted']+=1; continue
         if typ==3: rep['stamps']+=1; continue
         if not pts: continue
-        for w,xy in parse_points(pts,typ):
-            ink.setdefault('ms%d:%d'%(sid,page+1),[]).append({'t':'hl' if (op or 100)<100 else 'pen','c':hexcol(col),
+        # stable ids (annotation id + sub-stroke index): two tablets restoring the same conversion hold the same strokes
+        for k,(w,xy) in enumerate(parse_points(pts,typ)):
+            ink.setdefault('ms%d:%d'%(sid,page+1),[]).append({'t':'hl' if (op or 100)<100 else 'pen','id':'msann%d_%d'%(bid,k),'c':hexcol(col),
               'w':round((w or lw or 1)/sw,5),'p':[[round(x/sw,4),round(y/sh,4)] for x,y in xy]})
     crow=c.execute('select SongId,Page,Left,Top,Right,Bottom from Crop').fetchall()
     rep['crop_rows_total']=len(crow)

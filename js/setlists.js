@@ -20,16 +20,16 @@ export function renderSetlists(v){
     const items = liveItems(st), n = songCount(st);
     let k = 0;
     v.innerHTML = `<div class="bar"><button data-allsets>&#8249; Setlists</button><h2>${esc(st.name)}</h2></div>
-      <div class="bar"><button class="pri" data-play="${st.id}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-dup>Duplicate</button><button data-renset>Rename</button></div>
+      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-dup>Duplicate</button><button data-renset>Rename</button></div>
       ${items.length ? `<ul class="list" id="items">${items.map((it, i) => {
-        if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${i}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${i}">Remove</button></div></li>`;
+        if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${esc(i)}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${esc(i)}">Remove</button></div></li>`;
         const s = songById(it.id); k++;
-        return `<li class="row"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num">${k}</span><button class="main" data-playat="${i}"><span class="t">${esc(s.title)}${s.archived ? '<span class="tag">Archived</span>' : ''}</span><span class="s">${s.pages} page${s.pages == 1 ? '' : 's'}</span></button><div class="acts"><button data-rm="${i}">Remove</button></div></li>`;
+        return `<li class="row"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num">${esc(k)}</span><button class="main" data-playat="${esc(i)}"><span class="t">${esc(s.title)}${s.archived ? '<span class="tag">Archived</span>' : ''}</span><span class="s">${esc(s.pages)} page${s.pages == 1 ? '' : 's'}</span></button><div class="acts"><button data-rm="${esc(i)}">Remove</button></div></li>`;
       }).join('')}</ul>`
       : `<div class="empty"><h2>Empty setlist</h2><p>Tap Add songs to pick charts from your library.</p></div>`}`;
   } else {
     v.innerHTML = `<div class="bar"><button class="pri" data-newset>New setlist</button></div>` +
-      (sets.length ? `<ul class="list">${sets.map(st => { const n = songCount(st); return `<li class="row"><button class="main" data-set="${st.id}"><span class="t">${esc(st.name)}</span><span class="s">${n} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${st.id}" ${n ? '' : 'disabled'}>Play</button><button data-dupset="${st.id}">Duplicate</button><button data-delset="${st.id}">Delete</button></div></li>`; }).join('')}</ul>`
+      (sets.length ? `<ul class="list">${sets.map(st => { const n = songCount(st); const id = esc(st.id); return `<li class="row"><button class="main" data-set="${id}"><span class="t">${esc(st.name)}</span><span class="s">${esc(n)} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${id}" ${n ? '' : 'disabled'}>Play</button><button data-dupset="${id}">Duplicate</button><button data-delset="${id}">Delete</button></div></li>`; }).join('')}</ul>`
       : `<div class="empty"><h2>No setlists yet</h2><p>Make one for each gig or rehearsal.</p></div>`);
   }
 }
@@ -87,14 +87,21 @@ function moveDrag(){
   d.rects.forEach((r, i) => { if(i !== d.from && r.top + r.h / 2 < center) to++; });
   if(to !== d.to){ d.to = to; placeRows(d); }
 }
+/* The list re-rendered under a drag (a save, a tab switch): that drag is over. Its rows are gone, so it must not
+   keep its animation frame running, block the next drag or keyboard move, or save indexes of a list that changed. */
+function dropStaleDrag(){
+  if(drag && !drag.li.isConnected){ cancelAnimationFrame(drag.raf); drag = null; }
+  return !drag;
+}
 function tick(){
-  if(!drag) return;
+  if(dropStaleDrag()) return;
   const y = drag.cy, edge = 90; let v = 0;
   if(y < edge) v = -Math.ceil((edge - y) / 5); else if(y > innerHeight - edge) v = Math.ceil((y - (innerHeight - edge)) / 5);
   if(v){ scrollBy(0, v); moveDrag(); }
   drag.raf = requestAnimationFrame(tick);
 }
 async function endDrag(e){
+  dropStaleDrag();
   const d = drag; if(!d || e.pointerId !== d.pid) return;
   drag = null; cancelAnimationFrame(d.raf);
   const {from, to} = d;
@@ -114,7 +121,7 @@ async function moveItem(from, to){
 let keyChain = Promise.resolve();
 async function keyMove(dir){
   const h = document.activeElement;
-  if(!h || !h.classList.contains('handle') || drag) return;
+  if(!h || !h.classList.contains('handle') || !dropStaleDrag()) return;
   const li = h.closest('li.row'), rows = li ? [...li.parentElement.children] : [];
   const from = rows.indexOf(li), to = from + dir;
   if(from < 0 || to < 0 || to >= rows.length) return;
@@ -132,7 +139,7 @@ export function initSetlists(){
     keyChain = keyChain.then(() => keyMove(dir)).catch(() => {});
   });
   view.addEventListener('pointerdown', e => {
-    const h = e.target.closest('.handle'); if(!h || drag) return;
+    const h = e.target.closest('.handle'); if(!h || !dropStaleDrag()) return;
     const li = h.closest('li.row'), ul = li.parentElement, rows = [...ul.children], sy = scrollY;
     e.preventDefault();
     drag = {pid:e.pointerId, li, rows, from:rows.indexOf(li), to:rows.indexOf(li), y0:e.clientY, cy:e.clientY, sy, raf:0,
@@ -141,7 +148,7 @@ export function initSetlists(){
     li.classList.add('dragging'); ul.classList.add('sorting');
     tick();
   });
-  view.addEventListener('pointermove', e => { if(drag && e.pointerId === drag.pid){ drag.cy = e.clientY; moveDrag(); } });
+  view.addEventListener('pointermove', e => { if(!dropStaleDrag() && e.pointerId === drag.pid){ drag.cy = e.clientY; moveDrag(); } });
   view.addEventListener('pointerup', endDrag);
   view.addEventListener('pointercancel', endDrag);
 }

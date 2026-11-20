@@ -79,7 +79,7 @@ export function displayName({ song = '', artist = '', version = '' } = {}) {
 }
 
 export function sortKey(song) {
-  const s = String(song ?? '').toLowerCase();
+  const s = String(song ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
   const m = /^(the|an|a) (.*)$/s.exec(s);
   return m && m[2].trim() ? m[2] : s;
 }

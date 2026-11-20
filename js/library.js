@@ -1,5 +1,5 @@
 import {$, esc, uid, toast, form, armed, hooks, modal} from './util.js';
-import {put, putAll, del, load, state, songById, saveSong, saveSet, markDeleted, sha256, getInk, putInk, reconcile, delInkFor, ensureHashes} from './store.js';
+import {putAll, get, load, state, songById, saveSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
 import {displayName} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
@@ -19,16 +19,16 @@ export function renderLibrary(v){
   renderSafety();
 }
 const matches = s => (s.title + ' ' + s.song + ' ' + s.artist + ' ' + s.version).toLowerCase().includes(q.trim().toLowerCase());
-const pages = s => `${s.pages} page${s.pages == 1 ? '' : 's'}`;
+const pages = s => `${esc(s.pages)} page${s.pages == 1 ? '' : 's'}`;
 function renderLib(){
   const live = state.songs.filter(s => !s.archived), arch = state.songs.filter(s => s.archived);
   const list = live.filter(matches), alist = arch.filter(matches);
   let html = live.length
-    ? `<ul class="list">${list.map(s => `<li class="row"><button class="main" data-open="${s.id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button><div class="acts"><button data-edit="${s.id}">Edit</button><button data-archive="${s.id}">Archive</button><button data-replace="${s.id}">Replace PDF</button><button data-del="${s.id}">Delete</button></div></li>`).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
+    ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button><div class="acts"><button data-edit="${id}">Edit</button><button data-archive="${id}">Archive</button><button data-replace="${id}">Replace PDF</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
     : `<div class="empty"><h2>No music yet</h2><p>Add PDF charts from your tablet's files or Drive. They're saved on this device.</p></div>`;
   if(showArchived){
     html += `<h2 style="margin-top:28px;font-size:26px">Archived</h2>` + (alist.length
-      ? `<ul class="list">${alist.map(s => `<li class="row"><button class="main" data-open="${s.id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)} · Archived</span></button><div class="acts"><button data-restoresong="${s.id}">Restore</button><button data-del="${s.id}">Delete</button></div></li>`).join('')}</ul>`
+      ? `<ul class="list">${alist.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)} · Archived</span></button><div class="acts"><button data-restoresong="${id}">Restore</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>`
       : `<p class="hint">${arch.length ? 'No archived songs match.' : 'Nothing archived.'}</p>`);
   }
   $('#libList').innerHTML = html;
@@ -112,15 +112,17 @@ export async function replacePdf(file){
   let r;
   try{ r = await inspect(file); }catch(err){ toast('Could not read ' + file.name); return; }
   try{
-    const {buf, pages:n, hash} = r;
-    await put('files', id, new Blob([buf], {type:'application/pdf'}));
+    /* One transaction: the new PDF, the song's new page count and hash, and its cleared annotations are all saved, or none. */
+    const {buf, pages:n, hash} = r, ops = [{store:'files', key:id, value:new Blob([buf], {type:'application/pdf'})}];
     for(let p = 1; p <= s.pages; p++){
-      const cur = await getInk(id, p);
-      if(p > n) await del('ink', id + ':' + p);                       // that page no longer exists
-      else if(cur.length) await putInk(id, p, reconcile(cur, []));    // keep deletion markers for the pages that remain
+      const key = id + ':' + p, cur = upgradeInk(await get('ink', key)).record.strokes;
+      if(p > n) ops.push({store:'ink', key, delete:true});                                       // that page no longer exists
+      else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []))});     // keep deletion markers for the pages that remain
     }
-    s.pages = n; s.hash = hash; await saveSong(s);
-    await load(); hooks.render(); toast('Chart replaced. Annotations cleared.');
+    const song = {...s, pages:n, hash, title:displayName(s), updated:Date.now()};
+    ops.push({store:'songs', key:id, value:song});
+    await putAll(ops);
+    await load(); hooks.render(); toast('Chart replaced. Annotations cleared.' + (s.crop ? ' Crop kept. Use Reset in the crop screen if the layout changed.' : ''));
   }catch(err){ await load(); hooks.render(); toast(explainError(err)); }
 }
 
@@ -146,11 +148,13 @@ export async function onClick(b, d){
   }
   if(d.del){
     if(!armed(b)) return true;
-    const s = songById(d.del);
-    await del('files', s.id);
-    await delInkFor(s.id);
-    await markDeleted('songs', s.id);
-    for(const st of state.sets){ if(st.items.some(it => it.type === 'song' && it.id === s.id)){ st.items = st.items.filter(it => !(it.type === 'song' && it.id === s.id)); await saveSet(st); } }
+    const s = songById(d.del); if(!s) return true;
+    /* One transaction: the PDF and ink go, the song becomes a deletion marker and the setlists that had it are updated. */
+    const t = Date.now(), isIt = it => it.type === 'song' && it.id === s.id;
+    const ops = [{store:'files', key:s.id, delete:true}, {deleteInkFor:s.id}, {store:'songs', key:s.id, value:{id:s.id, deleted:true, updated:t}}];
+    for(const st of state.sets) if(st.items.some(isIt)) ops.push({store:'sets', key:st.id, value:{...st, items:st.items.filter(it => !isIt(it)), updated:t}});
+    try{ await putAll(ops); }
+    catch(err){ toast(explainError(err)); }
     await load(); hooks.render(); return true;
   }
   return false;

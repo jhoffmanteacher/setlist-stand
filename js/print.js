@@ -12,9 +12,15 @@ function toPdf(box, rot, u, v){
   return [x + u * W, y + (1 - v) * H];
 }
 
-/* One PDF with every song in order, annotations optional. Cropped pages print cropped (the page's CropBox). */
+/* Only finite numbers reach pdf-lib: one NaN or Infinity in a path makes it throw and the whole print fails. */
+const finitePt = p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]);
+
+/* One PDF with every song in order, annotations optional. Cropped pages print cropped (the page's CropBox).
+   A password-protected (encrypted) PDF is never copied: pdf-lib cannot decode it and would print blank pages, so
+   such songs are left out and returned in `locked` (song ids, each once) for the dialog to name. */
 export async function buildSetPdf(ids, withInk){
   const {PDFDocument, LineCapStyle, StandardFonts, degrees} = PDFLib;
+  const locked = [];
   const out = await PDFDocument.create();
   out.setTitle('Setlist');
   const font = await out.embedFont(StandardFonts.HelveticaBold);
@@ -24,7 +30,10 @@ export async function buildSetPdf(ids, withInk){
   for(const id of ids){
     const blob = await get('files', id); if(!blob) continue;
     const song = songById(id);
+    /* Detected with isEncrypted, not by catching EncryptedPDFError: pdf-lib's bundled build throws it as a plain Error
+       (instanceof and .name do not identify it). ignoreEncryption only lets the check run; the file is not copied. */
     const src = await PDFDocument.load(await blob.arrayBuffer(), {ignoreEncryption:true});
+    if(src.isEncrypted){ if(!locked.includes(id)) locked.push(id); continue; }
     const pages = await out.copyPages(src, src.getPageIndices());
     for(let i = 0; i < pages.length; i++){
       const pg = out.addPage(pages[i]);
@@ -36,6 +45,7 @@ export async function buildSetPdf(ids, withInk){
       const strokes = withInk ? liveStrokes(await getInk(id, i + 1)) : [];
       for(const s of strokes){
         if(s.t === 'text'){
+          if(!Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(s.size) || typeof s.text !== 'string') continue;
           const px = s.size * dispW;
           s.text.split('\n').map(printable).forEach((ln, k) => {
             if(!ln) return;
@@ -44,8 +54,9 @@ export async function buildSetPdf(ids, withInk){
           });
           continue;
         }
-        if(!s.p.length) continue;
-        const pts = s.p.length === 1 ? [s.p[0], [s.p[0][0] + .0005, s.p[0][1]]] : s.p;
+        const ok = Array.isArray(s.p) ? s.p.filter(finitePt) : [];
+        if(!ok.length || !Number.isFinite(s.w)) continue;
+        const pts = ok.length === 1 ? [ok[0], [ok[0][0] + .0005, ok[0][1]]] : ok;
         /* drawSvgPath flips y, so the path is written with -Y to land on PDF coordinates (X, Y) */
         const path = pts.map((p, j) => { const [X, Y] = toPdf(box, rot, p[0], p[1]); return (j ? 'L' : 'M') + X.toFixed(2) + ' ' + (-Y).toFixed(2); }).join(' ');
         pg.drawSvgPath(path, {x:0, y:0, borderColor:hexRgb(s.c), borderWidth:s.w * dispW,
@@ -58,26 +69,46 @@ export async function buildSetPdf(ids, withInk){
       }
     }
   }
-  return out.save();
+  return {bytes:out.getPageCount() ? await out.save() : null, locked};
 }
 
 export function printDialog(st, ids){
   const m = modal(`<h2>Print ${esc(st.name)}</h2><p class="hint">Makes one PDF with all ${ids.length} songs in setlist order.</p>
     <label class="opt"><input type="checkbox" id="pInk" checked>Include my annotations</label>
     <div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Make PDF</button></div>`);
+  const box = m.querySelector('.box');
+  const name = fileName(st.name) + '.pdf';
+  const save = bytes => {
+    const blob = new Blob([bytes], {type:'application/pdf'});
+    saveBlob(blob, name);
+    if(canShareFile(blob, name)){
+      box.innerHTML = `<h2 id="printDone">PDF saved</h2><p class="hint">${esc(name)} is in your downloads.</p><div class="btns"><button data-share>Share…</button><button class="pri" data-x>Done</button></div>`;
+      box.setAttribute('aria-labelledby', 'printDone');
+      m.querySelector('[data-x]').onclick = () => m.remove();
+      m.querySelector('[data-share]').onclick = () => shareBlob(blob, name);
+      box.focus();
+    } else { m.remove(); toast('PDF saved'); }
+  };
+  /* Password-protected songs: say which, and print the rest only when asked (never blank pages without a word). */
+  const askLocked = (bytes, locked) => {
+    const titles = [...new Set(locked.map(id => songById(id)?.title || 'A song'))];
+    box.innerHTML = `<h2 id="printLocked">${titles.length === 1 ? 'One song' : titles.length + ' songs'} can't be printed</h2>
+      <ul class="locked">${titles.map(t => `<li>${esc(t)} is password-protected, so it can't be printed; it still plays on the screen.</li>`).join('')}</ul>
+      <div class="btns"><button data-x>Cancel</button>${bytes ? '<button class="pri" data-ok>Print without them</button>' : ''}</div>`;
+    box.setAttribute('aria-labelledby', 'printLocked');
+    m.querySelector('[data-x]').onclick = () => m.remove();
+    if(bytes) m.querySelector('[data-ok]').onclick = () => save(bytes);
+    box.focus();
+  };
   m.querySelector('[data-x]').onclick = () => m.remove();
   m.querySelector('[data-ok]').onclick = async ev => {
     const withInk = m.querySelector('#pInk').checked; ev.target.disabled = true; ev.target.textContent = 'Working…';
     try{
-      const bytes = await buildSetPdf(ids, withInk);
-      const blob = new Blob([bytes], {type:'application/pdf'}), name = fileName(st.name) + '.pdf';
-      saveBlob(blob, name);
-      if(canShareFile(blob, name)){
-        m.querySelector('.box').innerHTML = `<h2 id="printDone">PDF saved</h2><p class="hint">${esc(name)} is in your downloads.</p><div class="btns"><button data-share>Share…</button><button class="pri" data-x>Done</button></div>`;
-        m.querySelector('.box').setAttribute('aria-labelledby', 'printDone');
-        m.querySelector('[data-x]').onclick = () => m.remove();
-        m.querySelector('[data-share]').onclick = () => shareBlob(blob, name);
-      } else { m.remove(); toast('PDF saved'); }
+      const {bytes, locked} = await buildSetPdf(ids, withInk);
+      if(!m.isConnected) return;            // cancelled while it was working
+      if(locked.length) askLocked(bytes, locked);
+      else if(bytes) save(bytes);
+      else { m.remove(); toast('Could not make the PDF'); }
     }catch(err){ m.remove(); toast('Could not make the PDF'); }
   };
 }

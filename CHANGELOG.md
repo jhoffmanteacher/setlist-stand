@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-11-20: Tougher against bad files, bad updates and stray taps
+- **The update note stays out of your way:** "Updated. Tap to reload" is hidden while a song is on screen and appears when you go Back, so a stray tap in the middle of a song can't reload the app.
+- **Emergency off switch:** if a bad update ever reaches the tablets, `BREAK-GLASS.md` explains how to switch the app's saved copy off and reload it from the web. It never touches your library.
+- **Pen marks stay on the right song:** turning a page while the pen is down no longer moves the stroke onto another page or song, and a damaged mark can't stop a setlist from printing.
+- **Locked PDFs:** printing now names any password-protected chart and offers "Print without them", instead of printing blank pages for it.
+- **Backups always restore:** each chart's checksum is taken from the PDF actually stored; a song whose PDF is missing is left out of the backup and the app tells you. A backup with something it can't read (a crafted name or id, an oversized list) is refused before anything is changed, and a damaged annotation page can no longer break later backups.
+- **Delete and Replace PDF are all or nothing,** and a save the browser cancels no longer leaves the app waiting forever.
+- **Restoring a backup that marks a song as deleted** now removes that song's PDF and marks on this tablet too.
+- **Names:** "War Pigs - Black Sabbath (1).pdf" (a file downloaded twice) is read as War Pigs by Black Sabbath, not swapped; extra spaces no longer change the sort order.
+- **Replace PDF keeps the song's crop** (the message says so; "Reset" in the crop screen clears it).
+- **Updates install the newest files** even when two deploys land within ten minutes, and an update that was already downloading when the app opened still shows its note.
+- **Older tablets:** colours now have a fallback for iPadOS 16 to 17.4 and older Chrome, so dialogs stay readable. Supported: iPadOS 16 or newer, Android Chrome 100 or newer.
+- **Smaller fixes:** Enter on Cancel in "Edit song" no longer saves; undoing a mark after leaving its song keeps the deletion; a setlist drag that is interrupted by a refresh stops cleanly.
+- MobileSheets conversion: marks keep stable ids, the real page count is used, any page order is read, and a song with no readable PDF is reported instead of becoming a break.
+
 ## 2026-11-20: Safer for gigs
 - **Backups you won't forget:** the Library nags (once) when you have never backed up or the last backup is more than two weeks old, with a "Back up now" button, and shows when the last backup was. A storage line shows how much space the app uses and warns when the tablet is nearly full or the browser may clear the app's data, with a button to ask the browser to protect it.
 - **Restore is all or nothing.** A damaged backup, a missing PDF, a backup from a newer version of the app, a full tablet, or the page closing in the middle can no longer leave you with half a library. You get a plain message and nothing changes.

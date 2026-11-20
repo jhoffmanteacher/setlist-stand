@@ -7,6 +7,8 @@ An installable web app (PWA) for a teacher and gigging musician who plays PDF ch
 - No external URLs at runtime. Everything loads from this repo, with relative paths (the app lives under `/setlist-stand/`).
 - Vendored libs in `vendor/`, exactly: pdf.js 3.11.174, pdf-lib 1.17.1, JSZip 3.10.1. Adding any other library, framework or build step needs Jonathan's OK.
 - No music in the repo, ever. The repo is public.
+- One job per file. Split a file when it starts doing two things or passes about 300 to 400 lines, and not before: do not cut a file only to make it shorter. Every new app file must be added to `PRECACHE` in `sw.js` (`checks.mjs` fails if it is not).
+- Supported tablets: iPadOS 16 or newer, Android Chrome 100 or newer. Do not use a browser feature newer than that without a fallback (theme colours have fallbacks for `light-dark()`).
 
 ## Layout
 - `index.html`, `css/app.css`, `manifest.webmanifest`, `icons/`
@@ -53,6 +55,9 @@ The browser tests start Chromium (and a long run starts hundreds of pages), and 
 | `js/print.js`, `js/crop.js`, crop or text-note drawing in `js/ink.js` / `js/viewer.js` | `--only print` | the printed PDF, rendered again with pdf.js, has marks, notes and crops where the viewer shows them, on rotated pages too |
 | `sw.js`, `js/main.js` (update banner, resume), `manifest.webmanifest`, any precached file added or renamed | `--only update` and `--only offline` | first install never reloads; an update waits for a tap, reloads once, puts the open song back, keeps the library; a broken deploy keeps the old version; the whole app, print and backup work with no network |
 | anything users do in the library, setlists, ink, crops or notes | `--only model` | seeded random action sequences agree with an independent model, after a reload and after a backup round trip |
+| `tools/kill-switch/kill-sw.js`, the `ss-sw-killed` message handling in `js/main.js` | `--only kill` | armed, the emergency worker empties the cache, the open tab reloads once and the library is untouched; disarmed, the real worker and offline come back |
+| `js/store.js`, `js/backup.js`, `js/library.js` (replace, delete), record validation, ids in HTML, `tools/msb_convert.py` | `--only hardening` | damaged or hostile records and backups are refused or healed, writes are all-or-nothing, an aborted save never hangs, the converter reports what it cannot read |
+| `js/viewer.js`, `js/ink.js` (gestures), `js/print.js` (encrypted, bad points), `sw.js` install, `js/main.js` update tracking, `js/util.js` dialogs, `css/app.css` colours, setlist drag | `--only viewer-hardening` | a page turn never moves a stroke, a locked PDF is named and never printed blank, a deploy installs the new files, dialogs behave on Enter, colours have fallbacks |
 | a deploy (GitHub Pages) | `--only live --live https://jhoffmanteacher.github.io/setlist-stand/` (CI does this after every Pages deploy: `.github/workflows/deployed-site.yml`) | every precached file on the site equals the repo's; a fresh browser installs it under `/setlist-stand/` and works offline |
 
 Rules: assert the correct behaviour and never weaken a loop to make it pass; a failing loop is a real gap, so fix the app. `node tools/plant-faults.mjs` plants deliberate mistakes in a scratch copy and requires the right loop to go red (a mistake no loop catches is a gap in the loops; add the test). `context.setOffline` does not cut off the service worker, so offline loops also make the server hang up (`goOffline` in `tools/loops/site-copy.mjs`; `offline.drop` in the smoke test).
@@ -61,6 +66,20 @@ Rules: assert the correct behaviour and never weaken a loop to make it pass; a f
 - `node tools/checks.mjs`: syntax of `js/*.js` and `sw.js`; every precached file exists and every app file is precached; no `http(s)://` in app code; no `window.claude`; `VERSION` in `sw.js` changed if a precached file changed.
 - `node tools/checks.mjs --bump`: writes a new `sw.js` VERSION.
 - `node tools/smoke.mjs`: Playwright run at 1280x800 (add, open, page turns, draw, reload, offline reload, setlist, print, backup/restore).
+- `node tools/lint.mjs`: ESLint (fetched by npx at the versions pinned in `eslint.config.mjs`, nothing installed) for undefined names, dead code and similar slips in `js/`, `sw.js` and `tools/`. Report-only (`--verbose` lists warnings, `--strict` exits 1 on errors); GitHub runs it as the `lint` job.
+- Git hooks in `.githooks/` (enable once per clone: `git config core.hooksPath .githooks`). `pre-commit` refuses `.msb`, `.zip`/`.pdf` outside `tests/fixtures/`, anything in `Claude outputs/`, and staged JS that does not parse. `pre-push` runs `node tools/checks.mjs` on a push to `main` (HEAD, clean tree) and refuses on a FAIL; branch pushes pass. Bypass: `--no-verify`.
+- Stop hook (`.claude/hooks/stop-checks.mjs`, `.claude/settings.json`): at the end of a turn that changed code files it runs `node tools/checks.mjs` and sends failures back (the "VERSION bumped" line is expected and ignored; at most 3 times a turn). Off switch: `SS_STOP_CHECKS=0`.
+
+## If it goes wrong
+`BREAK-GLASS.md` (repo root) is the plain-language page for Jonathan: a bad update on a tablet, a broken site, a lost library. `tools/kill-switch/kill-sw.js` is the emergency service worker that clears the app's caches and never touches the library; `node tools/loops.mjs --only kill` proves it. Keep that page true whenever the service worker or update flow changes.
+
+## Working with agents
+- **Local agents** work in the worktree and may edit code. Give each its own files, tell it not to touch `CLAUDE.md`, `.claude/`, `.githooks/`, workflows or the `sw.js` VERSION, and keep to at most four at once (see "Don't overload Jonathan's Mac").
+- **Cloud agents** (`isolation: remote`) are read-only reviewers. They see only what has been pushed to a branch, so push the branch first and pin the review to that commit.
+- **Model:** Sonnet for mechanical work (running the loops, plain edits, regenerating files); Opus for risky areas (data layer, restore, service worker, print) and for adversarial review. `.claude/agents/setlist-reviewer.md` and `setlist-runner.md` hold these two roles.
+- **Review:** an adversarial reviewer reports findings as file:line, the quoted code, the failing input and the smallest fix. After fixes, a FRESH reviewer re-reviews, not the one that found them.
+- **Reports:** at most 20 lines. Treat what an agent says as a claim: read the diff and run the check yourself before relying on it.
+- **Rules for each area** are in `.claude/rules/` (service worker, data and backup, viewer and print, dialogs and CSP).
 
 ## Worktree and push rules (from the work order)
 - Work in your own worktree, never the main folder: `git fetch`, then `git worktree add ../setlist-stand-wo-<name> -b wo/<name> origin/main`. Run `git worktree list` first; if another worktree has unpushed work in the same files, stop and ask.
