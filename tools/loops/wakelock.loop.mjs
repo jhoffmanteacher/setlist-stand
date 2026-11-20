@@ -262,8 +262,38 @@ async function missingLoop(ctx){
   } finally { await s.close(); }
 }
 
+/* ---------- (d) localStorage blocked (Safari "Block all cookies"): the choice still works for this page load ---------- */
+async function blockedStorageLoop(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await stub(page, 'ok');
+    await page.addInitScript(() => {
+      const boom = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
+      Storage.prototype.getItem = boom; Storage.prototype.setItem = boom; Storage.prototype.removeItem = boom;
+    });
+    await s.goto();
+    await addSong(page);
+    await open(page);
+    await waitFor(async () => (await wl(page)).held === 1, 'no screen lock after opening a song with storage blocked: ' + JSON.stringify(await wl(page)));
+    await inState(page, 'held', 'true');
+    /* turning it off must stick even though nothing can be saved: off, not "may dim", and no new lock when the page comes back */
+    assert(await tap(page) === 'Screen can dim', 'toast after turning off with storage blocked');
+    await inState(page, 'off', 'false');
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await sleep(600);
+    const n = await wl(page);
+    assert(n.held === 0 && n.requests === 1, 'the lock came back after the user turned it off (storage blocked): ' + JSON.stringify(n));
+    assert(await tap(page) === 'Screen stays on', 'toast after turning on with storage blocked');
+    await inState(page, 'held', 'true');
+    assert((await wl(page)).held === 1, 'turning it on did not take the lock');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'wakelock: the lock follows the viewer, the preference and the button; a system release shows; bar layout', run: lockLoop},
+  {name: 'wakelock: the choice holds when localStorage is blocked', run: blockedStorageLoop},
   {name: 'wakelock: a refused lock shows as not held, with one toast per page load', run: rejectLoop},
   {name: 'wakelock: no navigator.wakeLock shows as not held', run: missingLoop},
 ];

@@ -9,8 +9,10 @@ import {$, toast} from './util.js';
 const KEY = 'ss-awake';
 const MAY_DIM = 'This tablet may dim the screen. Set Auto-Lock to Never in Settings.';
 let sentinel = null, pending = null, isOpen = false, warned = false;
+/* The choice made in this page load wins; storage may be blocked (Safari "Block all cookies") or fail to save. */
+let chosen = null;
 
-const wanted = () => { try{ return localStorage.getItem(KEY) !== '0'; }catch(e){ return true; } };
+const wanted = () => { if(chosen !== null) return chosen; try{ return localStorage.getItem(KEY) !== '0'; }catch(e){ return true; } };
 const state = () => sentinel ? 'held' : wanted() ? 'dim' : 'off';
 
 function render(){
@@ -57,10 +59,12 @@ export function initAwake(){
   const b = $('#vAwake');
   b.onclick = async () => {
     if(state() === 'off'){
+      chosen = true;
       try{ localStorage.setItem(KEY, '1'); }catch(e){}
       render();
       if(await acquire()) toast('Screen stays on'); else if(isOpen){ warned = true; toast(MAY_DIM); }
     }else{
+      chosen = false;
       try{ localStorage.setItem(KEY, '0'); }catch(e){}
       release();
       toast('Screen can dim');

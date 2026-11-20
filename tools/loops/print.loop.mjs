@@ -322,11 +322,14 @@ async function askProtected(page, withInk){
 }
 /* Taps "Print them as pictures"; returns the PDF bytes and every progress line shown while it worked. */
 async function printAsPictures(page){
-  await page.evaluate(() => { window.__stat = []; window.__statOb = new MutationObserver(() => {
-    const t = document.querySelector('#pStatus')?.textContent; if(t && window.__stat.at(-1) !== t) window.__stat.push(t); });
+  await page.evaluate(() => { window.__stat = []; window.__focus = []; window.__statOb = new MutationObserver(() => {
+    const t = document.querySelector('#pStatus')?.textContent;
+    if(t && window.__stat.at(-1) !== t){ window.__stat.push(t); window.__focus.push(!!document.activeElement?.closest('.modal')); } });
     window.__statOb.observe(document.body, {subtree: true, childList: true, characterData: true}); });
   const dl = await download(page, () => page.click('.modal [data-pics]'));
-  const statuses = await page.evaluate(() => { window.__statOb.disconnect(); return window.__stat; });
+  const {statuses, focus} = await page.evaluate(() => { window.__statOb.disconnect(); return {statuses: window.__stat, focus: window.__focus}; });
+  /* the pressed button is replaced by the progress screen: focus must stay inside the dialog (Escape and Tab live there) */
+  assert(focus.length && focus.every(Boolean), `focus left the dialog while the pictures PDF was made: ${JSON.stringify(focus)}`);
   if(await page.locator('.modal').count()){ const x = page.locator('.modal [data-x]'); await x.waitFor({timeout: 5000}); await x.click(); }
   await page.waitForFunction(() => !document.querySelector('.modal'));
   return {bytes: await fsp.readFile(dl.file), statuses};

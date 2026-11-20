@@ -174,19 +174,23 @@ export function printDialog(st, ids){
     box.setAttribute('aria-labelledby', 'printLocked');
     m.querySelector('[data-x]').onclick = () => m.remove();
     if(bytes) m.querySelector('[data-without]').onclick = () => save(bytes);
-    if(pics.length) m.querySelector('[data-pics]').onclick = () => asPictures(lockedPages, withInk);
+    if(pics.length) m.querySelector('[data-pics]').onclick = () => asPictures(lockedPages, withInk, left);
     box.focus();
   };
-  const asPictures = async (total, withInk) => {
+  const asPictures = async (total, withInk, knownLeft = []) => {
     const status = n => `Preparing protected pages: ${n} of ${total}`;
     box.innerHTML = `<h2 id="printWork">Making PDF</h2><p class="hint" id="pStatus" role="status">${status(0)}</p><div class="btns"><button data-x>Cancel</button></div>`;
     box.setAttribute('aria-labelledby', 'printWork');
+    box.focus();                            // the button that was pressed is gone: keep the keyboard (and Escape) inside the dialog
     m.querySelector('[data-x]').onclick = () => m.remove();
     const line = m.querySelector('#pStatus');
     try{
-      const {bytes} = await buildSetPdf(ids, withInk, {pictures:true, total, progress:n => { line.textContent = status(n); }, cancelled:() => !m.isConnected});
+      const {bytes, left} = await buildSetPdf(ids, withInk, {pictures:true, total, progress:n => { line.textContent = status(n); }, cancelled:() => !m.isConnected});
       if(!m.isConnected) return;            // cancelled while it was working
-      if(bytes) save(bytes); else { m.remove(); toast('Could not make the PDF'); }
+      /* a chart that opened on the first look but not now (say pdf.js ran out of memory) is never dropped without a word */
+      const lost = left.filter(x => !knownLeft.some(k => k.id === x.id));
+      if(lost.length) askLocked(bytes, [], lost, 0, withInk);
+      else if(bytes) save(bytes); else { m.remove(); toast('Could not make the PDF'); }
     }catch(err){ m.remove(); toast('Could not make the PDF'); }
   };
   m.querySelector('[data-x]').onclick = () => m.remove();
