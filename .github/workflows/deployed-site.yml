@@ -9,6 +9,9 @@ on:
   workflow_run:
     workflows: ['pages build and deployment']
     types: [completed]
+  # Pages' own deployment reports its status here too. The workflow_run line above had not started this workflow after
+  # two deploys (2026-11-20), so both are listed; the concurrency group below makes a double start run once.
+  deployment_status:
   schedule:
     - cron: '41 9 * * *'
   workflow_dispatch:
@@ -21,7 +24,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # a failed Pages build is its own red run; do not also test a deploy that did not happen
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && (github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success') }}
+    concurrency:
+      group: deployed-site
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
