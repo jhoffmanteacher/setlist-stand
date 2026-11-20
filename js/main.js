@@ -1,6 +1,6 @@
 import {$, hooks} from './util.js';
-import {openStore, load} from './store.js';
-import {renderLibrary, onClick as libraryClick, addFiles} from './library.js';
+import {openStore, load, ensureHashes} from './store.js';
+import {renderLibrary, onClick as libraryClick, addFiles, replacePdf} from './library.js';
 import {renderSetlists, onClick as setlistClick, closeSet} from './setlists.js';
 import {backupNow, restoreFrom} from './backup.js';
 import {initViewer} from './viewer.js';
@@ -18,6 +18,7 @@ hooks.render = render;
 $('#tLib').onclick = () => { tab = 'lib'; render(); };
 $('#tSets').onclick = () => { tab = 'sets'; closeSet(); render(); };
 $('#file').onchange = async e => { const fs = [...e.target.files]; e.target.value = ''; await addFiles(fs); };
+$('#replaceFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await replacePdf(f); };
 $('#restoreFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
 
 $('#view').addEventListener('click', async e => {
@@ -56,4 +57,5 @@ if('serviceWorker' in navigator){
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
   initViewer(); initInk();
   await load(); render();
+  ensureHashes().catch(() => {});
 })();

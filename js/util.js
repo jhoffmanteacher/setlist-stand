@@ -26,6 +26,17 @@ export function ask(title, val = ''){
     i.onkeydown = e => { if(e.key === 'Enter') done(i.value.trim() || null); if(e.key === 'Escape') done(null); };
   });
 }
+/* A dialog with several text fields. fields: [{key, label, value}]. Resolves to {key: value} or null. */
+export function form(title, fields){
+  return new Promise(res => {
+    const m = modal(`<h2>${esc(title)}</h2>${fields.map(f => `<label class="fld"><span>${esc(f.label)}</span><input type="text" data-k="${f.key}" value="${esc(f.value || '')}"></label>`).join('')}<div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
+    const ins = [...m.querySelectorAll('input')]; ins[0].focus(); ins[0].select();
+    const done = ok => { const v = ok ? Object.fromEntries(ins.map(i => [i.dataset.k, i.value.trim()])) : null; m.remove(); res(v); };
+    m.querySelector('[data-x]').onclick = () => done(false);
+    m.querySelector('[data-ok]').onclick = () => done(true);
+    m.onkeydown = e => { if(e.key === 'Enter') done(true); if(e.key === 'Escape') done(false); };
+  });
+}
 export function pick(songs){
   return new Promise(res => {
     const m = modal(`<h2>Add songs</h2><div class="pick">${songs.map(s => `<label><input type="checkbox" value="${s.id}">${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>'}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Add</button></div>`);
@@ -34,9 +45,9 @@ export function pick(songs){
   });
 }
 /* two-tap confirm instead of confirm() */
-export function armed(btn){
+export function armed(btn, msg = 'Tap again'){
   if(btn.dataset.armed) return true;
-  const t = btn.textContent; btn.dataset.armed = 1; btn.textContent = 'Tap again';
+  const t = btn.textContent; btn.dataset.armed = 1; btn.textContent = msg;
   setTimeout(() => { delete btn.dataset.armed; btn.textContent = t; }, 3000);
   return false;
 }

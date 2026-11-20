@@ -79,3 +79,9 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 @media(max-width:600px){.top h1{font-size:32px}.acts button{padding:0 10px;font-size:14px}}
 #update{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:50;background:var(--acc);color:#fff;border-color:var(--acc);box-shadow:0 4px 18px rgba(0,0,0,.35)}
+
+.fld{display:flex;flex-direction:column;gap:4px;font-weight:600;font-size:14px;color:var(--mute)}
+.fld input{font-weight:400;color:var(--ink)}
+.tag{display:inline-block;margin-left:8px;padding:0 8px;border-radius:999px;background:var(--line);color:var(--mute);font-size:12px;font-weight:600;vertical-align:middle}
+.sw-row{display:flex;gap:12px;align-items:center;min-height:48px;margin-top:20px;cursor:pointer;font-weight:600}
+.sw-row input{width:22px;height:22px}

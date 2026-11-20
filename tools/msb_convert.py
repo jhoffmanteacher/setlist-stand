@@ -30,9 +30,10 @@ def split_name(raw):
     t=re.sub(r'\.pdf$','',t,flags=re.I)
     artist=ARTIST_FROM_FILE.get(t,'')
     t=re.sub(r'\s*\(1\)$','',t)
-    t=re.sub(r'\s+chords$','',t,flags=re.I)
     t=t.replace('Dont ',"Don't ")
-    t=re.sub(r'\s*-\s*(Chords|Pro|Lyrics - Chords)(\s*\d+)?$',lambda m:(' '+m.group(2).strip()) if m.group(2) else '',t)
+    # drop a trailing "- Chords" / "- Pro" first ("- Lyrics - Chords" keeps "Lyrics" as the version), then a bare "chords"
+    t=re.sub(r'\s*-\s*(Chords|Pro|Lyrics - Chords)(\s*\d+)?$',lambda m:(' '+m.group(2).strip() if m.group(2) else '')+(' Lyrics' if m.group(1).startswith('Lyrics') else ''),t)
+    t=re.sub(r'\s+chords$','',t,flags=re.I)
     parts=[p.strip() for p in t.split(' - ')]
     if len(parts)==2 and not artist and len(parts[1])>2:
         artist,t=parts

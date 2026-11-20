@@ -1,3 +1,6 @@
+import {splitName, displayName, sortKey} from './names.js';
+import {uid} from './util.js';
+
 /* Storage: IndexedDB `setlist-stand` (stores songs, files, sets, ink), with an in-memory fallback. */
 export let MEM = null;
 let dbp;
@@ -28,9 +31,102 @@ export async function openStore(){
   catch(e){ MEM = {songs:new Map(), files:new Map(), sets:new Map(), ink:new Map()}; return false; }
 }
 
-export const state = {songs:[], sets:[]};
+/* ---------- records ----------
+   song  {id, title (derived: "Song (version) - Artist"), song, artist, version, archived, pages, hash, added, updated}
+   set   {id, name, songs:[ids], created, updated}
+   ink   key "songId:page" -> {updated, strokes:[{id, t, c, w, p, updated} | {id, deleted:true, updated}]}
+   A deleted song, set or stroke stays behind as {id, deleted:true, updated} so a later sync can tell
+   "deleted" from "never had it". The UI never shows them. */
+export const state = {songs:[], sets:[]};   // live (not deleted) records only
+const now = () => Date.now();
+
+/* Fills in missing fields. Returns true when the record changed (so it should be saved). */
+export function upgradeSong(s){
+  if(s.deleted) return false;
+  const before = JSON.stringify(s);
+  if(typeof s.song !== 'string'){ const n = splitName(s.title || ''); s.song = n.song; s.artist = n.artist; s.version = n.version; }
+  s.artist = s.artist || ''; s.version = s.version || '';
+  s.archived = !!s.archived;
+  if(!s.updated) s.updated = s.added || now();
+  s.title = displayName(s);
+  return JSON.stringify(s) !== before;
+}
+export function upgradeSet(st){
+  if(st.deleted) return false;
+  const before = JSON.stringify(st);
+  if(!Array.isArray(st.songs)) st.songs = [];
+  if(!st.updated) st.updated = st.created || now();
+  return JSON.stringify(st) !== before;
+}
+const byName = (a, b) => sortKey(a.song).localeCompare(sortKey(b.song), undefined, {numeric:true}) ||
+  a.song.localeCompare(b.song, undefined, {numeric:true}) || (a.artist + a.version).localeCompare(b.artist + b.version);
+
 export async function load(){
-  state.songs = (await all('songs')).sort((a, b) => a.title.localeCompare(b.title, undefined, {numeric:true}));
-  state.sets = (await all('sets')).sort((a, b) => b.created - a.created);
+  const songs = await all('songs'), sets = await all('sets');
+  for(const s of songs) if(upgradeSong(s)) await put('songs', s.id, s);
+  for(const st of sets) if(upgradeSet(st)) await put('sets', st.id, st);
+  state.songs = songs.filter(s => !s.deleted).sort(byName);
+  state.sets = sets.filter(s => !s.deleted).sort((a, b) => b.created - a.created);
 }
 export const songById = id => state.songs.find(s => s.id === id);
+export const saveSong = s => { s.title = displayName(s); s.updated = now(); return put('songs', s.id, s); };
+export const saveSet = st => { st.updated = now(); return put('sets', st.id, st); };
+export const markDeleted = (store, id) => put(store, id, {id, deleted:true, updated:now()});
+
+/* SHA-256 of the PDF bytes, as hex. Used later to spot the same chart twice. */
+export async function sha256(buf){
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+  return [...h].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+/* Songs that came from an older backup or the converter have no hash yet. */
+export async function ensureHashes(){
+  let n = 0;
+  for(const s of state.songs){
+    if(s.hash) continue;
+    const f = await get('files', s.id); if(!f) continue;
+    s.hash = await sha256(await f.arrayBuffer()); await put('songs', s.id, s); n++;
+  }
+  return n;
+}
+
+/* ---------- ink ---------- */
+export const liveStrokes = arr => (arr || []).filter(s => !s.deleted);
+export const inkRecord = (strokes) => ({updated:now(), strokes});
+/* Older data stored a bare array of strokes with no ids. Give them ids and save once. */
+export function upgradeInk(v){
+  if(!v) return {record:{updated:0, strokes:[]}, changed:false};
+  if(Array.isArray(v)){
+    const t = now();
+    return {record:{updated:t, strokes:v.map(s => ({...s, id:s.id || uid(), updated:s.updated || t}))}, changed:true};
+  }
+  return {record:v, changed:false};
+}
+export async function getInk(songId, pn){
+  const key = songId + ':' + pn, v = await get('ink', key);
+  const {record, changed} = upgradeInk(v);
+  if(changed) await put('ink', key, record);
+  return record.strokes;
+}
+/* Removes every ink page record of a song, whatever its page count was. */
+export async function delInkFor(songId){
+  const lo = songId + ':', hi = songId + ':\uffff';
+  if(MEM){ for(const k of [...MEM.ink.keys()]) if(k >= lo && k <= hi) MEM.ink.delete(k); return; }
+  const d = await db();
+  await new Promise((res, rej) => {
+    const t = d.transaction('ink', 'readwrite'), st = t.objectStore('ink');
+    st.openKeyCursor(IDBKeyRange.bound(lo, hi)).onsuccess = e => { const c = e.target.result; if(c){ st.delete(c.key); c.continue(); } };
+    t.oncomplete = res; t.onerror = () => rej(t.error);
+  });
+}
+export const putInk = (songId, pn, strokes) => put('ink', songId + ':' + pn, inkRecord(strokes));
+/* Makes `next` the page's strokes: strokes that vanished become deletion markers,
+   strokes that came back (undo) get a fresh timestamp so they beat their old marker. */
+export function reconcile(prev, next){
+  const t = now(), pm = new Map((prev || []).map(s => [s.id, s])), seen = new Set(), out = [];
+  for(const s of next){
+    seen.add(s.id); const p = pm.get(s.id);
+    out.push(p && p.deleted && !s.deleted ? {...s, updated:t} : s);
+  }
+  for(const p of prev || []) if(!seen.has(p.id)) out.push(p.deleted ? p : {id:p.id, deleted:true, updated:t});
+  return out;
+}

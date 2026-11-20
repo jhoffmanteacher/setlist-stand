@@ -1,12 +1,13 @@
 /* Pen, highlighter and eraser. Strokes are stored apart from the PDF as fractions of the full page. */
-import {$, toast, armed} from './util.js';
-import {put} from './store.js';
+import {$, toast, armed, uid} from './util.js';
+import {putInk, reconcile, liveStrokes} from './store.js';
 import {V, stage, viewer, draw} from './viewer.js';
 
 export function paint(cv, strokes){
   const c = cv.getContext('2d'), w = cv.width, h = cv.height;
   c.clearRect(0, 0, w, h);
   for(const s of strokes){
+    if(s.deleted) continue;
     c.save(); c.lineCap = 'round'; c.lineJoin = 'round';
     c.strokeStyle = s.c; c.lineWidth = s.w * w;
     if(s.t === 'hl'){ c.globalAlpha = .4; c.lineCap = 'butt'; }
@@ -22,7 +23,7 @@ function tidy(s){
   for(const pt of s.p){ const l = p[p.length - 1]; if(!l || Math.hypot(pt[0] - l[0], pt[1] - l[1]) > .0015) p.push([r4(pt[0]), r4(pt[1])]); }
   return {...s, p};
 }
-function saveInk(id, pn, strokes){ put('ink', id + ':' + pn, strokes).catch(() => toast('Could not save that mark')); }
+function saveInk(id, pn, strokes){ putInk(id, pn, strokes).catch(() => toast('Could not save that mark')); }
 function ptOn(cv, e){ const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]; }
 
 let cur = null, raf = 0;
@@ -33,8 +34,11 @@ function live(){
 function eraseAt(e){
   const r = cur.cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
   const arr = V.ink.get(cur.pn) || [];
-  const keep = arr.filter(s => !s.p.some(p => Math.hypot(p[0] * r.width - x, p[1] * r.height - y) < 14 + s.w * r.width / 2));
-  if(keep.length !== arr.length){ V.ink.set(cur.pn, keep); cur.changed = true; paint(cur.cv, keep); }
+  const hit = s => !s.deleted && s.p.some(p => Math.hypot(p[0] * r.width - x, p[1] * r.height - y) < 14 + s.w * r.width / 2);
+  if(arr.some(hit)){
+    const t = Date.now(), keep = arr.map(s => hit(s) ? {id:s.id, deleted:true, updated:t} : s);
+    V.ink.set(cur.pn, keep); cur.changed = true; paint(cur.cv, keep);
+  }
 }
 function endStroke(){
   const c = cur; cur = null;
@@ -52,7 +56,7 @@ export function inkPointerDown(e){
     const pn = +cv.dataset.pn;
     cur = {pid:e.pointerId, cv, pn, id:V.id, before:(V.ink.get(pn) || []).slice(), changed:false, s:null};
     if(V.tool === 'erase') eraseAt(e);
-    else { cur.s = {t:V.tool, c:V.color, w:V.tool === 'hl' ? .02 : .003, p:[ptOn(cv, e)]}; live(); }
+    else { cur.s = {id:uid(), updated:Date.now(), t:V.tool, c:V.color, w:V.tool === 'hl' ? .02 : .003, p:[ptOn(cv, e)]}; live(); }
     return true;
   }
   return false;
@@ -90,15 +94,19 @@ export function initInk(){
   });
   $('#tUndo').onclick = () => {
     const h = V.hist.pop(); if(!h){ toast('Nothing to undo'); return; }
-    saveInk(h.id, h.pn, h.before);
-    if(h.id === V.id){ V.ink.set(h.pn, h.before); const cv = stage.querySelector(`.ink[data-pn="${h.pn}"]`); if(cv) paint(cv, h.before); else { V.page = h.pn; draw(); } }
+    if(h.id === V.id){
+      const back = reconcile(V.ink.get(h.pn) || [], h.before);
+      saveInk(h.id, h.pn, back); V.ink.set(h.pn, back);
+      const cv = stage.querySelector(`.ink[data-pn="${h.pn}"]`); if(cv) paint(cv, back); else { V.page = h.pn; draw(); }
+    } else saveInk(h.id, h.pn, h.before);
   };
   $('#tClear').onclick = e => {
     if(!armed(e.currentTarget)) return;
     for(const cv of stage.querySelectorAll('.ink')){
       const pn = +cv.dataset.pn, before = V.ink.get(pn) || [];
-      if(!before.length) continue;
-      V.hist.push({id:V.id, pn, before:before.slice()}); V.ink.set(pn, []); saveInk(V.id, pn, []); paint(cv, []);
+      if(!liveStrokes(before).length) continue;
+      const t = Date.now(), gone = before.map(s => s.deleted ? s : {id:s.id, deleted:true, updated:t});
+      V.hist.push({id:V.id, pn, before:before.slice()}); V.ink.set(pn, gone); saveInk(V.id, pn, gone); paint(cv, gone);
     }
   };
   $('#tFinger').onclick = () => { V.finger = !V.finger; $('#tFinger').setAttribute('aria-pressed', V.finger); toast(V.finger ? 'Fingers draw; use the arrows to turn pages' : 'Only the stylus draws'); };

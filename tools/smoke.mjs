@@ -19,6 +19,7 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import vm from 'node:vm';
 import {chromium} from 'playwright';
+import {splitName, displayName} from '../js/names.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = path.join(ROOT, 'tests', 'fixtures');
@@ -82,6 +83,10 @@ const idbAll = (page, store) => page.evaluate(store => new Promise((res, rej) =>
     c.onerror = () => rej(c.error);
   };
 }), store);
+
+/* Ink records are {updated, strokes:[...]}; live strokes are those without `deleted`. */
+const ink0Shape = (ink, key) => ink[key] && ink[key].strokes;
+const liveOf = v => (v && Array.isArray(v.strokes) ? v.strokes : []).filter(s => !s.deleted);
 
 const subText = page => page.locator('#vSub').textContent();
 async function waitSub(page, re, what){
@@ -149,13 +154,13 @@ async function stepAdd(t){
   await page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 2, null, {timeout: 15000})
     .catch(async () => { throw new Error(`expected 2 songs, library shows ${await songCount(page)}`); });
   const text = await page.locator('#libList').innerText();
-  assert(/two-page/.test(text) && /three-page/.test(text), 'titles missing in library: ' + text.replace(/\s+/g, ' '));
+  assert(/Two-page/.test(text) && /Three-page/.test(text), 'titles (title-cased) missing in library: ' + text.replace(/\s+/g, ' '));
   assert(/2 pages/.test(text) && /3 pages/.test(text), 'page counts missing in library: ' + text.replace(/\s+/g, ' '));
 }
 
 async function stepTwoUp(t){
   const {page} = t;
-  await openSong(page, 'two-page');
+  await openSong(page, 'Two-page');
   await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 2, null, {timeout: 8000})
     .catch(async () => { throw new Error(`expected 2 .sheet in landscape, got ${await page.locator('#stage .sheet').count()}`); });
   const boxes = await page.locator('#stage .sheet').evaluateAll(els => els.map(e => e.getBoundingClientRect().toJSON()));
@@ -166,7 +171,7 @@ async function stepTwoUp(t){
 
 async function stepTurns(t){
   const {page} = t;
-  await openSong(page, 'three-page');
+  await openSong(page, 'Three-page');
   if(await page.getAttribute('#v2up', 'aria-pressed') === 'true') await page.click('#v2up');
   await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 1, null, {timeout: 5000})
     .catch(() => { throw new Error('one page per view did not show a single .sheet'); });
@@ -201,11 +206,13 @@ async function stepAnnotate(t){
   let key = null, strokes = null;
   for(let i = 0; i < 25 && !key; i++){
     const ink = await idbAll(page, 'ink');
-    for(const [k, v] of Object.entries(ink)) if(k.endsWith(':1') && Array.isArray(v) && v.length){ key = k; strokes = v; }
+    for(const [k, v] of Object.entries(ink)) if(k.endsWith(':1') && liveOf(v).length){ key = k; strokes = liveOf(v); }
     if(!key) await sleep(200);
   }
   assert(key, 'no stroke saved in IndexedDB ink store');
+  assert(Array.isArray(ink0Shape(await idbAll(page, 'ink'), key)), 'ink record is not {updated, strokes:[]}');
   const s = strokes[0];
+  assert(typeof s.id === 'string' && s.id && s.updated > 0, 'stroke lacks id/updated: ' + JSON.stringify({id: s.id, updated: s.updated}));
   assert(s.p.length >= 2, 'stroke has ' + s.p.length + ' points');
   assert(s.p.every(p => p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1), 'stroke points not in 0..1: ' + JSON.stringify(s.p.slice(0, 3)));
   assert(s.t === 'pen' && /^#[0-9a-f]{6}$/i.test(s.c) && s.w > 0 && s.w < 1, 'stroke shape wrong: ' + JSON.stringify({t: s.t, c: s.c, w: s.w}));
@@ -215,8 +222,8 @@ async function stepAnnotate(t){
   await page.reload();
   await page.waitForSelector('#libList [data-open]');
   const after = await idbAll(page, 'ink');
-  assert(Array.isArray(after[key]) && after[key].length === strokes.length, 'stroke not stored after reload');
-  await openSong(page, 'three-page');
+  assert(liveOf(after[key]).length === strokes.length, 'stroke not stored after reload');
+  await openSong(page, 'Three-page');
   await waitSub(page, /^Page 1 of 3$/, 'reopen');
   await page.waitForFunction(() => {
     const cv = document.querySelector('#stage .ink[data-pn="1"]'); if(!cv) return false;
@@ -239,7 +246,7 @@ async function stepOffline(t){
     /* Guard against a vacuous pass: an uncached file must not load. */
     const leaked = await page.evaluate(() => fetch('tools/README.md').then(r => r.ok, () => false));
     assert(!leaked, 'network still reachable while offline; offline check would prove nothing');
-    await openSong(page, 'two-page');
+    await openSong(page, 'Two-page');
     await page.waitForFunction(() => {
       const cv = document.querySelector('#stage .sheet canvas'); if(!cv) return false;
       const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
@@ -316,9 +323,10 @@ async function stepBackup(t){
   const lj = zip.file('library.json'); assert(lj, 'zip has no library.json');
   const data = JSON.parse(await lj.async('string'));
   assert(data.app === 'setlist-stand', 'library.json app = ' + data.app);
+  assert(data.version === 2, 'library.json version = ' + data.version);
   assert(data.songs.length === 2, 'library.json songs = ' + data.songs.length);
   assert(data.sets.length === 1, 'library.json sets = ' + data.sets.length);
-  assert(data.ink && Array.isArray(data.ink[t.data.inkKey]) && data.ink[t.data.inkKey].length, 'library.json lacks ink key ' + t.data.inkKey);
+  assert(data.ink && data.ink[t.data.inkKey] && liveOf(data.ink[t.data.inkKey]).length && data.ink[t.data.inkKey].updated > 0, 'library.json lacks ink {updated, strokes} for ' + t.data.inkKey);
   for(const s of data.songs) assert(zip.file('files/' + s.id + '.pdf'), 'zip lacks files/' + s.id + '.pdf');
 
   for(let i = 0; i < 2; i++){
@@ -338,12 +346,12 @@ async function stepBackup(t){
   await page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 2, null, {timeout: 15000})
     .catch(async () => { throw new Error(`after restore library shows ${await songCount(page)} songs`); });
   const ink1 = await idbAll(page, 'ink');
-  assert(Array.isArray(ink1[t.data.inkKey]) && ink1[t.data.inkKey].length, 'ink not restored');
+  assert(liveOf(ink1[t.data.inkKey]).length, 'ink not restored');
   await page.click('#tSets');
   const row = page.locator('#view [data-set]', {hasText: 'Gig'});
   await row.waitFor({timeout: 5000});
   assert(/2 songs/.test(await row.innerText()), 'restored setlist row: ' + (await row.innerText()).replace(/\s+/g, ' '));
-  await openSong(page, 'three-page');
+  await openSong(page, 'Three-page');
   await page.waitForFunction(() => {
     const cv = document.querySelector('#stage .ink[data-pn="1"]'); if(!cv) return false;
     const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
@@ -351,6 +359,240 @@ async function stepBackup(t){
     return false;
   }, null, {timeout: 5000}).catch(() => { throw new Error('restored ink not drawn on the song'); });
   await page.click('#vBack');
+}
+
+/* ---------- Part 2: song details, archive, replace, delete markers, v1 restore ---------- */
+const ED = {song: 'Edited Song', artist: 'Test Artist', version: 'live take'};
+const ED_TITLE = 'Edited Song (live take) - Test Artist';
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/* A list row whose title (.t) starts with exactly `title`. */
+const rowFor = (page, scope, title) =>
+  page.locator(scope + ' li.row').filter({has: page.locator('.t', {hasText: new RegExp('^' + reEsc(title) + '(Archived)?$')})});
+async function songRec(page, pred){
+  const all = Object.values(await idbAll(page, 'songs'));
+  return all.find(pred);
+}
+async function gigSet(page){
+  const sets = Object.values(await idbAll(page, 'sets'));
+  const g = sets.find(s => !s.deleted && s.name === 'Gig');
+  assert(g, 'set Gig not found in IndexedDB');
+  return g;
+}
+async function openGig(page){
+  await toLibrary(page);
+  await page.click('#tSets');
+  await page.locator('#view [data-set]', {hasText: 'Gig'}).click();
+  await page.waitForSelector('#view [data-addto]');
+}
+async function drawOn(page, sheet){
+  const b = await sheet.boundingBox();
+  const x0 = b.x + b.width * .3, y0 = b.y + b.height * .4;
+  await page.mouse.move(x0, y0); await page.mouse.down();
+  for(let i = 1; i <= 10; i++) await page.mouse.move(x0 + i * b.width * .04, y0 + i * b.height * .01);
+  await page.mouse.up();
+}
+async function waitFor(fn, what, ms = 5000){
+  const end = Date.now() + ms; let v;
+  while(Date.now() < end){ v = await fn(); if(v) return v; await sleep(150); }
+  throw new Error(what);
+}
+
+async function stepEditSong(t){
+  const {page} = t;
+  await toLibrary(page);
+  const row = rowFor(page, '#libList', 'Two-page');
+  await row.waitFor();
+  t.data.edId = await row.locator('[data-open]').getAttribute('data-open');
+  await row.locator('[data-edit]').click();
+  const m = page.locator('.modal');
+  await m.waitFor();
+  assert(await m.locator('input[data-k=song]').inputValue() === 'Two-page', 'edit dialog Title field = ' + await m.locator('input[data-k=song]').inputValue());
+  for(const k of ['song', 'artist', 'version']) await m.locator(`input[data-k=${k}]`).fill(ED[k]);
+  await m.locator('[data-ok]').click();
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  await rowFor(page, '#libList', ED_TITLE).waitFor({timeout: 5000})
+    .catch(async () => { throw new Error('library does not show "' + ED_TITLE + '": ' + (await page.locator('#libList').innerText()).replace(/\s+/g, ' ')); });
+
+  await page.reload();
+  await page.waitForSelector('#libList [data-open]');
+  await rowFor(page, '#libList', ED_TITLE).waitFor({timeout: 5000}).catch(() => { throw new Error('edited title did not survive reload'); });
+  const rec = await songRec(page, s => s.id === t.data.edId);
+  assert(rec && rec.song === ED.song && rec.artist === ED.artist && rec.version === ED.version && rec.title === ED_TITLE,
+    'stored song record: ' + JSON.stringify(rec && {song: rec.song, artist: rec.artist, version: rec.version, title: rec.title}));
+
+  const shown = async q => { await page.fill('#q', q); return page.locator('#libList [data-open]').evaluateAll(els => els.map(e => e.querySelector('.t').textContent)); };
+  for(const q of ['test artist', 'LIVE TAKE']){
+    const r = await shown(q);
+    assert(r.length === 1 && r[0] === ED_TITLE, `search "${q}" shows ${JSON.stringify(r)}`);
+  }
+  assert((await shown('zzqx-nothing')).length === 0, 'search for nonsense still shows songs');
+  await shown('');
+  assert(await songCount(page) === 2, 'clearing search does not show both songs');
+}
+
+async function stepArchive(t){
+  const {page} = t;
+  const id = t.data.edId;
+  await toLibrary(page);
+  await rowFor(page, '#libList', ED_TITLE).locator('[data-archive]').click();
+  await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), id, {timeout: 5000})
+    .catch(() => { throw new Error('archived song still listed in the library'); });
+  assert(await songCount(page) === 1, 'library shows ' + await songCount(page) + ' songs after archiving one of 2');
+  assert((await songRec(page, s => s.id === id)).archived === true, 'song record not archived in IndexedDB');
+
+  await openGig(page);
+  const row = rowFor(page, '#view', ED_TITLE);
+  await row.waitFor({timeout: 5000}).catch(() => { throw new Error('archived song no longer listed in setlist Gig'); });
+  assert(await row.locator('.tag').count() && (await row.locator('.tag').textContent()) === 'Archived', 'setlist row lacks the Archived tag');
+  assert(await page.locator('#view [data-playat]').count() === 2, 'setlist does not still show 2 songs');
+  /* the Add-songs picker hides archived songs */
+  await page.click('#view [data-addto]');
+  const picks = await page.locator('.modal .pick label').allInnerTexts();
+  assert(picks.length === 1 && !picks.some(x => x.includes('Edited Song')), 'picker shows ' + JSON.stringify(picks));
+  await page.click('.modal [data-x]');
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  /* it still plays */
+  await row.locator('[data-playat]').click();
+  await page.waitForSelector('#viewer.on #stage .sheet canvas');
+  await page.waitForFunction(t => document.querySelector('#vTitle').textContent === t, ED_TITLE, {timeout: 5000})
+    .catch(async () => { throw new Error('viewer title = ' + await page.locator('#vTitle').textContent()); });
+  await waitFor(() => canvasHasMarks(page, '#stage .sheet canvas:not(.ink)', 'page'), 'archived song page did not render from the setlist');
+  await page.click('#vBack');
+
+  await toLibrary(page);
+  await page.check('#showArch');
+  await page.locator('#libList h2', {hasText: 'Archived'}).waitFor({timeout: 3000}).catch(() => { throw new Error('no "Archived" heading with Show archived on'); });
+  const arow = page.locator(`#libList li.row:has([data-restoresong="${id}"])`);
+  assert(await arow.count() === 1, 'archived song not listed with a Restore button');
+  await arow.locator('[data-restoresong]').click();
+  await page.waitForFunction(id => !document.querySelector(`[data-restoresong="${id}"]`) && document.querySelectorAll('#libList [data-edit]').length === 2, id, {timeout: 5000})
+    .catch(() => { throw new Error('Restore did not bring the song back to the library'); });
+  await page.uncheck('#showArch');
+  assert((await songRec(page, s => s.id === id)).archived === false, 'song record still archived after Restore');
+}
+
+async function stepReplace(t){
+  const {page} = t;
+  const id = t.data.edId;
+  await openSong(page, ED_TITLE);
+  if(await page.getAttribute('#v2up', 'aria-pressed') !== 'true') await page.click('#v2up');
+  await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 2, null, {timeout: 8000})
+    .catch(() => { throw new Error('two-page song did not show 2 sheets'); });
+  await page.click('#vAnn');
+  for(let i = 0; i < 2; i++) await drawOn(page, page.locator('#stage .sheet').nth(i));
+  await page.click('#tDone');
+  await waitFor(async () => { const ink = await idbAll(page, 'ink'); return liveOf(ink[id + ':1']).length && liveOf(ink[id + ':2']).length; },
+    'strokes on both pages not saved before replace');
+  await page.click('#vBack');
+
+  const before = await songRec(page, s => s.id === id);
+  const posBefore = (await gigSet(page)).songs.indexOf(id);
+  assert(posBefore >= 0, 'song not in Gig before replace');
+  await toLibrary(page);
+  const b = rowFor(page, '#libList', ED_TITLE).locator('[data-replace]');
+  await b.click();
+  assert(await b.textContent() === 'Clears notes. Tap again', 'first tap on Replace PDF shows "' + await b.textContent() + '"');
+  assert(before.pages === 2, 'pages before replace = ' + before.pages);
+  await b.click();
+  await page.setInputFiles('#replaceFile', path.join(FIX, 'one-page.pdf'));
+  await page.waitForFunction(id => /^1 page$/.test(document.querySelector(`#libList [data-open="${id}"] .s`)?.textContent || ''), id, {timeout: 10000})
+    .catch(async () => { throw new Error('library row after replace: ' + await rowFor(page, '#libList', ED_TITLE).innerText().catch(() => '(missing)')); });
+
+  const after = await songRec(page, s => s.id === id);
+  assert(after && !after.deleted && after.title === ED_TITLE, 'song lost its id or details after replace');
+  assert(after.pages === 1, 'pages after replace = ' + after.pages);
+  assert(/^[0-9a-f]{64}$/.test(after.hash) && after.hash !== before.hash, `hash not updated (${before.hash} -> ${after.hash})`);
+  assert((await gigSet(page)).songs.indexOf(id) === posBefore, 'song moved or left setlist Gig after replace');
+  const ink = await idbAll(page, 'ink');
+  for(const k of Object.keys(ink).filter(k => k.startsWith(id + ':'))){
+    const v = ink[k];
+    assert(v && Array.isArray(v.strokes) && v.strokes.every(s => s.deleted === true && s.id && s.updated), `ink ${k} still has live strokes: ` + JSON.stringify(v).slice(0, 200));
+  }
+  await openSong(page, ED_TITLE);
+  await waitSub(page, /^Page 1 of 1$/, 'replaced chart');
+  await sleep(300);
+  assert(!(await canvasHasMarks(page, '#stage .ink', 'ink')), 'old annotations still drawn on the replaced chart');
+  await page.click('#vBack');
+}
+
+async function stepDelete(t){
+  const {page} = t;
+  const id = t.data.edId;
+  await toLibrary(page);
+  const b = rowFor(page, '#libList', ED_TITLE).locator('[data-del]');
+  await b.click(); await b.click();
+  await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), id, {timeout: 5000})
+    .catch(() => { throw new Error('deleted song still in the library'); });
+  assert(await songCount(page) === 1, 'library shows ' + await songCount(page) + ' songs after delete');
+  const rec = (await idbAll(page, 'songs'))[id];
+  assert(rec && rec.id === id && rec.deleted === true && rec.updated > 0 && Object.keys(rec).sort().join() === 'deleted,id,updated',
+    'song record is not a deletion marker: ' + JSON.stringify(rec));
+  assert(!(await idbAll(page, 'files'))[id], 'PDF of deleted song still stored');
+  const left = Object.keys(await idbAll(page, 'ink')).filter(k => k.startsWith(id + ':'));
+  assert(!left.length, 'ink records of deleted song remain: ' + left.join(', '));
+  assert(!(await gigSet(page)).songs.includes(id), 'deleted song still in set Gig (IndexedDB)');
+  await openGig(page);
+  assert(await page.locator('#view [data-playat]').count() === 1, 'setlist Gig does not show 1 song after delete');
+  assert(!(await page.locator('#view').innerText()).includes('Edited Song'), 'deleted song still shown in setlist');
+  await page.click('#view [data-allsets]');
+  assert(/1 song\b/.test(await page.locator('#view [data-set]', {hasText: 'Gig'}).innerText()), 'set row does not say 1 song');
+
+  await toLibrary(page);
+  const dl = await download(page, () => page.click('#view [data-backup]'));
+  const zip = await JSZip.loadAsync(await fsp.readFile(dl.file));
+  const data = JSON.parse(await zip.file('library.json').async('string'));
+  assert(data.version === 2, 'backup version ' + data.version);
+  const m = data.songs.find(s => s.id === id);
+  assert(m && m.deleted === true && m.updated > 0 && !('title' in m), 'backup lacks the deletion marker: ' + JSON.stringify(m));
+  assert(!zip.file('files/' + id + '.pdf'), 'backup still has the deleted PDF');
+  assert(data.songs.filter(s => !s.deleted).length === 1, 'backup live songs = ' + data.songs.filter(s => !s.deleted).length);
+}
+
+async function stepRestoreV1(t){
+  const {page} = t;
+  const id = 'v1old' + Date.now().toString(36), setId = 'v1set' + Date.now().toString(36);
+  const legacyTitle = 'Old Song - Some Artist';
+  const zip = new JSZip();
+  zip.file('files/' + id + '.pdf', await fsp.readFile(path.join(FIX, 'one-page.pdf')));
+  zip.file('library.json', JSON.stringify({
+    app: 'setlist-stand', version: 1, saved: new Date().toISOString(),
+    songs: [{id, title: legacyTitle, pages: 1, added: 1700000000000}],
+    sets: [{id: setId, name: 'Old Gig', songs: [id], created: 1700000000000}],
+    ink: {[id + ':1']: [{t: 'pen', c: '#d62828', w: .003, p: [[.1, .1], [.5, .5]]}]},
+  }));
+  const f = path.join(TMP, 'v1-backup.zip');
+  await fsp.writeFile(f, await zip.generateAsync({type: 'nodebuffer'}));
+
+  await toLibrary(page);
+  await page.setInputFiles('#restoreFile', f);
+  await page.waitForSelector(`#libList [data-open="${id}"]`, {timeout: 15000})
+    .catch(async () => { throw new Error('v1 song not in library after restore; toast: ' + await page.locator('#toast').textContent()); });
+  /* Title-only records go through the legacy splitter (js/names.js). */
+  const want = splitName(legacyTitle);
+  await page.locator(`#libList li.row:has([data-open="${id}"]) [data-edit]`).click();
+  const mo = page.locator('.modal'); await mo.waitFor();
+  const got = {};
+  for(const k of ['song', 'artist', 'version']) got[k] = await mo.locator(`input[data-k=${k}]`).inputValue();
+  await mo.locator('[data-x]').click();
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  assert(got.song && got.artist && got.song === want.song && got.artist === want.artist && got.version === want.version,
+    `edit fields ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+  const parts = new Set([got.song, got.artist]);
+  assert(parts.has('Old Song') && parts.has('Some Artist'), 'title words lost: ' + JSON.stringify(got));
+  const shown = await page.locator(`#libList [data-open="${id}"] .t`).textContent();
+  assert(shown === displayName(want), `library row "${shown}"`);
+
+  await page.click('#tSets');
+  const srow = page.locator('#view [data-set]', {hasText: 'Old Gig'});
+  await srow.waitFor({timeout: 5000}).catch(() => { throw new Error('v1 set "Old Gig" missing'); });
+  assert(/1 song\b/.test(await srow.innerText()), 'v1 set row: ' + await srow.innerText());
+
+  const ink = (await idbAll(page, 'ink'))[id + ':1'];
+  assert(ink && !Array.isArray(ink) && ink.updated > 0 && Array.isArray(ink.strokes) && ink.strokes.length === 1,
+    'v1 ink not upgraded to {updated, strokes}: ' + JSON.stringify(ink));
+  assert(typeof ink.strokes[0].id === 'string' && ink.strokes[0].id && !ink.strokes[0].deleted, 'v1 stroke got no id: ' + JSON.stringify(ink.strokes[0]));
+  await waitFor(async () => /^[0-9a-f]{64}$/.test((await songRec(page, s => s.id === id))?.hash || ''), 'v1 song got no 64-hex hash within 5s');
+  await toLibrary(page);
 }
 
 async function stepNoExternal(t){ checkHosts(t); }
@@ -364,7 +606,12 @@ const STEPS = [
   ['6 offline reload: library and song still work', stepOffline],
   ['7 setlist Gig: add songs, print PDF with and without annotations', stepSetlist],
   ['8 backup, delete everything, restore', stepBackup],
-  ['9 no request left localhost during the run', stepNoExternal],
+  ['9 edit song details; persists; search by artist and version', stepEditSong],
+  ['10 archive a song in a setlist; still plays; Show archived; restore', stepArchive],
+  ['11 replace PDF: same id and setlist place, notes cleared, new hash', stepReplace],
+  ['12 delete leaves a marker in IndexedDB and in the backup', stepDelete],
+  ['13 restore a version 1 backup', stepRestoreV1],
+  ['14 no request left localhost during the run', stepNoExternal],
 ];
 
 /* ---------- runner ---------- */

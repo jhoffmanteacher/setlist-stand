@@ -10,19 +10,21 @@ An installable web app (PWA) for a teacher and gigging musician who plays PDF ch
 
 ## Layout
 - `index.html`, `css/app.css`, `manifest.webmanifest`, `icons/`
-- `js/`: `util`, `store` (IndexedDB), `library`, `setlists`, `viewer`, `ink`, `print`, `backup`, `main`
+- `js/`: `util`, `store` (IndexedDB), `names`, `importname`, `library`, `setlists`, `viewer`, `ink`, `print`, `backup`, `main`
 - `sw.js`: service worker; precaches every app file; has a `VERSION` constant
 - `vendor/`: the three libraries
 - `tools/`: `checks.mjs`, `smoke.mjs`, `msb_convert.py` (+ `README.md`)
 - `tests/fixtures/`: small text-only PDFs for the smoke test
 - `docs/`: `DECISIONS.md`. Root: `README.md`, `CHANGELOG.md`
 
-## Data model (as of v1 part 1)
+## Data model (as of v1 part 2)
 - IndexedDB `setlist-stand`, version 1, stores `songs`, `files`, `sets`, `ink` (in-memory fallback if storage is blocked).
-- Song `{id, title, pages, added}`. The converter also writes `song`, `artist`, `version`, `file`. PDF bytes live in `files`, keyed by song id.
-- Set `{id, name, songs:[songIds], created}`.
-- Ink is keyed `songId:pageNumber`, a list of strokes `{t:'pen'|'hl', c:'#rrggbb', w:<fraction of page width>, p:[[x,y],...]}`. x and y are fractions (0 to 1) of the full page. Keep them that way.
-- Backup is a zip: `library.json` `{app:'setlist-stand', version:1, ...}` plus `files/<id>.pdf`. Old backups and converter output must keep restoring.
+- Song `{id, title, song, artist, version, archived, pages, hash, added, updated}`. `title` is derived: "Song (version) - Artist" (empty parts left out). `hash` is SHA-256 of the PDF bytes. Old records (title only) are upgraded on load with the splitter in `js/names.js` (a port of `split_name()` in `tools/msb_convert.py`; `node tools/names-parity.mjs <.msb>` must print "N of N match"). New imports use `js/importname.js` (title-first file names, legacy names fall back to the splitter). PDF bytes live in `files`, keyed by song id.
+- Set `{id, name, songs:[songIds], created, updated}`.
+- Ink: key `songId:pageNumber` -> `{updated, strokes:[...]}`. A stroke is `{id, t:'pen'|'hl', c:'#rrggbb', w:<fraction of page width>, p:[[x,y],...], updated}`; x and y are fractions (0 to 1) of the full page. Keep them that way. An erased stroke becomes `{id, deleted:true, updated}`. Older data stored a bare array without ids; `upgradeInk()` fixes it on first read.
+- Deleting a song or setlist leaves `{id, deleted:true, updated}` in its store (the song's PDF and ink pages are removed). The UI never shows markers; backups include them. This is so a later Google Drive sync can tell "deleted" from "never had it": merge by id, newest `updated` wins.
+- Archived songs are hidden from the library (shown with "Show archived"), but still show and play in setlists.
+- Backup is a zip: `library.json` `{app:'setlist-stand', version:2, ...}` plus `files/<id>.pdf`. Version 1 (the prototype and the converter's output) must keep restoring.
 
 ## Checks
 - `node tools/checks.mjs`: syntax of `js/*.js` and `sw.js`; every precached file exists and every app file is precached; no `http(s)://` in app code; no `window.claude`; `VERSION` in `sw.js` changed if a precached file changed.

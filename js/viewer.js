@@ -1,5 +1,5 @@
 import {$, toast, hooks} from './util.js';
-import {get, state, songById} from './store.js';
+import {get, getInk, state, songById} from './store.js';
 import {paint, setAnnot, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
@@ -38,7 +38,7 @@ async function loadSong(qi, page){
     if(!blob){ toast('That file is missing'); return; }
     const doc = await pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer())}).promise;
     const ink = new Map();
-    for(let p = 1; p <= doc.numPages; p++) ink.set(p, (await get('ink', id + ':' + p)) || []);
+    for(let p = 1; p <= doc.numPages; p++) ink.set(p, await getInk(id, p));
     if(tok !== V.tok){ doc.destroy(); return; }
     if(V.doc) V.doc.destroy();
     Object.assign(V, {doc, id, qi, n:doc.numPages, song:songById(id), ink});

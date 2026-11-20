@@ -1,5 +1,5 @@
 import {esc, toast, modal, fileName, saveBlob, canShareFile, shareBlob} from './util.js';
-import {get} from './store.js';
+import {get, getInk, liveStrokes} from './store.js';
 
 const hexRgb = h => PDFLib.rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255);
 
@@ -14,7 +14,7 @@ export async function buildSetPdf(ids, withInk){
     for(let i = 0; i < pages.length; i++){
       const pg = out.addPage(pages[i]);
       if(!withInk) continue;
-      const strokes = (await get('ink', id + ':' + (i + 1))) || [];
+      const strokes = liveStrokes(await getInk(id, i + 1));
       if(!strokes.length) continue;
       let box; try{ box = pg.getCropBox(); }catch(e){ box = null; }
       if(!box){ const s = pg.getSize(); box = {x:0, y:0, width:s.width, height:s.height}; }
