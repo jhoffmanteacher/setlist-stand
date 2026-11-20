@@ -106,3 +106,36 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 #cropBox .ch[data-h=se]{left:100%;top:100%;cursor:nwse-resize}#cropBox .ch[data-h=s]{left:50%;top:100%;cursor:ns-resize}
 #cropBox .ch[data-h=sw]{left:0;top:100%;cursor:nesw-resize}#cropBox .ch[data-h=w]{left:0;top:50%;cursor:ew-resize}
 #cropBar{bottom:0;justify-content:flex-end}
+
+/* tablet and a11y */
+/* No pull-to-refresh or rubber band in the middle of a song. */
+#viewer,#cropper{overscroll-behavior:none}
+html:has(#viewer.on),html:has(#viewer.on) body,html:has(#cropper:not([hidden])),html:has(#cropper:not([hidden])) body{overscroll-behavior:none}
+/* No double-tap zoom delay on controls; the stage, handles and cropper keep their own touch-action:none (more specific). */
+button,input,textarea,select,label,.app{touch-action:manipulation}
+/* A long press on the music or a handle must not select text or open the callout menu; fields still select. */
+#viewer,#cropper,.handle{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+#viewer input,#viewer textarea,#cropper input{-webkit-touch-callout:default;-webkit-user-select:text;user-select:text}
+/* The dialog box takes focus when it has no field; the fields show the focus ring. */
+.box:focus{outline:none}
+textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.handle:focus-visible{outline:3px solid var(--acc);outline-offset:-3px;border-radius:10px}
+/* Safe areas: notch, rounded corners and the home indicator (the viewport has viewport-fit=cover). */
+.app{padding-left:max(4vw,16px,env(safe-area-inset-left));padding-right:max(4vw,16px,env(safe-area-inset-right));padding-bottom:calc(80px + env(safe-area-inset-bottom))}
+.top{padding-top:calc(20px + env(safe-area-inset-top))}
+#vtop{padding-top:calc(8px + env(safe-area-inset-top));padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+#tools,#cropBar{padding-bottom:calc(8px + env(safe-area-inset-bottom));padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+#cropStage{bottom:calc(64px + env(safe-area-inset-bottom))}
+#nextup{right:calc(12px + env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom))}
+#toast{bottom:calc(24px + env(safe-area-inset-bottom))}
+#update{top:calc(12px + env(safe-area-inset-top))}
+
+/* data safety */
+.nudge{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin:0 0 12px;padding:8px 8px 8px 14px;border:1px solid var(--acc);border-left-width:6px;border-radius:10px;background:var(--card);font-weight:600}
+#libSafety{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-top:16px}
+#libSafety:empty{display:none}
+#libStorage{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.warnline{color:var(--ink);font-weight:600}
+.plbtn{min-height:36px;font-size:14px;color:var(--mute)}
+.plog{width:100%;min-height:180px;font:13px/1.4 ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);padding:8px;resize:vertical;white-space:pre}
+.duplist{margin:0;padding-left:20px;max-height:40vh;overflow:auto;overflow-wrap:anywhere}

@@ -1,0 +1,77 @@
+# The browser tests, on GitHub's computers after every push to main (2026-11-20):
+#   smoke  tools/smoke.mjs   one pass through every feature, step by step
+#   loops  tools/loops.mjs   the closed loops: backup -> restore, print -> render, update -> reload, offline, a seeded
+#                            random-action model. Loops that need Jonathan's private MobileSheets files print SKIP here.
+# Nothing here blocks a push or the Pages deploy; a red run means "look at the last push".
+# Every tool runs through tools/ci/run-and-annotate.mjs, which puts the failure and the last lines of the output into
+# the job's annotations (readable without logging in) and keeps the whole output as an artifact.
+# Pushing a branch named ci-try/<anything> runs this workflow too.
+name: Browser tests
+
+on:
+  push:
+    branches: [main, 'ci-try/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: browser-smoke-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: node tools/smoke.mjs
+        run: node tools/ci/run-and-annotate.mjs --title "smoke" --log "$RUNNER_TEMP/ci-out/smoke.log" --summary '^(PASS|FAIL)' --deadline 25 -- node tools/smoke.mjs
+      - name: Keep the output
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke
+          path: ${{ runner.temp }}/ci-out/
+          if-no-files-found: warn
+          retention-days: 14
+
+  loops:
+    name: closed loops
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    concurrency:
+      group: browser-loops-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: node tools/loops.mjs
+        run: node tools/ci/run-and-annotate.mjs --title "closed loops" --log "$RUNNER_TEMP/ci-out/loops.log" --summary '^(PASS|FAIL|SKIP|all |[0-9]+ of)' --deadline 35 -- node tools/loops.mjs
+      - name: Keep the output
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: loops
+          path: ${{ runner.temp }}/ci-out/
+          if-no-files-found: warn
+          retention-days: 14

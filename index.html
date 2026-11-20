@@ -2,6 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Content Security Policy: only this site's own files run or load; nothing from any other host, no eval.
+     style-src 'unsafe-inline': the app and pdf.js set style="" attributes (colour swatches, crop box, page sizes).
+     img-src/connect-src blob: data:: downloads and PDF bytes travel as blob: URLs. worker-src blob: lets pdf.js
+     fall back to a blob worker. pdf.js runs with isEvalSupported:false (js/util.js), so it never needs 'unsafe-eval'.
+     frame-ancestors cannot be set from a meta tag. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: data:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Setlist Stand</title>
 <meta name="theme-color" content="#17181c">

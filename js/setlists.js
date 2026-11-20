@@ -1,4 +1,4 @@
-import {$, esc, uid, ask, pick, armed, hooks} from './util.js';
+import {$, esc, uid, ask, pick, armed, hooks, toast} from './util.js';
 import {load, state, songById, saveSet, markDeleted, liveItems} from './store.js';
 import {openViewer} from './viewer.js';
 import {printDialog} from './print.js';
@@ -7,6 +7,7 @@ export let openSet = null;
 export const closeSet = () => { openSet = null; };
 
 const HANDLE = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>';
+const MOVE_LABEL = 'Drag to reorder, or press the up and down arrow keys';
 const songCount = st => liveItems(st).filter(it => it.type === 'song').length;
 /* The viewer plays a list of {type:'song', id} and {type:'break', name} entries. */
 const entriesOf = st => liveItems(st).map(it => it.type === 'break' ? {type:'break', id:it.id, name:it.name} : {type:'song', id:it.id});
@@ -21,9 +22,9 @@ export function renderSetlists(v){
     v.innerHTML = `<div class="bar"><button data-allsets>&#8249; Setlists</button><h2>${esc(st.name)}</h2></div>
       <div class="bar"><button class="pri" data-play="${st.id}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-dup>Duplicate</button><button data-renset>Rename</button></div>
       ${items.length ? `<ul class="list" id="items">${items.map((it, i) => {
-        if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="Drag to reorder">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${i}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${i}">Remove</button></div></li>`;
+        if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${i}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${i}">Remove</button></div></li>`;
         const s = songById(it.id); k++;
-        return `<li class="row"><button class="handle" aria-label="Drag to reorder">${HANDLE}</button><span class="num">${k}</span><button class="main" data-playat="${i}"><span class="t">${esc(s.title)}${s.archived ? '<span class="tag">Archived</span>' : ''}</span><span class="s">${s.pages} page${s.pages == 1 ? '' : 's'}</span></button><div class="acts"><button data-rm="${i}">Remove</button></div></li>`;
+        return `<li class="row"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num">${k}</span><button class="main" data-playat="${i}"><span class="t">${esc(s.title)}${s.archived ? '<span class="tag">Archived</span>' : ''}</span><span class="s">${s.pages} page${s.pages == 1 ? '' : 's'}</span></button><div class="acts"><button data-rm="${i}">Remove</button></div></li>`;
       }).join('')}</ul>`
       : `<div class="empty"><h2>Empty setlist</h2><p>Tap Add songs to pick charts from your library.</p></div>`}`;
   } else {
@@ -98,12 +99,38 @@ async function endDrag(e){
   drag = null; cancelAnimationFrame(d.raf);
   const {from, to} = d;
   if(e.type === 'pointercancel' || from === to){ hooks.render(); return; }
-  const st = state.sets.find(s => s.id === openSet); if(!st){ hooks.render(); return; }
+  await moveItem(from, to);
+}
+/* The one save path for a reorder (drag or keyboard): row `from` goes to place `to`. False when no set is open. */
+async function moveItem(from, to){
+  const st = state.sets.find(s => s.id === openSet); if(!st){ hooks.render(); return false; }
   const items = liveItems(st), [m] = items.splice(from, 1); items.splice(to, 0, m);
   st.items = items; await saveSet(st); await load(); hooks.render();
+  return true;
+}
+
+/* ---------- keyboard: with a handle focused, ArrowUp / ArrowDown move that row one place ----------
+   Moves run one after another (a held key repeats), each from wherever the focused handle is by then. */
+let keyChain = Promise.resolve();
+async function keyMove(dir){
+  const h = document.activeElement;
+  if(!h || !h.classList.contains('handle') || drag) return;
+  const li = h.closest('li.row'), rows = li ? [...li.parentElement.children] : [];
+  const from = rows.indexOf(li), to = from + dir;
+  if(from < 0 || to < 0 || to >= rows.length) return;
+  if(!await moveItem(from, to)) return;
+  const nh = document.querySelector(`#items > li.row:nth-child(${to + 1}) .handle`);
+  if(nh) nh.focus();
+  toast(`Moved to position ${to + 1} of ${rows.length}`);
 }
 export function initSetlists(){
   const view = $('#view');
+  view.addEventListener('keydown', e => {
+    if(!e.target.closest('#items .handle') || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    const dir = e.key === 'ArrowUp' ? -1 : 1;
+    keyChain = keyChain.then(() => keyMove(dir)).catch(() => {});
+  });
   view.addEventListener('pointerdown', e => {
     const h = e.target.closest('.handle'); if(!h || drag) return;
     const li = h.closest('li.row'), ul = li.parentElement, rows = [...ul.children], sy = scrollY;

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-20: Safer for gigs
+- **Backups you won't forget:** the Library nags (once) when you have never backed up or the last backup is more than two weeks old, with a "Back up now" button, and shows when the last backup was. A storage line shows how much space the app uses and warns when the tablet is nearly full or the browser may clear the app's data, with a button to ask the browser to protect it.
+- **Restore is all or nothing.** A damaged backup, a missing PDF, a backup from a newer version of the app, a full tablet, or the page closing in the middle can no longer leave you with half a library. You get a plain message and nothing changes.
+- **Updates no longer lose your place.** "Updated. Tap to reload" now puts you back on the song and page you were on; a second open tab is no longer forced to reload; a tab that has been open since the first install can update.
+- **Printing rotated PDFs:** pen marks, notes and crops now land in the right place on pages that are rotated 90, 180 or 270 degrees.
+- **Duplicates:** adding a PDF that is already in your library asks first (Skip them, or Add anyway).
+- **Clear messages:** "The tablet is full" instead of a generic failure, and a private problem log (Library, bottom) that stays on the tablet.
+- **Setlists by keyboard:** with a drag handle focused, the up and down arrow keys move the row.
+- **Tablet feel:** no pull-to-refresh or rubber-banding while you play, no accidental text selection, no double-tap zoom delay, and the bars keep clear of the iPad's rounded corners and home indicator.
+- **Security:** the app now declares a strict Content-Security-Policy (only its own files, no outside hosts, no `eval`).
+
 ## 2026-11-19: Crop margins and text notes
 - **Crop** in the viewer's top bar opens the page with a box you drag by its edges and corners. **Crop this page** crops one page, **Crop whole song** crops every page the same way, and **Reset** removes the crop. A cropped page is drawn larger to fill the screen. Your pen marks never move when you change a crop.
 - A cropped song prints cropped, with its annotations in the right place.

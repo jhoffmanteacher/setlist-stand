@@ -1,0 +1,46 @@
+# The deployed site, checked from outside (2026-11-20): after GitHub Pages finishes a deploy, and once a day, the
+# live-site loops fetch https://jhoffmanteacher.github.io/setlist-stand/ and check that
+#   - every file the service worker precaches is byte-for-byte the file on main (the deploy equals the repo),
+#   - a fresh browser installs it from its /setlist-stand/ sub-path, works with the network off, and asks no other host.
+# Read-only: it only GETs the public site. A red run means "the live site is not what main says" (or Pages is down).
+name: Deployed site
+
+on:
+  workflow_run:
+    workflows: ['pages build and deployment']
+    types: [completed]
+  schedule:
+    - cron: '41 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # a failed Pages build is its own red run; do not also test a deploy that did not happen
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # --wait: Pages can take a minute or two to serve the new files after the run reports success
+      - name: live-site loops
+        run: node tools/ci/run-and-annotate.mjs --title "deployed site" --log "$RUNNER_TEMP/ci-out/live.log" --summary '^(PASS|FAIL|SKIP|all |[0-9]+ of)' --deadline 15 -- node tools/loops.mjs --only live --live https://jhoffmanteacher.github.io/setlist-stand/ --wait 300
+      - name: Keep the output
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live
+          path: ${{ runner.temp }}/ci-out/
+          if-no-files-found: warn
+          retention-days: 14

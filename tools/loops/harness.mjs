@@ -20,6 +20,8 @@ import {chromium} from 'playwright';
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const FIX = path.join(ROOT, 'tests', 'fixtures');
 export const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'setlist-loops-'));
+/* Downloaded backups and printed PDFs go in TMP (they can be 40 MB each): remove it when the run ends. SS_KEEP_TMP=1 keeps it. */
+process.on('exit', () => { if(!process.env.SS_KEEP_TMP) try{ fs.rmSync(TMP, {recursive: true, force: true}); }catch(e){} });
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
 export function assert(c, msg){ if(!c) throw new Error(msg); }
 export const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
@@ -64,7 +66,8 @@ export async function startServer({root = ROOT, overrides = new Map()} = {}){
       if(overrides.has(p)){ res.writeHead(200, headers).end(overrides.get(p)); return; }
       const f = path.resolve(root, '.' + p);
       if(!f.startsWith(root + path.sep)){ res.writeHead(403).end(); return; }
-      res.writeHead(200, headers).end(await fsp.readFile(f));
+      const body = await fsp.readFile(f);       // read first: a missing file must give a 404, not a half-sent 200
+      res.writeHead(200, headers).end(body);
     }catch(e){ res.writeHead(404, {'Content-Type': 'text/plain'}).end('not found'); }
   });
   await new Promise(r => srv.listen(0, '127.0.0.1', r));

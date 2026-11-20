@@ -1,6 +1,7 @@
 /* Pen, highlighter, eraser and text notes. Everything is stored apart from the PDF, as fractions of the FULL page,
    so marks never move when a crop changes. A canvas carries the crop it is drawn through in cv._crop. */
 import {$, esc, toast, armed, uid, modal} from './util.js';
+import {explainError} from './errors.js';
 import {putInk, reconcile, liveStrokes} from './store.js';
 import {V, stage, viewer, draw} from './viewer.js';
 
@@ -36,7 +37,7 @@ function tidy(s){
   for(const pt of s.p){ const l = p[p.length - 1]; if(!l || Math.hypot(pt[0] - l[0], pt[1] - l[1]) > .0015) p.push([r4(pt[0]), r4(pt[1])]); }
   return {...s, p};
 }
-function saveInk(id, pn, strokes){ putInk(id, pn, strokes).catch(() => toast('Could not save that mark')); }
+function saveInk(id, pn, strokes){ putInk(id, pn, strokes).catch(err => toast(explainError(err, 'Could not save that mark. Your music is safe.'))); }
 /* pointer position as fractions of the full page */
 function ptOn(cv, e){
   const r = cv.getBoundingClientRect(), cr = cropOfCv(cv);

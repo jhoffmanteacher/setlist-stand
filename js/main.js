@@ -1,11 +1,14 @@
+import {initErrors} from './errors.js';
 import {$, hooks} from './util.js';
-import {openStore, load, ensureHashes} from './store.js';
+import {openStore, load, ensureHashes, songById} from './store.js';
 import {renderLibrary, onClick as libraryClick, addFiles, replacePdf} from './library.js';
 import {renderSetlists, onClick as setlistClick, closeSet, initSetlists} from './setlists.js';
 import {backupNow, restoreFrom} from './backup.js';
-import {initViewer} from './viewer.js';
+import {initViewer, openViewer, resumeState} from './viewer.js';
 import {initInk} from './ink.js';
 import {initCrop} from './crop.js';
+
+initErrors();      // first: the private problem log (Library → Problem log) catches anything that goes wrong after this
 
 let tab = 'lib';
 function render(){
@@ -26,27 +29,50 @@ $('#view').addEventListener('click', async e => {
   const b = e.target.closest('button'); if(!b) return;
   const d = b.dataset;
   if('restore' in d) return $('#restoreFile').click();
-  if('backup' in d) return backupNow(b);
+  if('backup' in d || 'backupnow' in d) return backupNow(b);
   if(await libraryClick(b, d)) return;
   await setlistClick(b, d);
 });
 
-/* ---------- offline: the service worker keeps the app on the device ---------- */
-const hadController = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+/* ---------- offline: the service worker keeps the app on the device ----------
+   A new version waits until Jonathan taps "Updated. Tap to reload" (never in the middle of a song). Only the tab whose
+   banner was tapped reloads; another open tab keeps running and shows its own banner. The first install also fires
+   controllerchange (clients.claim) and must not reload anything. If a song was open, the reload puts it back. */
 function watchUpdates(reg){
   const note = $('#update');
-  const show = w => { note.hidden = false; note.onclick = () => w.postMessage('skip-waiting'); };
+  let asked = false, reloaded = false;
+  const reloadNow = () => { if(reloaded) return; reloaded = true; saveResume(); location.reload(); };
+  const show = w => {
+    note.hidden = false;
+    note.onclick = () => {
+      asked = true;
+      if(w.state === 'activated') reloadNow();       // another tab already switched to it: just load it
+      else w.postMessage('skip-waiting');            // the new worker takes over, controllerchange follows
+    };
+  };
   if(reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
   reg.addEventListener('updatefound', () => {
     const w = reg.installing; if(!w) return;
     w.addEventListener('statechange', () => { if(w.state === 'installed' && navigator.serviceWorker.controller) show(w); });
   });
-  /* Reload only for a real update. The first install also fires controllerchange (clients.claim) and must not reload the page. */
-  let reloaded = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if(reloaded || !hadController) return; reloaded = true; location.reload(); });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked) reloadNow(); });
 }
 if('serviceWorker' in navigator){
   addEventListener('load', () => { navigator.serviceWorker.register('sw.js').then(watchUpdates).catch(() => {}); });
+}
+
+/* ---------- back to the song after an update reload ---------- */
+const RESUME = 'ss-resume';
+function saveResume(){
+  try{ const r = resumeState(); if(r) sessionStorage.setItem(RESUME, JSON.stringify(r)); }catch(e){}
+}
+async function applyResume(){
+  let r = null;
+  try{ r = JSON.parse(sessionStorage.getItem(RESUME) || 'null'); sessionStorage.removeItem(RESUME); }catch(e){}
+  if(!r || !Array.isArray(r.queue)) return;
+  const ok = r.queue.filter(e => e.type === 'break' || songById(e.id));
+  if(ok.length !== r.queue.length || !ok.some(e => e.type === 'song')) return;   // the library changed: do not guess
+  await openViewer(r.queue, r.qi, r.page);
 }
 
 /* ---------- start ---------- */
@@ -58,5 +84,6 @@ if('serviceWorker' in navigator){
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
   initViewer(); initInk(); initCrop(); initSetlists();
   await load(); render();
+  await applyResume();
   ensureHashes().catch(() => {});
 })();

@@ -25,6 +25,20 @@ export const get = (st, k) => MEM ? Promise.resolve(MEM[st].get(k)) : tx(st, 're
 export const del = (st, k) => MEM ? (MEM[st].delete(k), Promise.resolve()) : tx(st, 'readwrite', s => s.delete(k));
 export const all = st => MEM ? Promise.resolve([...MEM[st].values()]) : tx(st, 'readonly', s => s.getAll());
 
+/* Writes many records in ONE transaction: all of them are saved or none are (a reload, a full disk or a crash
+   part-way leaves the stores exactly as they were). ops: [{store, key, value}]. */
+export async function putAll(ops){
+  if(MEM){ for(const o of ops) MEM[o.store].set(o.key, o.value); return; }
+  const d = await db();
+  await new Promise((res, rej) => {
+    const stores = [...new Set(ops.map(o => o.store))], t = d.transaction(stores, 'readwrite');
+    for(const o of ops) t.objectStore(o.store).put(o.value, o.key);
+    t.oncomplete = () => res();
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('aborted'));
+  });
+}
+
 /* Returns true when on-device storage works, false when it fell back to memory. */
 export async function openStore(){
   try{ await db(); return true; }

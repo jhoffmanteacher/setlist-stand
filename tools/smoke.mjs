@@ -20,6 +20,7 @@ import {createRequire} from 'node:module';
 import vm from 'node:vm';
 import zlib from 'node:zlib';
 import {chromium} from 'playwright';
+import {acquireSlot} from './loops/slot.mjs';
 import {splitName, displayName} from '../js/names.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -43,8 +44,12 @@ const TYPES = {
   '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.ttf': 'font/ttf', '.woff2': 'font/woff2',
   '.pdf': 'application/pdf', '.zip': 'application/zip', '.md': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
 };
+/* While `offline.drop` is set the server hangs up on every request (Playwright's setOffline cuts the page off but not
+   always the service worker), and `offline.hits` records what reached it. */
+const offline = {drop: false, hits: []};
 function startServer(){
   const srv = http.createServer(async (req, res) => {
+    if(offline.drop){ offline.hits.push(req.url); req.socket.destroy(); return; }
     try{
       let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
       if(p.endsWith('/')) p += 'index.html';
@@ -238,6 +243,7 @@ async function stepOffline(t){
   const {page, context} = t;
   await toLibrary(page);
   await context.setOffline(true);
+  offline.drop = true; offline.hits.length = 0;
   try{
     await page.reload();
     await page.waitForSelector('#libList', {timeout: 10000}).catch(() => { throw new Error('app did not load offline'); });
@@ -255,7 +261,10 @@ async function stepOffline(t){
       return false;
     }, null, {timeout: 10000}).catch(() => { throw new Error('song canvas did not render offline (pdf.worker cached?)'); });
     await page.click('#vBack');
-  } finally { await context.setOffline(false); }
+    /* everything came from the service worker's cache: the only thing allowed to knock is the browser's own sw.js update check */
+    const knocked = offline.hits.filter(u => !/\/sw\.js(\?|$)/.test(u));
+    assert(!knocked.length, 'requests reached the server while offline: ' + knocked.slice(0, 5).join(', '));
+  } finally { offline.drop = false; await context.setOffline(false); }
   checkHosts(t);
 }
 
@@ -693,6 +702,8 @@ async function stepSetItems(t){
   await toLibrary(page);
   const n0 = await songCount(page);
   await page.setInputFiles('#file', [path.join(FIX, 'one-page.pdf'), path.join(FIX, 'two-page.pdf')]);
+  /* One-page's bytes are already in the library (Old Song): the app asks once about duplicates; add them anyway */
+  await page.click('.dupask [data-dupadd]', {timeout: 15000});
   await page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, n0 + 2, {timeout: 15000})
     .catch(async () => { throw new Error(`expected ${n0 + 2} songs after adding 2, got ${await songCount(page)}`); });
 
@@ -1495,11 +1506,13 @@ const STEPS = [
 
 /* ---------- runner ---------- */
 const TMP = await fsp.mkdtemp(path.join(os.tmpdir(), 'setlist-smoke-'));
+process.on('exit', () => { if(!process.env.SS_KEEP_TMP && !failed) try{ fs.rmSync(TMP, {recursive: true, force: true}); }catch(e){} });   // a failed run keeps its folder (the failure screenshot is in it)
 let failed = 0, server, browser;
 try{
   await waitFixtures();
   server = await startServer();
   const base = `http://127.0.0.1:${server.address().port}/`;
+  await acquireSlot('smoke');            // one browser run at a time, and only when the Mac is not busy
   browser = await chromium.launch({headless: true});
   const context = await browser.newContext({viewport: {width: 1280, height: 800}, acceptDownloads: true, hasTouch: true});
   const page = await context.newPage();

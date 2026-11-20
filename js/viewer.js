@@ -14,13 +14,17 @@ function unlock(){ try{ wl && wl.release(); }catch(e){} wl = null; }
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && viewer.classList.contains('on')) lock(); });
 
 /* entries: [{type:'song', id} | {type:'break', id, name}] */
-export async function openViewer(entries, qi){
+export async function openViewer(entries, qi, page = 1){
   if(!entries.some(e => e.type === 'song')) return;
   V.queue = entries; V.hist = [];
   viewer.classList.add('on'); viewer.classList.remove('hide');
   document.body.style.overflow = 'hidden';
   lock();
-  await show(qi, 1);
+  await show(qi, page);
+}
+/* Where the viewer is, for putting it back after the page reloads. null when it is closed. */
+export function resumeState(){
+  return viewer.classList.contains('on') && V.queue.length ? {queue:V.queue, qi:V.qi, page:V.brk ? 1 : V.page} : null;
 }
 export function closeViewer(){
   setAnnot(false);
@@ -52,7 +56,8 @@ async function loadSong(qi, page){
     if(V.doc) V.doc.destroy();
     Object.assign(V, {doc, id, qi, n:doc.numPages, song:songById(id), ink, brk:null});
     V.cache.clear(); V.page = 1; calcPer();
-    V.page = page === 'last' ? lastStart() : 1;
+    V.page = page === 'last' ? lastStart() : Math.min(Math.max(1, +page || 1), V.n);
+    if(V.per === 2 && V.page % 2 === 0) V.page--;
     await draw();
   }catch(err){ toast('Could not open this PDF'); }
 }
@@ -189,7 +194,7 @@ export function initViewer(){
   };
   viewer.addEventListener('click', e => { const b = e.target.closest('button'); if(b) b.blur(); });
   addEventListener('keydown', e => {
-    if(!viewer.classList.contains('on') || document.querySelector('.modal') || !$('#cropper').hidden) return;
+    if(e.defaultPrevented || !viewer.classList.contains('on') || document.querySelector('.modal') || !$('#cropper').hidden) return;   // a dialog already took this key
     const k = e.key;
     if(['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)){ e.preventDefault(); next(); }
     else if(['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)){ e.preventDefault(); prev(); }

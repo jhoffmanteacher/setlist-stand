@@ -9,7 +9,7 @@
  *   fall back to the cached index.html so the app opens offline.
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-19-4';
+const VERSION = '2026-11-19-5';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -28,6 +28,7 @@ const PRECACHE = [
   'js/importname.js',
   'js/crop.js',
   'js/backup.js',
+  'js/errors.js',
   'js/main.js',
   'vendor/pdf.min.js',
   'vendor/pdf.worker.min.js',
