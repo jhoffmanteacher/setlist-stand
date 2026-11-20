@@ -46,6 +46,7 @@ function watchUpdates(reg){
   const show = w => {
     note.hidden = false;
     note.onclick = () => {
+      if(w.state === 'redundant'){ note.hidden = true; return; }   // that version was replaced: wait for the next banner
       asked = true;
       if(w.state === 'activated') reloadNow();       // another tab already switched to it: just load it
       else w.postMessage('skip-waiting');            // the new worker takes over, controllerchange follows
@@ -61,7 +62,9 @@ function watchUpdates(reg){
   if(reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
   track(reg.installing);
   reg.addEventListener('updatefound', () => track(reg.installing));
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked) reloadNow(); });
+  /* Never mid-song: a controllerchange while a song is open (another tab's tap) waits; this tab's own tap only
+     happens on the home screen, where the banner shows. */
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked && !document.body.classList.contains('playing')) reloadNow(); });
 }
 if('serviceWorker' in navigator){
   /* The kill switch (tools/kill-switch/kill-sw.js, BREAK-GLASS.md) emptied the cache and took over: reload this tab once

@@ -66,11 +66,15 @@ export async function restoreFrom(f, render){
   if(bad) return stop(`That backup has something the app can't read (${bad}). Nothing was changed.`);
   let n = 0, sets = 0;
   try{
-    const ops = [], gone = new Set();
+    const ops = [], skip = new Set();
+    /* A deletion marker only wins over a record here that is not newer than it. */
+    const local = {songs:new Map((await all('songs')).map(r => [r.id, r])), sets:new Map((await all('sets')).map(r => [r.id, r]))};
+    const newerHere = (store, m) => { const r = local[store].get(m.id); return !!r && !r.deleted && (Number(r.updated) || 0) > (Number(m.updated) || 0); };
     for(const s of data.songs){
       if(s.deleted){
+        skip.add(s.id);                 // the backup has no annotations for a deleted song: any it lists are left out
+        if(newerHere('songs', s)) continue;           // keep the newer song here, with its PDF and annotations
         /* a deleted song: its PDF and annotations on this tablet go too, in the same transaction */
-        gone.add(s.id);
         ops.push({store:'files', key:s.id, delete:true}, {deleteInkFor:s.id}, {store:'songs', key:s.id, value:marker(s)});
         continue;
       }
@@ -80,13 +84,14 @@ export async function restoreFrom(f, render){
       if(s.hash) s.hash = s.hash.toLowerCase();
       if(s.hash && await sha256(buf) !== s.hash) return stop(`That backup is damaged ("${s.title || s.song || s.id}" does not match). Nothing was changed.`);
       upgradeSong(s);
-      ops.push({store:'files', key:s.id, value:new Blob([buf], {type:'application/pdf'})}, {store:'songs', key:s.id, value:s}); n++;
+      /* this tablet's annotations of the song are replaced by the backup's (the ink puts come later in the same transaction) */
+      ops.push({store:'files', key:s.id, value:new Blob([buf], {type:'application/pdf'})}, {store:'songs', key:s.id, value:s}, {deleteInkFor:s.id}); n++;
     }
     for(const st of data.sets){
-      if(st.deleted){ ops.push({store:'sets', key:st.id, value:marker(st)}); continue; }
+      if(st.deleted){ if(!newerHere('sets', st)) ops.push({store:'sets', key:st.id, value:marker(st)}); continue; }
       upgradeSet(st); ops.push({store:'sets', key:st.id, value:st}); sets++;
     }
-    for(const [k, v] of Object.entries(data.ink || {})) if(!gone.has(k.split(':')[0])) ops.push({store:'ink', key:k, value:upgradeInk(v).record});
+    for(const [k, v] of Object.entries(data.ink || {})) if(!skip.has(k.split(':')[0])) ops.push({store:'ink', key:k, value:upgradeInk(v).record});
     await putAll(ops);
   }catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
   /* The backup is written by now: a problem from here on must not say "Nothing was changed". */
@@ -102,7 +107,7 @@ const marker = r => ({id:r.id, deleted:true, updated:Number(r.updated) || 0});
    Checked before anything is written. Returns null when the backup is fine, else a short reason (shown to the user).
    Ids end up in the page's HTML and in storage keys, so they are held to a plain set of characters. */
 export const ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
-const LIMITS = {songs:100000, sets:100000, items:20000, text:500, pages:5000, strokes:50000, points:200000};
+const LIMITS = {songs:100000, sets:100000, items:20000, text:2000, pages:5000, strokes:50000, points:200000};
 const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 const okId = id => typeof id === 'string' && ID_RE.test(id);
 const okText = v => v === undefined || v === null || (typeof v === 'string' && v.length <= LIMITS.text);
@@ -113,6 +118,10 @@ export function validateBackup(data){
   if(data.songs.length > LIMITS.songs) return `more than ${LIMITS.songs} songs`;
   if(data.sets.length > LIMITS.sets) return `more than ${LIMITS.sets} setlists`;
   if(data.ink != null && !isObj(data.ink)) return 'the annotations are not a list of pages';
+  for(const [list, what] of [[data.songs, 'song'], [data.sets, 'setlist']]){
+    const seen = new Set();
+    for(const r of list){ if(isObj(r) && okId(r.id)){ if(seen.has(r.id)) return `the ${what} id ${r.id} twice`; seen.add(r.id); } }
+  }
   for(const s of data.songs){
     if(!isObj(s)) return 'a song that is not a record';
     if(!okId(s.id)) return 'a song id ' + cut(s.id);

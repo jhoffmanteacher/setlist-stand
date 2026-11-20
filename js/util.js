@@ -72,7 +72,7 @@ export function modal(html){
 }
 export function ask(title, val = ''){
   return new Promise(res => {
-    const m = modal(`<h2>${esc(title)}</h2><input type="text" value="${esc(val)}"><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
+    const m = modal(`<h2>${esc(title)}</h2><input type="text" maxlength="200" value="${esc(val)}"><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
     const i = m.querySelector('input'); i.focus(); i.select();
     const done = v => { m.remove(); res(v); };
     m.querySelector('[data-x]').onclick = () => done(null);
@@ -83,7 +83,7 @@ export function ask(title, val = ''){
 /* A dialog with several text fields. fields: [{key, label, value}]. Resolves to {key: value} or null. */
 export function form(title, fields){
   return new Promise(res => {
-    const m = modal(`<h2>${esc(title)}</h2>${fields.map(f => `<label class="fld"><span>${esc(f.label)}</span><input type="text" data-k="${f.key}" value="${esc(f.value || '')}"></label>`).join('')}<div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
+    const m = modal(`<h2>${esc(title)}</h2>${fields.map(f => `<label class="fld"><span>${esc(f.label)}</span><input type="text" maxlength="200" data-k="${f.key}" value="${esc(f.value || '')}"></label>`).join('')}<div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
     const ins = [...m.querySelectorAll('input')]; ins[0].focus(); ins[0].select();
     const done = ok => { const v = ok ? Object.fromEntries(ins.map(i => [i.dataset.k, i.value.trim()])) : null; m.remove(); res(v); };
     m.querySelector('[data-x]').onclick = () => done(false);

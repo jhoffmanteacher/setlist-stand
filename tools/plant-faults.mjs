@@ -54,7 +54,7 @@ const FAULTS = [
   {id: 'crop-xy-swapped', file: 'js/crop.js', find: 'rect = {x:round(st.rect.x), y:round(st.rect.y)', replace: 'rect = {x:round(st.rect.y), y:round(st.rect.x)',
     loop: 'model.loop', why: 'the saved crop is not the one drawn (the print crop loop takes the saved crop as truth, so only the model, which checks it against the drag, can see this)'},
   {id: 'reload-on-every-controllerchange', file: 'js/main.js',
-    find: "addEventListener('controllerchange', () => { if(asked) reloadNow(); });",
+    find: "addEventListener('controllerchange', () => { if(asked && !document.body.classList.contains('playing')) reloadNow(); });",
     replace: "addEventListener('controllerchange', () => { if(!reloaded){ reloaded = true; location.reload(); } });",
     loop: 'update.loop', why: 'the first install (clients.claim) and other tabs reload by themselves, mid-song'},
   {id: 'banner-reloads-at-once', file: 'js/main.js', find: 'const show = w => {', replace: "const show = w => { asked = true; w.postMessage('skip-waiting');",
@@ -73,6 +73,24 @@ const FAULTS = [
     loop: 'viewer-hardening 3', why: 'a deploy within ten minutes of the last one can cache the OLD files under the NEW version'},
   {id: 'page-turn-mid-stroke', file: 'js/viewer.js', find: 'export async function next(){\n  if(V.busy || inkBusy() ||', replace: 'export async function next(){\n  if(V.busy ||',
     loop: 'viewer-hardening 1a', why: 'a page turn while the pen is down moves the stroke to another song'},
+  {id: 'stuck-pen-blocks-turns', file: 'js/ink.js', find: 'export const inkBusy = () => !!cur && !isStale(cur);', replace: 'export const inkBusy = () => !!cur;',
+    loop: 'viewer-hardening 10', why: 'a pen-up that never arrives blocks page turns and new strokes until the app reloads'},
+  {id: 'undo-during-stroke', file: 'js/ink.js', find: "$('#tUndo').onclick = () => {\n    if(inkBusy()) return;\n", replace: "$('#tUndo').onclick = () => {\n",
+    loop: 'viewer-hardening 11', why: 'Undo with a finger while the pen is down is silently put back when the stroke ends'},
+  {id: 'controllerchange-mid-song', file: 'js/main.js', find: "if(asked && !document.body.classList.contains('playing')) reloadNow();", replace: 'if(asked) reloadNow();',
+    loop: 'viewer-hardening 12', why: 'a second tab updating reloads this tab in the middle of a song'},
+  {id: 'old-marker-wipes-newer-song', file: 'js/backup.js', find: "if(newerHere('songs', s)) continue;", replace: '',
+    loop: 'restore keeps a newer local song', why: 'restoring a backup that marks a song deleted wipes the PDF and marks of a newer copy on this tablet'},
+  {id: 'restore-mixes-local-ink', file: 'js/backup.js', find: "{store:'songs', key:s.id, value:s}, {deleteInkFor:s.id}); n++;", replace: "{store:'songs', key:s.id, value:s}); n++;",
+    loop: 'restore keeps a newer local song', why: 'a restored song keeps local annotations the backup lacks, on top of the backup\'s PDF'},
+  {id: 'duplicate-ids-accepted', file: 'js/backup.js', find: "if(seen.has(r.id)) return `the ${what} id ${r.id} twice`; ", replace: '',
+    loop: 'hardening: restore refuses', why: 'a backup with the same id twice (a marker, then a live record) is accepted and loses the song\'s marks'},
+  {id: 'ensurehashes-stale-hash', file: 'js/store.js', find: '&& cur.updated === s.updated ? {...cur, hash}', replace: '? {...cur, hash}',
+    loop: 'a missing hash is not filled in', why: 'a PDF replaced while it was being hashed gets the OLD file\'s hash'},
+  {id: 'names-copy-suffix', file: 'js/importname.js', find: "raw = raw.replace(/^(.*\\))\\s*\\(\\d{1,2}\\)$/, '$1');", replace: '',
+    loop: 'hardening: sortKey ignores extra spaces', why: '"Song (in G) (1).pdf" (downloaded twice) is read as version 1'},
+  {id: 'form-no-maxlength', file: 'js/util.js', find: '<input type="text" maxlength="200" data-k=', replace: '<input type="text" data-k=',
+    loop: 'text fields stop at 200', why: 'a very long title can make the next backup unrestorable'},
   {id: 'form-enter-on-cancel', file: 'js/util.js', find: "e.key === 'Enter' && e.target.matches('input[type=text]')", replace: "e.key === 'Enter'",
     loop: 'viewer-hardening 7', why: 'Enter on Cancel in Edit song saves the changes'},
   {id: 'restore-no-validation', file: 'js/backup.js', find: 'const bad = validateBackup(data);', replace: 'const bad = null;',
@@ -88,7 +106,7 @@ const FAULTS = [
   {id: 'import-hashes-file-name', file: 'js/library.js', find: 'pages:r.pages, hash:r.hash, added:t, updated:t};',
     replace: 'pages:r.pages, hash:await sha256(new TextEncoder().encode(f.name)), added:t, updated:t};',
     loop: 'import.loop', why: 'the stored hash is not the PDF\'s, so duplicates and restore checks go wrong'},
-  {id: 'duplicate-shares-break-ids', file: 'js/setlists.js', find: "it.type === 'break' ? {...it, id:uid()} : {...it}", replace: '{...it}',
+  {id: 'duplicate-shares-break-ids', file: 'js/setlists.js', find: "it.type === 'break' ? {...it, id:uid()} : {...it}", replace: '({...it})',
     loop: 'model.loop', why: 'a duplicated setlist\'s breaks keep the original ids (renaming one could rename the other)'},
 ];
 
@@ -164,8 +182,14 @@ try{
   for(const f of live){
     const dst = path.join(scratch, f.file), src = fs.readFileSync(path.join(ROOT, f.file), 'utf8');
     fs.writeFileSync(dst, src.replace(f.find, () => f.replace));
-    planted++;
     try{
+      /* A planted mistake that does not even parse makes the app fail to load, so every loop "catches" it by timing out
+         (and slowly). That says nothing about the tests: refuse it and fix the table entry. */
+      if(/\.m?js$/.test(f.file) && (await run(process.execPath, ['--check', dst], 60e3)).code !== 0){
+        stale.push(f.id); console.log(`BAD FAULT  ${f.id}  (${f.file}: the planted text does not parse; fix its \`replace\`)`);
+        continue;
+      }
+      planted++;
       let hit = null, total = 0;
       for(let k = 0; k < (f.flaky ? 3 : 1) && !hit; k++){
         const r = await loopRun(f.loop); total += r.secs;

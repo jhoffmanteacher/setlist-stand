@@ -65,9 +65,11 @@ const liveSong = (s, id, extra = {}) => ({id, title: 'Song ' + id, song: 'Song '
 
 export const loops = [
 
-{name: 'hardening: sortKey ignores extra spaces; a duplicate-download suffix does not swap title and artist', async run(){
-  const {sortKey} = await import(pathToFileURL(path.join(ROOT, 'js', 'names.js')).href);
-  const {parseFileName} = await import(pathToFileURL(path.join(ROOT, 'js', 'importname.js')).href);
+{name: 'hardening: sortKey ignores extra spaces; a duplicate-download suffix does not swap title and artist', async run(ctx){
+  /* the modules of the folder under test (ctx.root: a scratch copy when tools/plant-faults.mjs plants a fault in it) */
+  const R = (ctx && ctx.root) || ROOT;
+  const {sortKey} = await import(pathToFileURL(path.join(R, 'js', 'names.js')).href);
+  const {parseFileName} = await import(pathToFileURL(path.join(R, 'js', 'importname.js')).href);
   const keys = {'The  End': 'end', '  The End ': 'end', 'A   Day\tin': 'day in', 'The': 'the', 'Theme': 'theme'};
   for(const [k, want] of Object.entries(keys)) assert(sortKey(k) === want, `sortKey(${JSON.stringify(k)}) = ${JSON.stringify(sortKey(k))}, expected ${JSON.stringify(want)}`);
   const names = {
@@ -79,6 +81,9 @@ export const loops = [
     'Flowers in the Ashes (in G).pdf': ['Flowers in the Ashes', '', 'in G'],
     'Neil Young - Harvest Moon - Chords (1).pdf': ['Harvest Moon', 'Neil Young', ''],
     'Neil Young - Harvest Moon - Chords.pdf': ['Harvest Moon', 'Neil Young', ''],
+    'Flowers in the Ashes (in G) (1).pdf': ['Flowers in the Ashes', '', 'in G'],
+    'Flowers in the Ashes (in G) (2).pdf': ['Flowers in the Ashes', '', 'in G'],
+    'Song (2).pdf': ['Song', '', '2'],
   };
   for(const [f, [song, artist, version]] of Object.entries(names)){
     const r = parseFileName(f);
@@ -166,7 +171,9 @@ print(json.dumps(out))`;
       ['pages 5001', {songs: [liveSong('a', 'a', {pages: 5001})]}],
       ['pages as text', {songs: [liveSong('a', 'a', {pages: '1'})]}],
       ['pages 1.5', {songs: [liveSong('a', 'a', {pages: 1.5})]}],
-      ['a 501-character title', {songs: [liveSong('a', 'a', {title: 'x'.repeat(501)})]}],
+      ['a 2001-character title', {songs: [liveSong('a', 'a', {title: 'x'.repeat(2001)})]}],
+      ['a song id twice (marker, then live)', {songs: [{id: 'dup', deleted: true, updated: 1}, liveSong('dup', 'dup')]}],
+      ['a setlist id twice', {sets: [{id: 'st', name: 'A', items: []}, {id: 'st', name: 'B', items: []}]}],
       ['an artist that is a number', {songs: [liveSong('a', 'a', {artist: 5})]}],
       ['a hash that is not hex', {songs: [liveSong('a', 'a', {hash: 'z'.repeat(64)})]}],
       ['a short hash', {songs: [liveSong('a', 'a', {hash: 'ab'})]}],
@@ -176,7 +183,7 @@ print(json.dumps(out))`;
       ['more than 100000 songs', {songs: big(100001, i => ({id: 'd' + i, deleted: true, updated: 1}))}],
       ['more than 100000 setlists', {sets: big(100001, i => ({id: 'd' + i, deleted: true, updated: 1}))}],
       ['a setlist with no name', {sets: [{id: 'st', items: []}]}],
-      ['a 501-character setlist name', {sets: [{id: 'st', name: 'x'.repeat(501), items: []}]}],
+      ['a 2001-character setlist name', {sets: [{id: 'st', name: 'x'.repeat(2001), items: []}]}],
       ['more than 20000 items', {sets: [{id: 'st', name: 'S', items: big(20001, () => ({type: 'break', id: 'b', name: 'B'}))}]}],
       ['an item of an unknown type', {sets: [{id: 'st', name: 'S', items: [{type: 'video', id: 'v'}]}]}],
       ['a break with no name', {sets: [{id: 'st', name: 'S', items: [{type: 'break', id: 'b'}]}]}],
@@ -196,8 +203,8 @@ print(json.dumps(out))`;
     }
     expectSame(before, await snapshot(page), 'library after refusing every bad backup');
 
-    /* accepted: an upper-case hash (stored lower-case), a v1 set, a break, a marker */
-    const ok = await restore(page, await zipFile({songs: [liveSong('up', 'up', {hash: H1.toUpperCase()}), {id: 'gone', deleted: true, updated: 5}],
+    /* accepted: an upper-case hash (stored lower-case), a 2000-character title, a v1 set, a break, a marker */
+    const ok = await restore(page, await zipFile({songs: [liveSong('up', 'up', {hash: H1.toUpperCase(), title: 'x'.repeat(2000)}), {id: 'gone', deleted: true, updated: 5}],
       sets: [{id: 'v1s', name: 'Old', songs: ['up'], created: 1}, {id: 'v2s', name: 'New', items: [{type: 'break', id: 'b1', name: 'Set 2'}, {type: 'song', id: 'up'}], created: 2}]}, {up: ONE}));
     assert(ok === 'Restored 1 song and 2 setlists', 'valid backup toast: ' + JSON.stringify(ok));
     assert((await idbAll(page, 'songs')).up.hash === H1, 'an upper-case hash was not stored lower-case');
@@ -210,7 +217,13 @@ print(json.dumps(out))`;
   try{
     await s.context.addInitScript(() => {
       const getAll = IDBObjectStore.prototype.getAll;
-      IDBObjectStore.prototype.getAll = function(...a){ if(window.__failLoad) throw new Error('load failed (test)'); return getAll.apply(this, a); };
+      /* restore reads the local records first: fail only the reads after the restore's own write transaction has begun */
+      const tx = IDBDatabase.prototype.transaction;
+      IDBDatabase.prototype.transaction = function(names, mode, ...rest){
+        if(window.__failLoad && mode === 'readwrite' && typeof names !== 'string' && names.length > 1) window.__written = true;
+        return tx.call(this, names, mode, ...rest);
+      };
+      IDBObjectStore.prototype.getAll = function(...a){ if(window.__failLoad && window.__written) throw new Error('load failed (test)'); return getAll.apply(this, a); };
     });
     await s.goto();
     await page.evaluate(() => { window.__failLoad = true; });
@@ -372,13 +385,13 @@ print(json.dumps(out))`;
     await importOne(page);
     const id = Object.keys(await idbAll(page, 'songs'))[0];
     await inStore(page, (S, id) => S.putInk(id, 1, [{id: 'k', t: 'pen', c: '#000', w: .003, p: [[0, 0], [1, 1]], updated: 1}]), id);
-    const msg = await restore(page, await zipFile({songs: [{id, deleted: true, updated: 123, title: 'kept?', pages: 3}], ink: {[id + ':1']: {updated: 1, strokes: [{id: 'z'}]}}}));
+    const msg = await restore(page, await zipFile({songs: [{id, deleted: true, updated: 9e12, title: 'kept?', pages: 3}], ink: {[id + ':1']: {updated: 1, strokes: [{id: 'z'}]}}}));
     assert(msg === 'Restored 0 songs and 0 setlists', 'restore toast: ' + JSON.stringify(msg));
     await waitSongs(page, 0);
     const snap = await snapshot(page);
     assert(!snap.files[id], 'the PDF of a song the backup deleted is still stored');
     assert(!Object.keys(snap.ink).some(k => k.startsWith(id + ':')), 'annotations of a song the backup deleted are still stored');
-    assert(JSON.stringify(snap.songs[id]) === JSON.stringify({id, deleted: true, updated: 123}), 'marker stored as ' + JSON.stringify(snap.songs[id]));
+    assert(JSON.stringify(snap.songs[id]) === JSON.stringify({id, deleted: true, updated: 9e12}), 'marker stored as ' + JSON.stringify(snap.songs[id]));
     noErrors(s);
   } finally { await s.close(); }
 }},
@@ -410,6 +423,127 @@ print(json.dumps(out))`;
     assert(out.n === 1, 'ensureHashes counted ' + out.n);
     noErrors(s);
   } finally { await s.close(); }
+}},
+
+
+{name: 'hardening: restore keeps a newer local song or set over an older deletion marker, and restored songs drop local ink the backup lacks', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    await importOne(page, ['one-page.pdf', 'two-page.pdf']);
+    const [keep, mix] = Object.values(await idbAll(page, 'songs')).sort((a, b) => a.pages - b.pages).map(x => x.id);
+    const pen = id => ({id, t: 'pen', c: '#000', w: .003, p: [[0, 0], [1, 1]], updated: 1});
+    await inStore(page, async (S, [keep, mix, a, b, c]) => {
+      await S.put('songs', keep, {...await S.get('songs', keep), updated: 5000});
+      await S.putInk(keep, 1, [a]);
+      await S.putInk(mix, 1, [b]); await S.putInk(mix, 2, [c]);
+      await S.put('sets', 'gig', {id: 'gig', name: 'Gig', items: [{type: 'song', id: keep}], created: 1, updated: 5000});
+    }, [keep, mix, pen('a'), pen('b'), pen('c')]);
+    const before = await snapshot(page);
+    const two = fs.readFileSync(path.join(FIX, 'two-page.pdf'));
+    /* the backup: old markers for `keep` and the set, and `mix` with only page 2 annotated */
+    const msg = await restore(page, await zipFile({
+      songs: [{id: keep, deleted: true, updated: 10}, liveSong(mix, mix, {pages: 2, hash: sha256(two)})],
+      sets: [{id: 'gig', deleted: true, updated: 10}],
+      ink: {[mix + ':2']: {updated: 2, strokes: [pen('z')]}}}, {[mix]: two}));
+    assert(msg === 'Restored 1 song and 0 setlists', 'restore toast: ' + JSON.stringify(msg));
+    const after = await snapshot(page);
+    expectSame(before.songs[keep], after.songs[keep], 'a newer local song after an older marker');
+    assert(after.files[keep] === before.files[keep], 'the PDF of a newer local song was removed by an older marker');
+    expectSame(before.ink[keep + ':1'], after.ink[keep + ':1'], 'the ink of a newer local song after an older marker');
+    expectSame(before.sets.gig, after.sets.gig, 'a newer local set after an older marker');
+    assert(!after.ink[mix + ':1'], 'local ink the backup does not have was mixed into the restored song');
+    assert(JSON.stringify(after.ink[mix + ':2'].strokes.map(x => x.id)) === '["z"]', 'restored song page 2 ink: ' + JSON.stringify(after.ink[mix + ':2']));
+    /* a marker NEWER than the local song still deletes it */
+    const msg2 = await restore(page, await zipFile({songs: [{id: keep, deleted: true, updated: 9999}]}));
+    assert(msg2 === 'Restored 0 songs and 0 setlists', 'second restore toast: ' + JSON.stringify(msg2));
+    const s2 = await snapshot(page);
+    assert(s2.songs[keep].deleted && !s2.files[keep] && !s2.ink[keep + ':1'], 'a newer marker did not delete the song');
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'hardening: text fields stop at 200 characters, so an app-made backup always passes the 2000-character check', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    await importOne(page);
+    await page.click('#libList [data-edit]');
+    await page.waitForSelector('.modal input');
+    const lens = await page.locator('.modal input[type=text]').evaluateAll(l => l.map(i => i.maxLength));
+    assert(lens.length === 3 && lens.every(n => n === 200), 'Edit song maxlength: ' + JSON.stringify(lens));
+    await page.click('.modal [data-x]');
+    await page.click('#tSets');
+    await page.click('#view [data-newset]');
+    await page.waitForSelector('.modal input');
+    assert(await page.locator('.modal input[type=text]').evaluate(i => i.maxLength) === 200, 'New setlist name has no maxlength 200');
+    await page.click('.modal [data-x]');
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'hardening: a missing hash is not filled in from a PDF that was replaced while hashing', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    await importOne(page);
+    const id = Object.keys(await idbAll(page, 'songs'))[0];
+    const two = fs.readFileSync(path.join(FIX, 'two-page.pdf')).toString('base64');
+    const out = await inStore(page, async (S, [id, two]) => {
+      const c = await S.get('songs', id); delete c.hash; await S.put('songs', id, c);
+      await S.load();
+      const digest = crypto.subtle.digest.bind(crypto.subtle);
+      let release, started; const hold = new Promise(r => { release = r; }), go = new Promise(r => { started = r; });
+      crypto.subtle.digest = async (...x) => { started(); await hold; return digest(...x); };
+      const p = S.ensureHashes();
+      await go;
+      /* meanwhile a restore puts a different PDF under the same id, with a newer record and no hash */
+      const bytes = Uint8Array.from(atob(two), ch => ch.charCodeAt(0));
+      await S.putAll([{store: 'files', key: id, value: new Blob([bytes], {type: 'application/pdf'})}, {store: 'songs', key: id, value: {...c, pages: 2, updated: c.updated + 1}}]);
+      release();
+      await p;
+      crypto.subtle.digest = digest;
+      return S.get('songs', id);
+    }, [id, two]);
+    assert(out.hash == null, 'the old PDF\'s hash was written onto the replaced song: ' + out.hash);
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'hardening: converter survives a null setlist name and a zero page size, and counts setlist entries it drops', async run(){
+  const py = `
+import importlib.util,sys,io,json,sqlite3,struct,os,zipfile,contextlib
+spec=importlib.util.spec_from_file_location('conv',sys.argv[1]); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+pdf=open(sys.argv[2],'rb').read(); tmp=sys.argv[3]
+db=os.path.join(tmp,'synthetic.db')
+if os.path.exists(db): os.unlink(db)
+c=sqlite3.connect(db)
+c.executescript('''create table Songs(Id,Title,CreationDate); create table Files(SongId,Type,PageOrder,SourceFilePageCount);
+create table AnnotationsBase(Id,SongId,Type,Page,SourcePageWidth,SourcePageHeight,Opacity); create table AnnotationPoints(AnnotationId,Points);
+create table DrawAnnotations(BaseId,LineColor,LineWidth); create table TextboxAnnotations(BaseId,Text,FontSize,TextColor);
+create table Crop(SongId,Page,Left,Top,Right,Bottom); create table Setlists(Id,Name,DateCreated); create table SetlistSong(Id,SetlistId,SongId);''')
+c.executemany('insert into Songs values(?,?,?)',[(1,'Good Song',0),(2,'Gone Song',0),(3,'Set 2',0)])
+c.executemany('insert into Files values(?,?,?,?)',[(1,1,'',3),(2,1,'',1)])
+pts=struct.pack('<7d',0,4,1.0,10,10,20,20)
+c.executemany('insert into AnnotationsBase values(?,?,?,?,?,?,?)',[(1,1,1,0,0,0,100),(2,1,1,0,None,None,100),(3,1,0,0,0,792,100)])
+c.executemany('insert into AnnotationPoints values(?,?)',[(1,pts),(2,pts),(3,struct.pack('<6d',1,1,2,2,1,1))])
+c.execute("insert into TextboxAnnotations values(3,'note',12,-16777216)")
+c.execute('insert into Setlists values(1,NULL,0)')
+c.executemany('insert into SetlistSong values(?,?,?)',[(1,1,1),(2,1,2),(3,1,3)])
+c.commit(); c.close()
+blob=open(db,'rb').read(); mk=b'\\xab'*8
+msb=b'HEADER00'+struct.pack('>Q',len(blob))+blob+mk+struct.pack('>Q',1)+struct.pack('>Q',len(pdf))+pdf
+f=os.path.join(tmp,'synthetic.msb'); open(f,'wb').write(msb); out=os.path.join(tmp,'synthetic.zip')
+buf=io.StringIO()
+with contextlib.redirect_stdout(buf): m.main(f,out)
+rep=json.loads(buf.getvalue()); lib=json.loads(zipfile.ZipFile(out).read('library.json'))
+print(json.dumps({'rep':rep,'sets':lib['sets'],'ink':lib['ink']}))`;
+  const r = JSON.parse(execFileSync('python3', ['-E', '-c', py, path.join(ROOT, 'tools', 'msb_convert.py'), path.join(FIX, 'three-page.pdf'), TMP], {encoding: 'utf8', cwd: TMP}));
+  assert(r.sets.length === 1 && r.sets[0].name === '', 'setlist with a NULL name: ' + JSON.stringify(r.sets[0] && r.sets[0].name));
+  assert(JSON.stringify(r.sets[0].items.map(i => i.type)) === '["song","break"]', 'setlist items: ' + JSON.stringify(r.sets[0].items));
+  assert(r.rep.setlist_entries_dropped === 1, 'setlist_entries_dropped = ' + JSON.stringify(r.rep.setlist_entries_dropped));
+  assert(JSON.stringify(r.rep.missing_file) === '["Gone Song"]', 'missing_file = ' + JSON.stringify(r.rep.missing_file));
+  assert(Object.keys(r.ink).length === 0, 'annotations with no page size were converted: ' + JSON.stringify(r.ink));
 }},
 
 ];

@@ -52,7 +52,17 @@ const toScreen = (cv, r, p) => { const cr = cropOfCv(cv); return [(p[0] - cr.x) 
    the canvas, the tool), so nothing that changes meanwhile (the song or page on screen, the tool) can send the mark
    to another page or throw. The viewer refuses page turns while it is set (inkBusy). */
 let cur = null, raf = 0;
-export const inkBusy = () => !!cur;
+/* A gesture whose pointer sent nothing for 3 s (the app was switched away, capture was lost) is stale: it no longer
+   blocks page turns or a new pen-down. It still saves to its own song and page when it ends. */
+const STALE_MS = 3000;
+const isStale = c => Date.now() - c.t > STALE_MS;
+export const inkBusy = () => !!cur && !isStale(cur);
+/* Ends the gesture in progress: a stroke or erase saves what is there, a note drag is put back. */
+function endCur(keepNote){
+  const c = cur; if(!c) return;
+  if(c.kind === 'note'){ cur = null; endNote(c, !(keepNote && c.moved)); } else endStroke();
+}
+export function inkReset(){ endCur(false); }
 /* The canvas the gesture draws on. If the viewer redrew the same page (a resize), the new canvas for it. */
 function curCv(c){
   if(c.cv.isConnected || V.id !== c.id) return c.cv;
@@ -142,13 +152,14 @@ async function noteTap(cv, pn, note, pos){
 /* Each handler returns true when the event belonged to drawing. */
 export function inkPointerDown(e){
   const cv = e.target.closest('.sheet')?.querySelector('.ink');
+  if(cur && isStale(cur)) endCur(true);          // a stuck gesture: save it, then this pen-down starts a new one
   if(V.annot && cv && !cur && (e.pointerType !== 'touch' || V.finger)){
     e.preventDefault();
     try{ stage.setPointerCapture(e.pointerId); }catch(err){}
     const pn = +cv.dataset.pn, pt = ptOn(cv, e);
     if(!pt) return true;
     const arr = (V.ink.get(pn) || []).slice();
-    cur = {pid:e.pointerId, cv, pn, id:V.id, tool:V.tool, arr, before:arr.slice(), changed:false, s:null};
+    cur = {pid:e.pointerId, t:Date.now(), cv, pn, id:V.id, tool:V.tool, arr, before:arr.slice(), changed:false, s:null};
     if(cur.tool === 'text'){
       const note = noteAt(cv, e);
       Object.assign(cur, {kind:'note', note, pos:pt, x0:e.clientX, y0:e.clientY, moved:false});
@@ -161,6 +172,7 @@ export function inkPointerDown(e){
 }
 export function inkPointerMove(e){
   if(!cur || e.pointerId !== cur.pid) return;
+  cur.t = Date.now();
   if(cur.kind === 'note'){
     if(!cur.note) return;
     if(!cur.moved && Math.hypot(e.clientX - cur.x0, e.clientY - cur.y0) < 8) return;
@@ -206,6 +218,7 @@ export function inkPointerCancel(e){
 }
 
 export function setAnnot(on){
+  if(!on) inkReset();
   V.annot = on;
   $('#tools').hidden = !on;
   $('#vAnn').setAttribute('aria-pressed', on);
@@ -230,7 +243,12 @@ export function initInk(){
     if(V.tool === 'text' && b.dataset.tool === 'pen'){ V.color = b.dataset.color; markTool(); return; }   // in text mode the pen colours choose the note colour
     V.tool = b.dataset.tool; if(b.dataset.color) V.color = b.dataset.color; markTool();
   });
+  /* Undo and Clear wait for the pen: the stroke in progress saves its own snapshot of the page when it ends, which
+     would silently put back what they changed. A stale gesture is ended (saved) first. */
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') inkReset(); });
   $('#tUndo').onclick = () => {
+    if(inkBusy()) return;
+    inkReset();
     const h = V.hist.pop(); if(!h){ toast('Nothing to undo'); return; }
     if(h.id === V.id){
       const back = reconcile(V.ink.get(h.pn) || [], h.before);
@@ -244,6 +262,8 @@ export function initInk(){
     }
   };
   $('#tClear').onclick = e => {
+    if(inkBusy()) return;
+    inkReset();
     if(!armed(e.currentTarget)) return;
     for(const cv of stage.querySelectorAll('.ink')){
       const pn = +cv.dataset.pn, before = V.ink.get(pn) || [];

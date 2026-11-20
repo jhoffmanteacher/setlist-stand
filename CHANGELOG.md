@@ -7,7 +7,8 @@
 - **Locked PDFs:** printing now names any password-protected chart and offers "Print without them", instead of printing blank pages for it.
 - **Backups always restore:** each chart's checksum is taken from the PDF actually stored; a song whose PDF is missing is left out of the backup and the app tells you. A backup with something it can't read (a crafted name or id, an oversized list) is refused before anything is changed, and a damaged annotation page can no longer break later backups.
 - **Delete and Replace PDF are all or nothing,** and a save the browser cancels no longer leaves the app waiting forever.
-- **Restoring a backup that marks a song as deleted** now removes that song's PDF and marks on this tablet too.
+- **Restoring a backup that marks a song as deleted** now removes that song's PDF and marks on this tablet too, unless the copy on this tablet was changed after the song was deleted (then it is kept). A restored song brings back the backup's marks and clears any later ones on this tablet, so a chart and its marks always match. Names and titles stop at 200 characters.
+- **A stuck pen can't lock the app:** if a stroke never gets its "pen up" (you switched apps mid-stroke), page turns work again after 3 seconds and the stroke is saved on its own page. Undo and Clear wait while the pen is down.
 - **Names:** "War Pigs - Black Sabbath (1).pdf" (a file downloaded twice) is read as War Pigs by Black Sabbath, not swapped; extra spaces no longer change the sort order.
 - **Replace PDF keeps the song's crop** (the message says so; "Reset" in the crop screen clears it).
 - **Updates install the newest files** even when two deploys land within ten minutes, and an update that was already downloading when the app opened still shows its note.

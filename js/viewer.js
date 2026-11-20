@@ -1,7 +1,7 @@
 import {$, toast, hooks} from './util.js';
 import {get, getInk, songById, cropOf} from './store.js';
 import {openCropper} from './crop.js';
-import {paint, setAnnot, inkBusy, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
+import {paint, setAnnot, inkBusy, inkReset, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
 export const V = {queue:[], qi:0, brk:null, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
@@ -28,6 +28,7 @@ export function resumeState(){
   return viewer.classList.contains('on') && V.queue.length ? {queue:V.queue, qi:V.qi, page:V.brk ? 1 : V.page} : null;
 }
 export function closeViewer(){
+  inkReset();                 // a gesture still open (no pen-up arrived) saves to its own song and page now
   setAnnot(false);
   viewer.classList.remove('on');
   V.tok++; V.dt++; V.brk = null; gest = null;

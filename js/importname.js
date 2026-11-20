@@ -9,7 +9,9 @@ const LEGACY = /\s-\s*(Chords|Pro|Lyrics - Chords)(\s*\d+)?(\s*\(1\))?$|\schords
 const COPY = /\s*\(\d+\)$/;            // a browser's duplicate-download suffix
 
 export function parseFileName(fileName){
-  const raw = fileName.replace(/\.pdf$/i, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+  let raw = fileName.replace(/\.pdf$/i, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+  /* "Song (in G) (1)": a duplicate-download number after a version in brackets is dropped. "Song (2)" alone stays version 2. */
+  raw = raw.replace(/^(.*\))\s*\(\d{1,2}\)$/, '$1');
   if(LEGACY.test(raw)) return splitName(raw);
   let title = raw, artist = '';
   const i = raw.lastIndexOf(' - ');

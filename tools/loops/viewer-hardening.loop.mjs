@@ -544,4 +544,103 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     noErrors(s);
   } finally { await s.close(); }
 }},
+{name: 'viewer-hardening 10: a gesture that never gets a pen-up goes stale after 3 s; Back ends it; both marks are saved on their own pages', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    const {id} = (await importFiles(page, [path.join(FIX, 'two-page.pdf')]))['two-page.pdf'];
+    await openSong(page, id);
+    await annotPen(page);
+    /* a pen stroke whose pointerup and pointercancel never arrive (the app was switched away mid-stroke) */
+    const stuck = (pid, pts) => page.evaluate(([pid, pts]) => {
+      const cv = document.querySelector('#stage .ink'), b = cv.getBoundingClientRect();
+      pts.forEach((f, i) => cv.dispatchEvent(new PointerEvent(i ? 'pointermove' : 'pointerdown',
+        {pointerId: pid, isPrimary: true, pointerType: 'pen', clientX: b.x + b.width * f[0], clientY: b.y + b.height * f[1], bubbles: true, cancelable: true})));
+    }, [pid, pts]);
+    await stuck(55, [[.2, .3], [.3, .32], [.4, .34]]);
+    await page.keyboard.press('ArrowRight');
+    await sleep(500);
+    assert(await pageNo(page) === 1, 'test setup: a fresh gesture should still block the turn');
+    await sleep(3000);
+    await page.keyboard.press('ArrowRight');
+    await waitFor(async () => await pageNo(page) === 2, 'page turns stay blocked after 3 s with no event from the stuck pen');
+    await stroke(page, [.3, .6], [.6, .65]);
+    let ink = await waitFor(async () => { const k = await inkAll(page); return liveOf(k[id + ':1']).length === 1 && liveOf(k[id + ':2']).length === 1 ? k : null; },
+      async () => 'after the stale window a new pen-down did not give one mark on each page: ' + fmt(await inkAll(page)));
+    assert(liveOf(ink[id + ':1'])[0].p.every(p => Math.abs(p[1] - .32) < .04), 'the stuck stroke was not saved where it was drawn: ' + fmt(ink[id + ':1']));
+    /* a fresh stuck gesture (on page 2, shown now), then Back: it is saved there and the next pen-down works at once */
+    await stuck(56, [[.2, .8], [.4, .82]]);
+    await page.click('#vBack');
+    await openSong(page, id);
+    await annotPen(page);
+    await stroke(page, [.5, .1], [.8, .12]);
+    ink = await waitFor(async () => { const k = await inkAll(page); return liveOf(k[id + ':1']).length === 2 && liveOf(k[id + ':2']).length === 2 ? k : null; },
+      async () => 'after Back ended a stuck gesture (on page 2), page 1 should hold 2 marks and page 2 two: ' + fmt(await inkAll(page)));
+    assert(liveOf(ink[id + ':2']).length === 2, 'the gesture open at Back was not saved on page 2: ' + fmt(ink[id + ':2']));
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'viewer-hardening 11: Undo and Clear tapped while the pen is held change nothing', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    const {id} = (await importFiles(page, [path.join(FIX, 'one-page.pdf')]))['one-page.pdf'];
+    await openSong(page, id);
+    await annotPen(page);
+    await stroke(page, [.2, .2], [.5, .25]);
+    const s1 = await waitFor(async () => liveOf((await inkAll(page))[id + ':1'])[0], 'first stroke not saved');
+    const sb = await sheetBox(page), P = f => [sb.x + sb.width * f[0], sb.y + sb.height * f[1]];
+    const saved = async () => JSON.stringify((await inkAll(page))[id + ':1'].strokes);
+    const before = await saved();
+    await page.mouse.move(...P([.2, .6])); await page.mouse.down();
+    await page.mouse.move(...P([.35, .62]), {steps: 4});
+    await page.evaluate(() => document.querySelector('#tUndo').click());          // a finger on Undo
+    await sleep(400);
+    const afterUndo = await saved();
+    await page.evaluate(() => { document.querySelector('#tClear').click(); document.querySelector('#tClear').click(); });
+    await sleep(400);
+    const afterClear = await saved();
+    await page.mouse.move(...P([.5, .65]), {steps: 4}); await page.mouse.up();
+    assert(afterUndo === before, 'Undo during a held stroke changed the saved page: ' + afterUndo);
+    assert(afterClear === before, 'Clear during a held stroke changed the saved page: ' + afterClear);
+    const end = await waitFor(async () => { const l = liveOf((await inkAll(page))[id + ':1']); return l.length === 2 ? l : null; }, async () => 'after the pen lifted: ' + await saved());
+    assert(end.some(x => x.id === s1.id), 'first stroke lost');
+    /* after the pen lifts, Undo works again */
+    await page.click('#tUndo');
+    await waitFor(async () => liveOf((await inkAll(page))[id + ':1']).length === 1, 'Undo after the pen lifted did nothing');
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'viewer-hardening 12: a controllerchange while a song is open never reloads, even after an earlier banner tap', async run(ctx){
+  const v2 = makeSiteCopy(ctx.root, {marker: 'v2-playing'});
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    await waitInstalled(page, cacheName(ctx.root), precachePaths(ctx.root));
+    await page.reload(); await page.waitForSelector('#libList');
+    const {id} = (await importFiles(page, [path.join(FIX, 'one-page.pdf')]))['one-page.pdf'];
+    ctx.server.root = v2;
+    for(let k = 0; k < 3; k++){
+      await askUpdate(page);
+      try{ await until(() => page.evaluate(() => !document.querySelector('#update').hidden), 'no banner', 10000); break; }
+      catch(e){ if(k === 2) throw e; }
+    }
+    /* the tap's skip-waiting never takes effect (as when that worker goes redundant): no controllerchange follows */
+    await page.evaluate(() => { ServiceWorker.prototype.postMessage = () => {}; window.__ssStay = 1; });
+    await page.click('#update');
+    await sleep(800);
+    assert(await page.evaluate(() => window.__ssStay) === 1, 'test setup: the tap reloaded');
+    await openSong(page, id);
+    assert(await page.evaluate(() => document.body.classList.contains('playing')), 'test setup: body.playing not set');
+    let navs = 0; page.on('framenavigated', f => { if(f === page.mainFrame()) navs++; });
+    await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new Event('controllerchange')));   // another tab tapped its banner
+    await sleep(2000);
+    const stayed = await page.evaluate(() => window.__ssStay).catch(() => null);
+    assert(navs === 0 && stayed === 1, `the tab reloaded mid-song on a controllerchange (navigations ${navs})`);
+    assert(await page.locator('#viewer.on').count() === 1, 'the song is no longer open');
+    noErrors(s);
+  } finally { ctx.server.root = ctx.root; await s.close(); removeCopy(v2); }
+}},
 ];

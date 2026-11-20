@@ -148,13 +148,13 @@ def main(msb,out):
         sid=struct.unpack('>Q',d[p+8:p+16])[0]
         if d[p+16:p+24]==marker or p+24>len(d): p+=16; continue
         n=struct.unpack('>Q',d[p+16:p+24])[0]; blobs.setdefault(sid,[]).append(d[p+24:p+24+n]); p+=24+n
-    songs=[];ink={};nofile={};sizes={};rep={'skipped':[],'missing_file':[],'not_pdf':[],'page_order_unsupported':[],'trimmed':[],'textboxes':0,'textboxes_converted':0,'textboxes_blank':0,'stamps':0,'breaks':{},'crop_rows_total':0,'crop_rows_with_a_crop':0,'crops_song_wide':0,'crops_per_page_songs':0,'crops_per_page':0}
+    songs=[];ink={};nofile={};unreadable=set();sizes={};rep={'skipped':[],'missing_file':[],'not_pdf':[],'page_order_unsupported':[],'setlist_entries_dropped':0,'annotations_no_page_size':0,'trimmed':[],'textboxes':0,'textboxes_converted':0,'textboxes_blank':0,'stamps':0,'breaks':{},'crop_rows_total':0,'crop_rows_with_a_crop':0,'crops_song_wide':0,'crops_per_page_songs':0,'crops_per_page':0}
     z=zipfile.ZipFile(out,'w',zipfile.ZIP_STORED)
     for sid,title,created in c.execute('select Id,Title,CreationDate from Songs').fetchall():
         f=c.execute('select PageOrder,SourceFilePageCount from Files where SongId=? and Type=1',(sid,)).fetchone()
         kind,got=classify(f is not None,blobs.get(sid,[]))
         if kind=='break': rep['skipped'].append(title); nofile[sid]=title; continue
-        if kind!='ok': rep[kind].append(title); continue          # a song whose PDF is missing or unreadable: reported, never a break
+        if kind!='ok': rep[kind].append(title); unreadable.add(sid); continue          # a song whose PDF is missing or unreadable: reported, never a break
         data,r=got; n=len(r.pages)
         idx=parse_page_order(f[0],n)
         if idx is None: rep['page_order_unsupported'].append(title)        # converted with every page, as stored
@@ -167,6 +167,7 @@ def main(msb,out):
     for bid,sid,typ,page,sw,sh,op,pts,col,lw in c.execute('''select b.Id,b.SongId,b.Type,b.Page,b.SourcePageWidth,b.SourcePageHeight,b.Opacity,p.Points,d.LineColor,d.LineWidth
       from AnnotationsBase b left join AnnotationPoints p on p.AnnotationId=b.Id left join DrawAnnotations d on d.BaseId=b.Id order by b.Id''').fetchall():
         if 'ms%d'%sid not in known: continue
+        if not sw or not sh: rep['annotations_no_page_size']+=1; continue     # no page size to scale by: cannot be placed
         if typ==0:
             rep['textboxes']+=1; text,fs,tcol=tb.get(bid,('',0,None))
             if not (text or '').strip() or not pts: rep['textboxes_blank']+=1; continue
@@ -189,10 +190,11 @@ def main(msb,out):
     # A setlist entry whose song has no file (MobileSheets' "Set 2" / "Set 3" placeholders) becomes a break named after that song.
     sets=[]
     for i,n,cr in c.execute('select Id,Name,DateCreated from Setlists order by Id').fetchall():
-        items=[];brk=[]
+        n=n or '';items=[];brk=[]
         for (sid,) in c.execute('select SongId from SetlistSong where SetlistId=? order by Id',(i,)):
             if 'ms%d'%sid in known: items.append({'type':'song','id':'ms%d'%sid})
             elif sid in nofile: brk.append(nofile[sid]); items.append({'type':'break','id':'msbrk%d_%d'%(i,len(brk)),'name':nofile[sid]})
+            elif sid in unreadable: rep['setlist_entries_dropped']+=1     # its PDF is missing or unreadable (listed above)
         if brk: rep['breaks'][n]=brk
         sets.append({'id':'msset%d'%i,'name':n,'created':cr or 0,'items':items})
     z.writestr('library.json',json.dumps({'app':'setlist-stand','version':2,'saved':'from MobileSheets','songs':songs,'sets':sets,'ink':ink}))

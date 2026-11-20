@@ -145,7 +145,8 @@ export async function ensureHashes(){
     const f = await get('files', s.id); if(!f) continue;
     const hash = await sha256(await f.arrayBuffer());
     /* Hashing takes a while: write onto the record as it is NOW (an edit made meanwhile stays), and never revive a deleted song. */
-    const saved = await update('songs', s.id, cur => cur && !cur.deleted && !cur.hash ? {...cur, hash} : undefined);
+    /* ...and only onto the same record (same `updated`): a restore that replaced the PDF meanwhile must not get the old file's hash. */
+    const saved = await update('songs', s.id, cur => cur && !cur.deleted && !cur.hash && cur.updated === s.updated ? {...cur, hash} : undefined);
     if(saved){ s.hash = hash; n++; }
   }
   return n;
