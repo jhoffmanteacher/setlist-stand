@@ -65,6 +65,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      # Three loops make test PDFs (encrypted ones, trimmed ones) with this Python library; pinned, pure Python, on a
+      # throwaway computer (so --break-system-packages is harmless).
+      - name: Python helper for the loops that make test PDFs
+        run: python3 -m pip install --user --break-system-packages pypdf==6.21.4
       - name: node tools/loops.mjs
         run: node tools/ci/run-and-annotate.mjs --title "closed loops" --log "$RUNNER_TEMP/ci-out/loops.log" --summary '^(PASS|FAIL|SKIP|all |[0-9]+ of)' --deadline 35 -- node tools/loops.mjs
       - name: Keep the output

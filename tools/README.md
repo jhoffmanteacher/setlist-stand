@@ -6,7 +6,7 @@
 
 You need Python 3 on your computer. In Terminal, in this folder:
 
-1. Once only: `pip3 install pypdf`
+1. Once only: `pip3 install pypdf` (GitHub installs `pypdf==6.21.4` in `.github/workflows/browser.yml`)
 2. Then one command (use your own backup's file name):
 
 ```
