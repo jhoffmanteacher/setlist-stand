@@ -1017,9 +1017,13 @@ async function drawnEnds(page, pn, cr, s){
   return {start: f(px.x0 + lw, px.y0 + lw), end: f(px.x1 + 1 - lw, px.y1 + 1 - lw)};
 }
 async function expectDrawnAt(page, pn, cr, s, what){
-  const {start, end} = await drawnEnds(page, pn, cr, s), a = s.p[0], b = s.p[s.p.length - 1];
-  assert(near(start[0], a[0], .005) && near(start[1], a[1], .005) && near(end[0], b[0], .005) && near(end[1], b[1], .005),
-    `${what}: stroke drawn from ${fmt(start)} to ${fmt(end)} (mapped through crop ${fmt(cr)}), stored ${fmt(a)} to ${fmt(b)}`);
+  const a = s.p[0], b = s.p[s.p.length - 1];
+  const fits = r => near(r.start[0], a[0], .005) && near(r.start[1], a[1], .005) && near(r.end[0], b[0], .005) && near(r.end[1], b[1], .005);
+  /* A redraw (after a crop change, a resize, a reopen) takes a moment, and longer on a slow computer such as GitHub's: a read
+     taken too early shows the OLD picture. Look again for up to 6 s; what is reported is what was seen last. */
+  let r = await drawnEnds(page, pn, cr, s);
+  for(let k = 0; k < 40 && !fits(r); k++){ await sleep(150); try{ r = await drawnEnds(page, pn, cr, s); }catch(e){ /* canvas being replaced: look again */ } }
+  assert(fits(r), `${what}: stroke drawn from ${fmt(r.start)} to ${fmt(r.end)} (mapped through crop ${fmt(cr)}), stored ${fmt(a)} to ${fmt(b)}`);
 }
 async function penOn(page){
   if(!(await page.locator('#tools').isVisible())) await page.click('#vAnn');
