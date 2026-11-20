@@ -3,7 +3,7 @@ import {get, getInk, state, songById} from './store.js';
 import {paint, setAnnot, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
-export const V = {queue:[], qi:0, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
+export const V = {queue:[], qi:0, brk:null, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
   tool:'pen', color:'#1a1a1a', tok:0, dt:0, busy:false, cache:new Map(), ink:new Map(), hist:[]};
 try{ V.two = localStorage.getItem('ss-two') !== '0'; }catch(e){}
 
@@ -12,18 +12,19 @@ async function lock(){ try{ wl = await navigator.wakeLock.request('screen'); }ca
 function unlock(){ try{ wl && wl.release(); }catch(e){} wl = null; }
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && viewer.classList.contains('on')) lock(); });
 
-export async function openViewer(ids, qi){
-  if(!ids.length) return;
-  V.queue = ids; V.hist = [];
+/* entries: [{type:'song', id} | {type:'break', id, name}] */
+export async function openViewer(entries, qi){
+  if(!entries.some(e => e.type === 'song')) return;
+  V.queue = entries; V.hist = [];
   viewer.classList.add('on'); viewer.classList.remove('hide');
   document.body.style.overflow = 'hidden';
   lock();
-  await loadSong(qi, 1);
+  await show(qi, 1);
 }
 export function closeViewer(){
   setAnnot(false);
   viewer.classList.remove('on');
-  V.tok++; V.dt++;
+  V.tok++; V.dt++; V.brk = null;
   if(V.doc){ V.doc.destroy(); V.doc = null; }
   V.cache.clear(); stage.innerHTML = '';
   document.body.style.overflow = '';
@@ -31,8 +32,15 @@ export function closeViewer(){
   if(document.fullscreenElement) document.exitFullscreen().catch(() => {});
   hooks.render();
 }
+const show = (qi, page) => V.queue[qi].type === 'break' ? showBreak(qi) : loadSong(qi, page);
+async function showBreak(qi){
+  V.tok++; setAnnot(false);
+  if(V.doc){ V.doc.destroy(); V.doc = null; }
+  V.cache.clear(); V.brk = V.queue[qi]; V.qi = qi; V.song = null; V.id = null; V.page = 1; V.n = 1;
+  await draw();
+}
 async function loadSong(qi, page){
-  const tok = ++V.tok; const id = V.queue[qi];
+  const tok = ++V.tok; const id = V.queue[qi].id;
   try{
     const blob = await get('files', id);
     if(!blob){ toast('That file is missing'); return; }
@@ -41,7 +49,7 @@ async function loadSong(qi, page){
     for(let p = 1; p <= doc.numPages; p++) ink.set(p, await getInk(id, p));
     if(tok !== V.tok){ doc.destroy(); return; }
     if(V.doc) V.doc.destroy();
-    Object.assign(V, {doc, id, qi, n:doc.numPages, song:songById(id), ink});
+    Object.assign(V, {doc, id, qi, n:doc.numPages, song:songById(id), ink, brk:null});
     V.cache.clear(); V.page = 1; calcPer();
     V.page = page === 'last' ? lastStart() : 1;
     await draw();
@@ -73,7 +81,17 @@ function renderPage(pn, W, H){
   while(V.cache.size > 10) V.cache.delete(V.cache.keys().next().value);
   return pr;
 }
+function drawBreak(){
+  const nx = V.queue.slice(V.qi + 1).find(e => e.type === 'song'), el = document.createElement('div');
+  el.className = 'breakpage';
+  el.innerHTML = `<h1></h1><p></p>`;
+  el.querySelector('h1').textContent = V.brk.name;
+  el.querySelector('p').textContent = nx ? 'Next: ' + (songById(nx.id)?.title || '') : 'End of set';
+  stage.replaceChildren(el);
+  updateChrome();
+}
 export async function draw(){
+  if(V.brk) return drawBreak();
   if(!V.doc) return;
   const dt = ++V.dt; calcPer();
   const pad = 8;
@@ -97,26 +115,38 @@ export async function draw(){
   const nx = V.page + V.per;
   for(let i = 0; i < V.per; i++){ const p = nx + i; if(p <= V.n) renderPage(p, W, H).catch(() => {}); }
 }
+const entryLabel = e => e.type === 'break' ? e.name : (songById(e.id)?.title || '');
 function updateChrome(){
+  const nu = $('#nextup'), songs = V.queue.filter(e => e.type === 'song');
+  $('#vAnn').hidden = !!V.brk;
+  if(V.brk){
+    $('#vTitle').textContent = V.brk.name; $('#vSub').textContent = 'Break';
+    nu.hidden = true; return;
+  }
   $('#vTitle').textContent = V.song ? V.song.title : '';
   const pr = V.per === 2 && V.page < V.n ? `${V.page}–${V.page + 1}` : V.page;
-  $('#vSub').textContent = (V.queue.length > 1 ? `Song ${V.qi + 1} of ${V.queue.length} · ` : '') + `Page ${pr} of ${V.n}`;
-  const last = V.page + V.per > V.n, nxId = V.queue[V.qi + 1], nu = $('#nextup');
-  if(last && nxId){ nu.hidden = false; nu.textContent = 'Next: ' + (songById(nxId)?.title || ''); }
-  else if(last && V.queue.length > 1){ nu.hidden = false; nu.textContent = 'End of set'; }
+  const k = V.queue.slice(0, V.qi + 1).filter(e => e.type === 'song').length;
+  $('#vSub').textContent = (songs.length > 1 ? `Song ${k} of ${songs.length} · ` : '') + `Page ${pr} of ${V.n}`;
+  const last = V.page + V.per > V.n, nxt = V.queue[V.qi + 1];
+  if(last && nxt){ nu.hidden = false; nu.textContent = 'Next: ' + entryLabel(nxt); }
+  else if(last && songs.length > 1){ nu.hidden = false; nu.textContent = 'End of set'; }
   else nu.hidden = true;
   $('#v2up').setAttribute('aria-pressed', V.two);
 }
+async function goTo(qi, page){
+  V.busy = true;
+  try{ await show(qi, page); } finally{ V.busy = false; }
+}
 export async function next(){
-  if(V.busy || !V.doc) return;
-  if(V.page + V.per <= V.n){ V.page += V.per; draw(); }
-  else if(V.qi < V.queue.length - 1){ V.busy = true; try{ await loadSong(V.qi + 1, 1); } finally{ V.busy = false; } }
+  if(V.busy || (!V.doc && !V.brk)) return;
+  if(!V.brk && V.page + V.per <= V.n){ V.page += V.per; draw(); }
+  else if(V.qi < V.queue.length - 1) await goTo(V.qi + 1, 1);
   else toast(V.queue.length > 1 ? 'End of set' : 'Last page');
 }
 export async function prev(){
-  if(V.busy || !V.doc) return;
-  if(V.page > 1){ V.page = Math.max(1, V.page - V.per); draw(); }
-  else if(V.qi > 0){ V.busy = true; try{ await loadSong(V.qi - 1, 'last'); } finally{ V.busy = false; } }
+  if(V.busy || (!V.doc && !V.brk)) return;
+  if(!V.brk && V.page > 1){ V.page = Math.max(1, V.page - V.per); draw(); }
+  else if(V.qi > 0) await goTo(V.qi - 1, 'last');
 }
 
 /* ---------- pointers: drawing goes to ink.js, everything else is page turning ---------- */

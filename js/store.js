@@ -54,10 +54,15 @@ export function upgradeSong(s){
 export function upgradeSet(st){
   if(st.deleted) return false;
   const before = JSON.stringify(st);
-  if(!Array.isArray(st.songs)) st.songs = [];
+  if(!Array.isArray(st.items)) st.items = (Array.isArray(st.songs) ? st.songs : []).map(id => ({type:'song', id}));
+  delete st.songs;
+  st.items = st.items.filter(it => it && (it.type === 'break' || (it.type === 'song' && it.id)))
+    .map(it => it.type === 'break' ? {type:'break', id:it.id || uid(), name:it.name || 'Break'} : {type:'song', id:it.id});
   if(!st.updated) st.updated = st.created || now();
   return JSON.stringify(st) !== before;
 }
+/* A set's items minus songs that no longer exist. Breaks always stay. */
+export const liveItems = st => st.items.filter(it => it.type === 'break' || songById(it.id));
 const byName = (a, b) => sortKey(a.song).localeCompare(sortKey(b.song), undefined, {numeric:true}) ||
   a.song.localeCompare(b.song, undefined, {numeric:true}) || (a.artist + a.version).localeCompare(b.artist + b.version);
 

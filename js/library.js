@@ -76,7 +76,7 @@ export async function replacePdf(file){
 /* Returns true when the click was for the library. */
 export async function onClick(b, d){
   if('add' in d){ $('#file').click(); return true; }
-  if(d.open){ openViewer([d.open], 0); return true; }
+  if(d.open){ openViewer([{type:'song', id:d.open}], 0); return true; }
   if(d.edit){
     const s = songById(d.edit);
     const r = await form('Edit song', [{key:'song', label:'Title', value:s.song}, {key:'artist', label:'Artist', value:s.artist}, {key:'version', label:'Version', value:s.version}]);
@@ -97,7 +97,7 @@ export async function onClick(b, d){
     await del('files', s.id);
     await delInkFor(s.id);
     await markDeleted('songs', s.id);
-    for(const st of state.sets){ if(st.songs.includes(s.id)){ st.songs = st.songs.filter(x => x !== s.id); await saveSet(st); } }
+    for(const st of state.sets){ if(st.items.some(it => it.type === 'song' && it.id === s.id)){ st.items = st.items.filter(it => !(it.type === 'song' && it.id === s.id)); await saveSet(st); } }
     await load(); hooks.render(); return true;
   }
   return false;

@@ -1,7 +1,7 @@
 import {$, hooks} from './util.js';
 import {openStore, load, ensureHashes} from './store.js';
 import {renderLibrary, onClick as libraryClick, addFiles, replacePdf} from './library.js';
-import {renderSetlists, onClick as setlistClick, closeSet} from './setlists.js';
+import {renderSetlists, onClick as setlistClick, closeSet, initSetlists} from './setlists.js';
 import {backupNow, restoreFrom} from './backup.js';
 import {initViewer} from './viewer.js';
 import {initInk} from './ink.js';
@@ -55,7 +55,7 @@ if('serviceWorker' in navigator){
   try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
   if(!window.pdfjsLib) $('#warn').innerHTML += '<p class="warn">The PDF reader did not load. Reload the page.</p>';
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
-  initViewer(); initInk();
+  initViewer(); initInk(); initSetlists();
   await load(); render();
   ensureHashes().catch(() => {});
 })();

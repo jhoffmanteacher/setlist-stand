@@ -82,12 +82,12 @@ def main(msb,out):
         sid=struct.unpack('>Q',d[p+8:p+16])[0]
         if d[p+16:p+24]==marker or p+24>len(d): p+=16; continue
         n=struct.unpack('>Q',d[p+16:p+24])[0]; blobs.setdefault(sid,[]).append(d[p+24:p+24+n]); p+=24+n
-    songs=[];ink={};rep={'skipped':[],'trimmed':[],'textboxes':0,'stamps':0}
+    songs=[];ink={};nofile={};rep={'skipped':[],'trimmed':[],'textboxes':0,'stamps':0,'breaks':{}}
     z=zipfile.ZipFile(out,'w',zipfile.ZIP_STORED)
     for sid,title,created in c.execute('select Id,Title,CreationDate from Songs').fetchall():
         f=c.execute('select PageOrder,SourceFilePageCount from Files where SongId=? and Type=1',(sid,)).fetchone()
         data=next((b for b in blobs.get(sid,[]) if b[:5]==b'%PDF-'),None)
-        if not f or data is None: rep['skipped'].append(title); continue
+        if not f or data is None: rep['skipped'].append(title); nofile[sid]=title; continue
         order,pages=f
         if order and order!='1-%d'%pages and '-' in order and ',' not in order:
             a,b=map(int,order.split('-')); r=pypdf.PdfReader(io.BytesIO(data)); w=pypdf.PdfWriter()
@@ -106,10 +106,16 @@ def main(msb,out):
         for w,xy in parse_points(pts,typ):
             ink.setdefault('ms%d:%d'%(sid,page+1),[]).append({'t':'hl' if (op or 100)<100 else 'pen','c':hexcol(col),
               'w':round((w or lw or 1)/sw,5),'p':[[round(x/sw,4),round(y/sh,4)] for x,y in xy]})
-    sets=[{'id':'msset%d'%i,'name':n,'created':cr or 0,
-           'songs':[x for x in ('ms%d'%r[0] for r in c.execute('select SongId from SetlistSong where SetlistId=? order by Id',(i,))) if x in known]}
-          for i,n,cr in c.execute('select Id,Name,DateCreated from Setlists order by Id').fetchall()]
-    z.writestr('library.json',json.dumps({'app':'setlist-stand','version':1,'saved':'from MobileSheets','songs':songs,'sets':sets,'ink':ink}))
+    # A setlist entry whose song has no file (MobileSheets' "Set 2" / "Set 3" placeholders) becomes a break named after that song.
+    sets=[]
+    for i,n,cr in c.execute('select Id,Name,DateCreated from Setlists order by Id').fetchall():
+        items=[];brk=[]
+        for (sid,) in c.execute('select SongId from SetlistSong where SetlistId=? order by Id',(i,)):
+            if 'ms%d'%sid in known: items.append({'type':'song','id':'ms%d'%sid})
+            elif sid in nofile: brk.append(nofile[sid]); items.append({'type':'break','id':'msbrk%d_%d'%(i,len(brk)),'name':nofile[sid]})
+        if brk: rep['breaks'][n]=brk
+        sets.append({'id':'msset%d'%i,'name':n,'created':cr or 0,'items':items})
+    z.writestr('library.json',json.dumps({'app':'setlist-stand','version':2,'saved':'from MobileSheets','songs':songs,'sets':sets,'ink':ink}))
     z.close(); os.unlink(tmp.name)
     rep.update(songs=len(songs),setlists=len(sets),annotated_pages=len(ink)); print(json.dumps(rep,indent=1))
 if __name__=='__main__': main(*sys.argv[1:3])

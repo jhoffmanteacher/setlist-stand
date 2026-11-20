@@ -326,6 +326,7 @@ async function stepBackup(t){
   assert(data.version === 2, 'library.json version = ' + data.version);
   assert(data.songs.length === 2, 'library.json songs = ' + data.songs.length);
   assert(data.sets.length === 1, 'library.json sets = ' + data.sets.length);
+  assert(songIds(data.sets[0]).length === 2, 'library.json set Gig items: ' + JSON.stringify(data.sets[0].items));
   assert(data.ink && data.ink[t.data.inkKey] && liveOf(data.ink[t.data.inkKey]).length && data.ink[t.data.inkKey].updated > 0, 'library.json lacks ink {updated, strokes} for ' + t.data.inkKey);
   for(const s of data.songs) assert(zip.file('files/' + s.id + '.pdf'), 'zip lacks files/' + s.id + '.pdf');
 
@@ -372,12 +373,17 @@ async function songRec(page, pred){
   const all = Object.values(await idbAll(page, 'songs'));
   return all.find(pred);
 }
-async function gigSet(page){
-  const sets = Object.values(await idbAll(page, 'sets'));
-  const g = sets.find(s => !s.deleted && s.name === 'Gig');
-  assert(g, 'set Gig not found in IndexedDB');
-  return g;
+/* Sets are {id, name, items:[{type:'song', id} | {type:'break', id, name}], created, updated}. */
+const songIds = st => {
+  assert(st && Array.isArray(st.items) && !('songs' in st), 'set record is not {items:[...]} (old songs array?): ' + JSON.stringify(st).slice(0, 200));
+  return st.items.filter(it => it.type === 'song').map(it => it.id);
+};
+async function setByName(page, name){
+  const sets = Object.values(await idbAll(page, 'sets')).filter(s => !s.deleted && s.name === name);
+  assert(sets.length === 1, `expected 1 set "${name}" in IndexedDB, found ${sets.length}`);
+  return sets[0];
 }
+const gigSet = page => setByName(page, 'Gig');
 async function openGig(page){
   await toLibrary(page);
   await page.click('#tSets');
@@ -486,7 +492,7 @@ async function stepReplace(t){
   await page.click('#vBack');
 
   const before = await songRec(page, s => s.id === id);
-  const posBefore = (await gigSet(page)).songs.indexOf(id);
+  const posBefore = songIds(await gigSet(page)).indexOf(id);
   assert(posBefore >= 0, 'song not in Gig before replace');
   await toLibrary(page);
   const b = rowFor(page, '#libList', ED_TITLE).locator('[data-replace]');
@@ -502,7 +508,7 @@ async function stepReplace(t){
   assert(after && !after.deleted && after.title === ED_TITLE, 'song lost its id or details after replace');
   assert(after.pages === 1, 'pages after replace = ' + after.pages);
   assert(/^[0-9a-f]{64}$/.test(after.hash) && after.hash !== before.hash, `hash not updated (${before.hash} -> ${after.hash})`);
-  assert((await gigSet(page)).songs.indexOf(id) === posBefore, 'song moved or left setlist Gig after replace');
+  assert(songIds(await gigSet(page)).indexOf(id) === posBefore, 'song moved or left setlist Gig after replace');
   const ink = await idbAll(page, 'ink');
   for(const k of Object.keys(ink).filter(k => k.startsWith(id + ':'))){
     const v = ink[k];
@@ -530,7 +536,7 @@ async function stepDelete(t){
   assert(!(await idbAll(page, 'files'))[id], 'PDF of deleted song still stored');
   const left = Object.keys(await idbAll(page, 'ink')).filter(k => k.startsWith(id + ':'));
   assert(!left.length, 'ink records of deleted song remain: ' + left.join(', '));
-  assert(!(await gigSet(page)).songs.includes(id), 'deleted song still in set Gig (IndexedDB)');
+  assert(!songIds(await gigSet(page)).includes(id), 'deleted song still in set Gig (IndexedDB)');
   await openGig(page);
   assert(await page.locator('#view [data-playat]').count() === 1, 'setlist Gig does not show 1 song after delete');
   assert(!(await page.locator('#view').innerText()).includes('Edited Song'), 'deleted song still shown in setlist');
@@ -586,6 +592,9 @@ async function stepRestoreV1(t){
   const srow = page.locator('#view [data-set]', {hasText: 'Old Gig'});
   await srow.waitFor({timeout: 5000}).catch(() => { throw new Error('v1 set "Old Gig" missing'); });
   assert(/1 song\b/.test(await srow.innerText()), 'v1 set row: ' + await srow.innerText());
+  const oldGig = await setByName(page, 'Old Gig');
+  assert(JSON.stringify(oldGig.items) === JSON.stringify([{type: 'song', id}]) && oldGig.updated > 0,
+    'v1 set not upgraded to items: ' + JSON.stringify(oldGig));
 
   const ink = (await idbAll(page, 'ink'))[id + ':1'];
   assert(ink && !Array.isArray(ink) && ink.updated > 0 && Array.isArray(ink.strokes) && ink.strokes.length === 1,
@@ -593,6 +602,299 @@ async function stepRestoreV1(t){
   assert(typeof ink.strokes[0].id === 'string' && ink.strokes[0].id && !ink.strokes[0].deleted, 'v1 stroke got no id: ' + JSON.stringify(ink.strokes[0]));
   await waitFor(async () => /^[0-9a-f]{64}$/.test((await songRec(page, s => s.id === id))?.hash || ''), 'v1 song got no 64-hex hash within 5s');
   await toLibrary(page);
+}
+
+/* ---------- Part 3: setlist items (breaks), duplicate, drag to reorder, breaks in the viewer ---------- */
+const exactText = s => new RegExp('^' + reEsc(s) + '$');
+async function openSetNamed(page, name){
+  await toLibrary(page);
+  await page.click('#tSets');
+  await page.locator('#view [data-set]').filter({has: page.locator('.t', {hasText: exactText(name)})}).click();
+  await page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n && !!document.querySelector('#view [data-addto]'), name)
+    .catch(() => { throw new Error(`setlist "${name}" did not open`); });
+}
+async function newSet(page, name){
+  await toLibrary(page);
+  await page.click('#tSets');
+  await page.click('#view [data-newset]');
+  await page.locator('.modal input[type=text]').fill(name);
+  await page.click('.modal [data-ok]');
+  await page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, name);
+}
+const rowCount = page => page.locator('#items > li.row').count();
+/* Adds songs by exact library title through the Add songs picker (in the order given = picker order). */
+async function addSongs(page, titles){
+  const n0 = await rowCount(page);
+  await page.click('#view [data-addto]');
+  await page.locator('.modal .pick').waitFor();
+  for(const tt of titles){
+    const box = page.locator('.modal .pick label', {hasText: exactText(tt)}).locator('input');
+    assert(await box.count() === 1, `picker has ${await box.count()} rows titled "${tt}"`);
+    await box.check();
+  }
+  await page.click('.modal [data-ok]');
+  await page.waitForFunction(n => document.querySelectorAll('#items > li.row').length === n, n0 + titles.length, {timeout: 5000})
+    .catch(async () => { throw new Error(`expected ${n0 + titles.length} rows after Add songs, got ${await rowCount(page)}`); });
+}
+/* Row labels in screen order: song title or break name (without the tag). */
+const rowLabels = page => page.locator('#items > li.row').evaluateAll(els => els.map(li => li.querySelector('.t').firstChild.textContent));
+async function itemLabels(page, st){
+  const songs = await idbAll(page, 'songs');
+  return st.items.map(it => it.type === 'break' ? it.name : (songs[it.id] && songs[it.id].title));
+}
+const moved = (arr, from, to) => { const a = arr.slice(), [m] = a.splice(from, 1); a.splice(to, 0, m); return a; };
+const sameIds = (a, b) => JSON.stringify(a.map(it => it.type + ':' + it.id)) === JSON.stringify(b.map(it => it.type + ':' + it.id));
+
+/* Where to grab row `from` and where to let go so it lands at index `to`. The dragged row's center follows the finger. */
+async function dragPoints(page, from, to){
+  const rows = page.locator('#items > li.row');
+  await rows.nth(from).locator('.handle').scrollIntoViewIfNeeded();
+  const h = await rows.nth(from).locator('.handle').boundingBox();
+  const r = await rows.nth(to).boundingBox();
+  const start = {x: h.x + h.width / 2, y: h.y + h.height / 2};
+  const end = {x: start.x, y: to < from ? r.y + 4 : r.y + r.height - 4};
+  return {start, end};
+}
+async function touch(t, type, pt){
+  await t.cdp.send('Input.dispatchTouchEvent', {type, touchPoints: pt ? [{x: Math.round(pt.x), y: Math.round(pt.y), id: 1}] : []});
+}
+async function touchDrag(t, from, to, steps = 12, mid){
+  const {start, end} = await dragPoints(t.page, from, to);
+  await touch(t, 'touchStart', start);
+  for(let i = 1; i <= steps; i++){
+    await touch(t, 'touchMove', {x: start.x, y: start.y + (end.y - start.y) * i / steps});
+    await sleep(16);
+  }
+  await sleep(100);
+  if(mid) await mid().catch(async e => { await touch(t, 'touchEnd'); throw e; });
+  await touch(t, 'touchEnd');
+}
+async function mouseDrag(page, from, to){
+  const {start, end} = await dragPoints(page, from, to);
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  await page.mouse.move(end.x, end.y, {steps: 12});
+  await sleep(100);
+  await page.mouse.up();
+}
+/* Waits until the set's saved items are `want` (by type+id), then checks the screen shows them in that order. */
+async function expectOrder(page, name, want, what){
+  let st;
+  await waitFor(async () => { st = await setByName(page, name); return sameIds(st.items, want); }, 'x', 5000)
+    .catch(() => { throw new Error(`${what}: saved order ${JSON.stringify(st.items.map(i => i.id))}, expected ${JSON.stringify(want.map(i => i.id))}`); });
+  const labels = await itemLabels(page, st);
+  await waitFor(async () => JSON.stringify(await rowLabels(page)) === JSON.stringify(labels), 'x', 3000)
+    .catch(async () => { throw new Error(`${what}: screen shows ${JSON.stringify(await rowLabels(page))}, expected ${JSON.stringify(labels)}`); });
+}
+
+async function stepSetItems(t){
+  const {page} = t;
+  /* more charts so sets can have 4 distinct songs: library is now Three-page, Old Song, One-page, Two-page */
+  await toLibrary(page);
+  const n0 = await songCount(page);
+  await page.setInputFiles('#file', [path.join(FIX, 'one-page.pdf'), path.join(FIX, 'two-page.pdf')]);
+  await page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, n0 + 2, {timeout: 15000})
+    .catch(async () => { throw new Error(`expected ${n0 + 2} songs after adding 2, got ${await songCount(page)}`); });
+
+  await newSet(page, 'Show');
+  await addSongs(page, ['One-page']);
+  await page.click('#view [data-addbreak]');
+  await page.waitForFunction(() => document.querySelectorAll('#items > li.row').length === 2);
+  await addSongs(page, ['Two-page']);
+  let st = await setByName(page, 'Show');
+  assert(!('songs' in st) && st.items.map(i => i.type).join() === 'song,break,song' && st.items[1].name === 'Break' && st.items[1].id,
+    'Show items after add song/break/song: ' + JSON.stringify(st.items));
+  const brk = page.locator('#items > li.row').nth(1);
+  assert(await brk.evaluate(e => e.classList.contains('brk')), 'break row lacks class brk');
+  assert((await brk.locator('.tag').textContent()) === 'Break', 'break row lacks the Break tag');
+  assert(await page.locator('#items > li.row .handle').count() === 3, 'not every row has a drag handle');
+  assert(!(await page.locator('#view [data-up], #view [data-down]').count()), 'up/down arrows still shown');
+  const nums = await page.locator('#items > li.row .num').allTextContents();
+  assert(JSON.stringify(nums) === '["1","","2"]', 'row numbers ' + JSON.stringify(nums));
+
+  /* rename the break */
+  await brk.locator('[data-renbreak]').click();
+  const mi = page.locator('.modal input[type=text]');
+  await mi.waitFor();
+  assert(await mi.inputValue() === 'Break', 'rename dialog shows ' + await mi.inputValue());
+  await mi.fill('Set 2');
+  await page.click('.modal [data-ok]');
+  await expectOrder(page, 'Show', st.items, 'after rename');
+  st = await setByName(page, 'Show');
+  assert(st.items[1].name === 'Set 2', 'break not renamed in IndexedDB: ' + JSON.stringify(st.items[1]));
+  t.data.show = st;
+
+  /* print skips the break: 1 + 2 pages */
+  const dl = await printSet(page, false);
+  const doc = await PDFDocument.load(await fsp.readFile(dl.file));
+  assert(doc.getPageCount() === 3, `printed set with a break has ${doc.getPageCount()} pages, expected 3`);
+
+  /* removing a song from a set keeps it in the library */
+  await addSongs(page, ['Three-page']);
+  const threeId = (await setByName(page, 'Show')).items[3].id;
+  await page.locator('#items > li.row').nth(3).locator('[data-rm]').click();
+  await expectOrder(page, 'Show', st.items, 'after Remove');
+  const rec = (await idbAll(page, 'songs'))[threeId];
+  assert(rec && !rec.deleted && rec.title === 'Three-page', 'Remove from set touched the song record: ' + JSON.stringify(rec).slice(0, 120));
+  assert((await idbAll(page, 'files'))[threeId], 'Remove from set deleted the PDF');
+  await toLibrary(page);
+  assert(await page.locator(`#libList [data-open="${threeId}"]`).count() === 1, 'removed song no longer in the library');
+
+  /* Duplicate from the setlist screen */
+  await openSetNamed(page, 'Show');
+  await page.click('#view [data-dup]');
+  await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Show copy', null, {timeout: 5000})
+    .catch(async () => { throw new Error('Duplicate did not open "Show copy"; heading: ' + await page.locator('#view h2').textContent()); });
+  const cp = await setByName(page, 'Show copy');
+  assert(cp.id !== st.id, 'copy has the same id');
+  assert(JSON.stringify(songIds(cp)) === JSON.stringify(songIds(st)) && cp.items.map(i => i.type).join() === 'song,break,song',
+    'copy items ' + JSON.stringify(cp.items));
+  assert(cp.items[1].name === 'Set 2' && cp.items[1].id && cp.items[1].id !== st.items[1].id, 'copied break: ' + JSON.stringify(cp.items[1]));
+  assert(JSON.stringify(await rowLabels(page)) === JSON.stringify(['One-page', 'Set 2', 'Two-page']), 'copy shows ' + JSON.stringify(await rowLabels(page)));
+  assert(JSON.stringify(songIds(await setByName(page, 'Show'))) === JSON.stringify(songIds(st)), 'original changed by Duplicate');
+
+  /* Duplicate from the setlist list */
+  await page.click('#view [data-allsets]');
+  const gig = await gigSet(page);
+  await page.click(`#view [data-dupset="${gig.id}"]`);
+  await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Gig copy', null, {timeout: 5000})
+    .catch(() => { throw new Error('list Duplicate did not open "Gig copy"'); });
+  const gc = await setByName(page, 'Gig copy');
+  assert(JSON.stringify(songIds(gc)) === JSON.stringify(songIds(gig)) && gc.items.length === gig.items.length, 'Gig copy items ' + JSON.stringify(gc.items));
+}
+
+async function swipeLeft(page){
+  await page.mouse.move(900, 420); await page.mouse.down();
+  await page.mouse.move(800, 422, {steps: 4}); await page.mouse.move(650, 424, {steps: 4});
+  await page.mouse.up();
+}
+async function expectBreakPage(page, what){
+  await page.waitForSelector('#stage .breakpage', {timeout: 5000}).catch(() => { throw new Error(what + ': no .breakpage'); });
+  const h1 = await page.locator('#stage .breakpage h1').textContent(), p = await page.locator('#stage .breakpage p').textContent();
+  assert(h1 === 'Set 2' && p === 'Next: Two-page', `${what}: break page h1 "${h1}", p "${p}"`);
+  assert(!(await page.locator('#stage .sheet').count()), what + ': .sheet shown on the break page');
+  assert(await page.locator('#vAnn').isHidden(), what + ': Annotate visible on the break page');
+  assert(await page.locator('#nextup').isHidden(), what + ': #nextup shown on the break page');
+}
+async function expectSong(page, title, sub, what){
+  await page.waitForSelector('#stage .sheet canvas', {timeout: 8000}).catch(() => { throw new Error(what + ': no page shown'); });
+  await page.waitForFunction(t => document.querySelector('#vTitle').textContent === t, title, {timeout: 5000})
+    .catch(async () => { throw new Error(`${what}: title "${await page.locator('#vTitle').textContent()}"`); });
+  await waitSub(page, sub, what);
+  assert(!(await page.locator('#stage .breakpage').count()), what + ': break page still shown');
+  assert(await page.locator('#vAnn').isVisible(), what + ': Annotate hidden on a song page');
+}
+
+async function stepViewerBreaks(t){
+  const {page} = t;
+  await openSetNamed(page, 'Show');
+  await page.click('#view [data-play]');
+  await expectSong(page, 'One-page', /^Song 1 of 2 · Page 1 of 1$/, 'song A');
+  await waitFor(async () => (await page.locator('#nextup').isVisible()) && (await page.locator('#nextup').textContent()) === 'Next: Set 2', 'x', 3000)
+    .catch(async () => { throw new Error(`song A last page #nextup "${await page.locator('#nextup').textContent()}" hidden=${await page.locator('#nextup').isHidden()}`); });
+  await stageTap(page, 0.85);
+  await expectBreakPage(page, 'tap right from song A');
+  await page.keyboard.press('ArrowRight');
+  await expectSong(page, 'Two-page', /^Song 2 of 2 · Page 1/, 'ArrowRight from the break');
+  await page.keyboard.press('ArrowLeft');
+  await expectBreakPage(page, 'ArrowLeft from song B');
+  await page.keyboard.press('ArrowLeft');
+  await expectSong(page, 'One-page', /^Song 1 of 2 · Page 1 of 1$/, 'ArrowLeft from the break');
+  assert((await page.locator('#nextup').textContent()) === 'Next: Set 2', 'back on song A, #nextup = ' + await page.locator('#nextup').textContent());
+  await swipeLeft(page);
+  await expectBreakPage(page, 'swipe from song A');
+  await swipeLeft(page);
+  await expectSong(page, 'Two-page', /^Song 2 of 2 · Page 1/, 'swipe from the break');
+  await page.click('#vBack');
+}
+
+async function stepDragTouch(t){
+  const {page} = t;
+  /* 5 rows: 4 songs and a break */
+  await newSet(page, 'Drag');
+  await addSongs(page, ['One-page', 'Three-page', 'Two-page', displayName(splitName('Old Song - Some Artist'))]);
+  await page.click('#view [data-addbreak]');
+  await page.waitForFunction(() => document.querySelectorAll('#items > li.row').length === 5);
+  let items = (await setByName(page, 'Drag')).items;
+  assert(items.length === 5, 'Drag set has ' + items.length + ' items');
+
+  /* touch: row 3 to the top; mid-way the row is lifted and the others make room */
+  await page.evaluate(() => { window.__ptypes = []; addEventListener('pointerdown', e => window.__ptypes.push(e.pointerType), true); });
+  await touchDrag(t, 2, 0, 12, async () => {
+    const st = await page.evaluate(() => ({lifted: [...document.querySelectorAll('#items > li.row')].findIndex(r => r.classList.contains('dragging')),
+      sorting: document.querySelector('#items').classList.contains('sorting'),
+      shifted: [...document.querySelectorAll('#items > li.row')].map(r => r.style.transform)}));
+    assert(st.lifted === 2 && st.sorting, 'mid-drag: lifted row ' + st.lifted + ', sorting ' + st.sorting);
+    assert(/translateY\(\d/.test(st.shifted[0]) && /translateY\(\d/.test(st.shifted[1]) && !st.shifted[3], 'mid-drag row shifts ' + JSON.stringify(st.shifted));
+  });
+  const ptypes = await page.evaluate(() => window.__ptypes);
+  assert(ptypes.length && ptypes.every(p => p === 'touch'), 'drag was not real touch input: pointerTypes ' + JSON.stringify(ptypes));
+  items = moved(items, 2, 0);
+  await expectOrder(page, 'Drag', items, 'touch drag row 3 to top');
+  await page.reload();
+  await page.waitForSelector('#libList');
+  await openSetNamed(page, 'Drag');
+  await expectOrder(page, 'Drag', items, 'after reload');
+  /* touch: first row to the middle, then the second row to the end */
+  await touchDrag(t, 0, 2);
+  items = moved(items, 0, 2);
+  await expectOrder(page, 'Drag', items, 'touch drag row 1 to the middle');
+  await touchDrag(t, 1, 4);
+  items = moved(items, 1, 4);
+  await expectOrder(page, 'Drag', items, 'touch drag row 2 to the end');
+  /* mouse: last row to the second place */
+  await mouseDrag(page, 4, 1);
+  items = moved(items, 4, 1);
+  await expectOrder(page, 'Drag', items, 'mouse drag');
+  /* a tap on a handle without moving changes nothing */
+  await touchDrag(t, 3, 3, 1);
+  await sleep(300);
+  await expectOrder(page, 'Drag', items, 'drag that went nowhere');
+  await page.reload();
+  await page.waitForSelector('#libList');
+  await openSetNamed(page, 'Drag');
+  await expectOrder(page, 'Drag', items, 'after reload');
+}
+
+async function stepDragLong(t){
+  const {page} = t;
+  /* a 38-song set written straight into IndexedDB (cycling the 4 library songs) */
+  const ids = Object.values(await idbAll(page, 'songs')).filter(s => !s.deleted && !s.archived).map(s => s.id).slice(0, 4);
+  assert(ids.length === 4, 'need 4 songs, have ' + ids.length);
+  const items = Array.from({length: 38}, (_, i) => ({type: 'song', id: ids[i % 4]}));
+  const now = Date.now();
+  await page.evaluate(rec => new Promise((res, rej) => {
+    const r = indexedDB.open('setlist-stand');
+    r.onsuccess = () => { const d = r.result, tx = d.transaction('sets', 'readwrite'); tx.objectStore('sets').put(rec, rec.id); tx.oncomplete = () => { d.close(); res(); }; tx.onerror = () => rej(tx.error); };
+    r.onerror = () => rej(r.error);
+  }), {id: 'longset' + now.toString(36), name: 'Long', items, created: now, updated: now});
+  await page.reload();
+  await page.waitForSelector('#libList');
+  await openSetNamed(page, 'Long');
+  assert(await rowCount(page) === 38, 'Long set shows ' + await rowCount(page) + ' rows');
+  const vh = await page.evaluate(() => innerHeight);
+  assert(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight * 2), 'Long set does not need scrolling');
+
+  /* grab the last row (page scrolled to the bottom) and hold near the top edge until the list has scrolled up */
+  const last = page.locator('#items > li.row').nth(37).locator('.handle');
+  await last.scrollIntoViewIfNeeded();
+  await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+  await sleep(100);
+  const sy0 = await page.evaluate(() => scrollY);
+  assert(sy0 > 0, 'page not scrolled down');
+  const h = await last.boundingBox();
+  const start = {x: h.x + h.width / 2, y: h.y + h.height / 2}, edge = {x: start.x, y: 12};
+  const t0 = Date.now();
+  await touch(t, 'touchStart', start);
+  for(let i = 1; i <= 10; i++){ await touch(t, 'touchMove', {x: start.x, y: start.y + (edge.y - start.y) * i / 10}); await sleep(16); }
+  await waitFor(() => page.evaluate(() => scrollY === 0), `autoscroll did not reach the top within 15s (scrollY ${sy0} at start)`, 15000)
+    .catch(async e => { await touch(t, 'touchEnd'); throw e; });
+  for(let i = 0; i < 5; i++){ await touch(t, 'touchMove', {x: edge.x, y: edge.y + (i % 2)}); await sleep(16); }
+  await touch(t, 'touchEnd');
+  const want = moved(items, 37, 0);
+  await expectOrder(page, 'Long', want, 'long list drag last to first');
+  const ms = Date.now() - t0;
+  assert(await rowCount(page) === 38, 'Long set shows ' + await rowCount(page) + ' rows after the drag');
+  console.log(`      info: 38-row touch drag with autoscroll (scrollY ${sy0} -> 0, viewport ${vh}px) took ${ms} ms, saved and redrawn`);
 }
 
 async function stepNoExternal(t){ checkHosts(t); }
@@ -611,7 +913,11 @@ const STEPS = [
   ['11 replace PDF: same id and setlist place, notes cleared, new hash', stepReplace],
   ['12 delete leaves a marker in IndexedDB and in the backup', stepDelete],
   ['13 restore a version 1 backup', stepRestoreV1],
-  ['14 no request left localhost during the run', stepNoExternal],
+  ['14 setlist items: break, rename, print skips it, remove keeps song, duplicate', stepSetItems],
+  ['15 viewer plays breaks between songs: tap, swipe, arrow keys, back', stepViewerBreaks],
+  ['16 drag to reorder with touch and mouse; order saved and survives reload', stepDragTouch],
+  ['17 drag in a 38-song set with autoscroll', stepDragLong],
+  ['18 no request left localhost during the run', stepNoExternal],
 ];
 
 /* ---------- runner ---------- */
@@ -622,10 +928,11 @@ try{
   server = await startServer();
   const base = `http://127.0.0.1:${server.address().port}/`;
   browser = await chromium.launch({headless: true});
-  const context = await browser.newContext({viewport: {width: 1280, height: 800}, acceptDownloads: true});
+  const context = await browser.newContext({viewport: {width: 1280, height: 800}, acceptDownloads: true, hasTouch: true});
   const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
   page.setDefaultTimeout(15000);
-  const t = {page, context, base, data: {}, external: [], errors: []};
+  const t = {page, context, cdp, base, data: {}, external: [], errors: []};
   context.on('request', r => { const u = r.url(); try{ const h = new URL(u).hostname; if(!['127.0.0.1', 'localhost'].includes(h)) t.external.push(u); }catch(e){ t.external.push(u); } });
   page.on('pageerror', e => t.errors.push(String(e && e.message || e)));
   let stop = false;

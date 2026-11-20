@@ -40,7 +40,7 @@ Running list of what the app must do. Source for the work orders.
 - WO1 `WORK-ORDER-setlist-stand-v1.md` (2026-11-19): app online and offline (PWA on GitHub Pages), song details / archive / replace chart, drag-and-drop setlists with breaks and duplicate, crop and text notes.
   - Part 1 (installable offline app): done 2026-11-19.
   - Part 2 (song details, archive, replace chart): done 2026-11-19.
-  - Part 3 (drag-and-drop setlists, breaks, duplicate): not started.
+  - Part 3 (drag-and-drop setlists, breaks, duplicate): done 2026-11-19. Converter turns MobileSheets "Set 2"/"Set 3" placeholders into breaks (10 breaks across 6 of the 13 setlists).
   - Part 4 (crop, text notes): not started.
 - Later work orders: Google Drive sync, songbook split import, share packages, page-turner pedal.
 
@@ -49,7 +49,7 @@ Running list of what the app must do. Source for the work orders.
 - Library: 74 songs (all PDFs intact), 13 setlists. Converter naming fixed 2026-11-19 so "Artist - Title - Chords" no longer leaves a stray dash, and "Vancouver - Lyrics - Chords" becomes "Vancouver (lyrics)".
 - Annotations live in MobileSheets' database, not the PDFs. 40 pages carry marks: pen strokes and lines convert and line up with the music.
 - Not converted yet (WO1 adds them): 12 text boxes, crops (87 page crops across 55 songs). 1 stamp is not converted.
-- "Set 2" / "Set 3" are placeholder songs with no file, used as set breaks in setlists → WO1 maps them to Breaks.
+- "Set 2" / "Set 3" are placeholder songs with no file, used as set breaks in setlists → converted to Breaks (done in WO1 Part 3).
 - One song ("If It Takes A Lifetime - Chords 2") used only pages 1–2 of a 3-page PDF; the converter trims it.
 
 ## Technical notes

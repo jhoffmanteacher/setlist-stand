@@ -1,26 +1,41 @@
-import {esc, uid, ask, pick, armed, hooks} from './util.js';
-import {load, state, songById, saveSet, markDeleted} from './store.js';
+import {$, esc, uid, ask, pick, armed, hooks} from './util.js';
+import {load, state, songById, saveSet, markDeleted, liveItems} from './store.js';
 import {openViewer} from './viewer.js';
 import {printDialog} from './print.js';
 
 export let openSet = null;
 export const closeSet = () => { openSet = null; };
 
+const HANDLE = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>';
+const songCount = st => liveItems(st).filter(it => it.type === 'song').length;
+/* The viewer plays a list of {type:'song', id} and {type:'break', name} entries. */
+const entriesOf = st => liveItems(st).map(it => it.type === 'break' ? {type:'break', id:it.id, name:it.name} : {type:'song', id:it.id});
+
 export function renderSetlists(v){
   const {sets} = state;
   if(openSet){
     const st = sets.find(s => s.id === openSet);
     if(!st){ openSet = null; return renderSetlists(v); }
-    const ids = st.songs.filter(songById);
+    const items = liveItems(st), n = songCount(st);
+    let k = 0;
     v.innerHTML = `<div class="bar"><button data-allsets>&#8249; Setlists</button><h2>${esc(st.name)}</h2></div>
-      <div class="bar"><button class="pri" data-play="${st.id}" ${ids.length ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-print ${ids.length ? '' : 'disabled'}>Print PDF</button><button data-renset>Rename</button></div>
-      ${ids.length ? `<ul class="list">${ids.map((id, i) => { const s = songById(id); return `<li class="row"><span class="num">${i + 1}</span><button class="main" data-playat="${i}"><span class="t">${esc(s.title)}${s.archived ? '<span class="tag">Archived</span>' : ''}</span><span class="s">${s.pages} page${s.pages == 1 ? '' : 's'}</span></button><div class="acts"><button data-up="${i}" aria-label="Move up" ${i ? '' : 'disabled'}>&#8593;</button><button data-down="${i}" aria-label="Move down" ${i < ids.length - 1 ? '' : 'disabled'}>&#8595;</button><button data-rm="${i}">Remove</button></div></li>`; }).join('')}</ul>`
+      <div class="bar"><button class="pri" data-play="${st.id}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-dup>Duplicate</button><button data-renset>Rename</button></div>
+      ${items.length ? `<ul class="list" id="items">${items.map((it, i) => {
+        if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="Drag to reorder">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${i}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${i}">Remove</button></div></li>`;
+        const s = songById(it.id); k++;
+        return `<li class="row"><button class="handle" aria-label="Drag to reorder">${HANDLE}</button><span class="num">${k}</span><button class="main" data-playat="${i}"><span class="t">${esc(s.title)}${s.archived ? '<span class="tag">Archived</span>' : ''}</span><span class="s">${s.pages} page${s.pages == 1 ? '' : 's'}</span></button><div class="acts"><button data-rm="${i}">Remove</button></div></li>`;
+      }).join('')}</ul>`
       : `<div class="empty"><h2>Empty setlist</h2><p>Tap Add songs to pick charts from your library.</p></div>`}`;
   } else {
     v.innerHTML = `<div class="bar"><button class="pri" data-newset>New setlist</button></div>` +
-      (sets.length ? `<ul class="list">${sets.map(st => { const n = st.songs.filter(songById).length; return `<li class="row"><button class="main" data-set="${st.id}"><span class="t">${esc(st.name)}</span><span class="s">${n} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${st.id}" ${n ? '' : 'disabled'}>Play</button><button data-delset="${st.id}">Delete</button></div></li>`; }).join('')}</ul>`
+      (sets.length ? `<ul class="list">${sets.map(st => { const n = songCount(st); return `<li class="row"><button class="main" data-set="${st.id}"><span class="t">${esc(st.name)}</span><span class="s">${n} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${st.id}" ${n ? '' : 'disabled'}>Play</button><button data-dupset="${st.id}">Duplicate</button><button data-delset="${st.id}">Delete</button></div></li>`; }).join('')}</ul>`
       : `<div class="empty"><h2>No setlists yet</h2><p>Make one for each gig or rehearsal.</p></div>`);
   }
+}
+
+async function duplicate(st){
+  const copy = {id:uid(), name:st.name + ' copy', created:Date.now(), items:liveItems(st).map(it => it.type === 'break' ? {...it, id:uid()} : {...it})};
+  await saveSet(copy); await load(); openSet = copy.id; hooks.render();
 }
 
 /* Returns true when the click was for setlists. */
@@ -28,23 +43,78 @@ export async function onClick(b, d){
   const {sets, songs} = state;
   if('newset' in d){
     const n = await ask('New setlist', '');
-    if(n){ const st = {id:uid(), name:n, songs:[], created:Date.now()}; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
+    if(n){ const st = {id:uid(), name:n, items:[], created:Date.now()}; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
     return true;
   }
   if(d.set){ openSet = d.set; hooks.render(); return true; }
   if('allsets' in d){ openSet = null; hooks.render(); return true; }
+  if(d.dupset){ await duplicate(sets.find(s => s.id === d.dupset)); return true; }
   if(d.delset){ if(!armed(b)) return true; await markDeleted('sets', d.delset); await load(); hooks.render(); return true; }
-  if(d.play){ const st = sets.find(s => s.id === d.play); openViewer(st.songs.filter(songById), 0); return true; }
+  if(d.play){ const st = sets.find(s => s.id === d.play); openViewer(entriesOf(st), 0); return true; }
   const st = sets.find(s => s.id === openSet);
   if(!st) return false;
-  const ids = st.songs.filter(songById);
-  const save = async () => { st.songs = ids; await saveSet(st); await load(); hooks.render(); };
-  if(d.playat){ openViewer(ids, +d.playat); return true; }
-  if('print' in d){ printDialog(st, ids); return true; }
-  if('addto' in d){ const add = await pick(songs.filter(s => !s.archived)); if(add.length){ ids.push(...add); await save(); } return true; }
+  const items = liveItems(st);
+  const save = async () => { st.items = items; await saveSet(st); await load(); hooks.render(); };
+  if(d.playat){ openViewer(entriesOf(st), +d.playat); return true; }
+  if('print' in d){ printDialog(st, items.filter(it => it.type === 'song').map(it => it.id)); return true; }
+  if('dup' in d){ await duplicate(st); return true; }
+  if('addto' in d){ const add = await pick(songs.filter(s => !s.archived)); if(add.length){ items.push(...add.map(id => ({type:'song', id}))); await save(); } return true; }
+  if('addbreak' in d){ items.push({type:'break', id:uid(), name:'Break'}); await save(); return true; }
+  if(d.renbreak){ const it = items[+d.renbreak]; const n = await ask('Rename break', it.name); if(n){ it.name = n; await save(); } return true; }
   if('renset' in d){ const n = await ask('Rename setlist', st.name); if(n){ st.name = n; await save(); } return true; }
-  if(d.up){ const i = +d.up; [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; await save(); return true; }
-  if(d.down){ const i = +d.down; [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; await save(); return true; }
-  if(d.rm){ ids.splice(+d.rm, 1); await save(); return true; }
+  if(d.rm){ items.splice(+d.rm, 1); await save(); return true; }
   return false;
+}
+
+/* ---------- drag and drop: the handle on the left of each row ----------
+   Pointer events, so a finger, a stylus and a mouse all work. While dragging, rows only move with CSS transforms
+   (no layout work per move), and the list scrolls when the pointer is near the top or bottom edge. */
+let drag = null;
+function placeRows(d){
+  const hf = d.rects[d.from].h;
+  d.rows.forEach((r, i) => {
+    if(i === d.from) return;
+    const shift = i > d.from ? (i <= d.to ? -hf : 0) : (i >= d.to ? hf : 0);
+    r.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+}
+function moveDrag(){
+  const d = drag, dy = d.cy - d.y0 + (scrollY - d.sy);
+  d.li.style.transform = `translateY(${dy}px)`;
+  const center = d.rects[d.from].top + d.rects[d.from].h / 2 + dy;
+  let to = 0;
+  d.rects.forEach((r, i) => { if(i !== d.from && r.top + r.h / 2 < center) to++; });
+  if(to !== d.to){ d.to = to; placeRows(d); }
+}
+function tick(){
+  if(!drag) return;
+  const y = drag.cy, edge = 90; let v = 0;
+  if(y < edge) v = -Math.ceil((edge - y) / 5); else if(y > innerHeight - edge) v = Math.ceil((y - (innerHeight - edge)) / 5);
+  if(v){ scrollBy(0, v); moveDrag(); }
+  drag.raf = requestAnimationFrame(tick);
+}
+async function endDrag(e){
+  const d = drag; if(!d || e.pointerId !== d.pid) return;
+  drag = null; cancelAnimationFrame(d.raf);
+  const {from, to} = d;
+  if(e.type === 'pointercancel' || from === to){ hooks.render(); return; }
+  const st = state.sets.find(s => s.id === openSet); if(!st){ hooks.render(); return; }
+  const items = liveItems(st), [m] = items.splice(from, 1); items.splice(to, 0, m);
+  st.items = items; await saveSet(st); await load(); hooks.render();
+}
+export function initSetlists(){
+  const view = $('#view');
+  view.addEventListener('pointerdown', e => {
+    const h = e.target.closest('.handle'); if(!h || drag) return;
+    const li = h.closest('li.row'), ul = li.parentElement, rows = [...ul.children], sy = scrollY;
+    e.preventDefault();
+    drag = {pid:e.pointerId, li, rows, from:rows.indexOf(li), to:rows.indexOf(li), y0:e.clientY, cy:e.clientY, sy, raf:0,
+      rects:rows.map(r => { const b = r.getBoundingClientRect(); return {top:b.top + sy, h:b.height}; })};
+    try{ h.setPointerCapture(e.pointerId); }catch(err){}
+    li.classList.add('dragging'); ul.classList.add('sorting');
+    tick();
+  });
+  view.addEventListener('pointermove', e => { if(drag && e.pointerId === drag.pid){ drag.cy = e.clientY; moveDrag(); } });
+  view.addEventListener('pointerup', endDrag);
+  view.addEventListener('pointercancel', endDrag);
 }
