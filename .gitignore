@@ -1,0 +1,7 @@
+.claude/worktrees/
+Claude outputs/
+node_modules/
+.DS_Store
+*.msb
+*.pdf
+!tests/fixtures/*.pdf

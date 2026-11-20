@@ -1,0 +1,81 @@
+/* Fonts are bundled in vendor/fonts so the app works with no network. */
+@font-face{font-family:Barlow;font-weight:400;font-display:swap;src:url(../vendor/fonts/barlow-400.ttf) format('truetype')}
+@font-face{font-family:Barlow;font-weight:500;font-display:swap;src:url(../vendor/fonts/barlow-500.ttf) format('truetype')}
+@font-face{font-family:Barlow;font-weight:600;font-display:swap;src:url(../vendor/fonts/barlow-600.ttf) format('truetype')}
+@font-face{font-family:'Barlow Condensed';font-weight:600;font-display:swap;src:url(../vendor/fonts/barlowcondensed-600.ttf) format('truetype')}
+@font-face{font-family:'Barlow Condensed';font-weight:700;font-display:swap;src:url(../vendor/fonts/barlowcondensed-700.ttf) format('truetype')}
+/*
+VOICE: quiet stage tool, calm and dark-room friendly, big targets
+IDEA: a music stand plus a gig binder
+PICTURE: the score itself, edge to edge; the library is the working list
+COLOUR and TYPE: graphite, paper, one signal red; Barlow Condensed titles, Barlow body
+LAYOUT: tabs on top, one calm column; viewer full screen with overlay controls
+*/
+:root{color-scheme:light dark;--bg:light-dark(#f4f1ea,#17181c);--ink:light-dark(#1b1c20,#eeeae2);--card:light-dark(#fff,#212329);--line:light-dark(#dcd6ca,#33363e);--mute:light-dark(#66655f,#a19e96);--acc:#d93f34}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Barlow,system-ui,sans-serif;overflow-x:clip;-webkit-tap-highlight-color:transparent}
+h1,h2{font-family:'Barlow Condensed',system-ui,sans-serif;font-weight:700;line-height:1.05;margin:0;text-wrap:balance}
+button,input{font:inherit;color:inherit}
+button{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:var(--card);cursor:pointer;font-weight:600;white-space:nowrap}
+button:focus-visible,input:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.app{max-width:960px;margin:0 auto;padding:0 max(4vw,16px) 80px}
+.top{display:flex;align-items:center;gap:12px;padding:20px 0 12px;flex-wrap:wrap}
+.top h1{font-size:40px;margin-right:auto}
+.tabs{display:flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px}
+.tabs button{border:0;background:transparent}
+.tabs button[aria-selected=true]{background:var(--ink);color:var(--bg)}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0 16px}
+.bar h2{font-size:34px;flex:1 1 200px}
+.bar input{flex:1 1 220px;min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--card);padding:0 14px;font-size:16px}
+.list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+.row .main{flex:1;text-align:left;border:0;background:transparent;padding:6px 4px;min-height:56px;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;white-space:normal}
+.row .t{font-weight:600;font-size:18px;line-height:1.25}
+.row .s{color:var(--mute);font-size:14px;font-weight:500}
+.row .num{font-family:'Barlow Condensed',sans-serif;font-size:26px;width:2.2ch;text-align:right;color:var(--mute)}
+.acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.acts button{padding:0 12px}
+.empty{padding:56px 0;text-align:center;color:var(--mute)}
+.empty h2{color:var(--ink);font-size:36px;margin-bottom:8px}
+.hint{color:var(--mute);font-size:14px;margin:0}
+.box label.opt{display:flex;gap:12px;align-items:center;min-height:48px;cursor:pointer}
+.box label.opt input{width:22px;height:22px}
+.warn{background:var(--acc);color:#fff;padding:10px 14px;border-radius:10px;margin:8px 0}
+#viewer{position:fixed;inset:0;background:#0e0f12;display:none;z-index:10}
+#viewer.on{display:block}
+#stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:6px;touch-action:none;user-select:none;-webkit-user-select:none}
+.sheet{position:relative;background:#fff;box-shadow:0 2px 18px rgba(0,0,0,.5);flex:none}
+.sheet canvas{position:absolute;inset:0;width:100%;height:100%}
+.ink{mix-blend-mode:multiply}
+.chrome{position:absolute;left:0;right:0;display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(20,21,25,.93);color:#eeeae2;flex-wrap:wrap;transition:opacity .2s}
+.chrome button{background:#2a2c33;border-color:#3a3d45;color:#eeeae2}
+.chrome button[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:#fff}
+#vtop{top:0}
+.ttl{flex:1 1 160px;overflow:hidden}
+.ttl b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:17px}
+.ttl span{font-size:13px;color:#aeaba3}
+#tools{bottom:0;justify-content:center}
+#viewer.hide #vtop{opacity:0;pointer-events:none}
+.sw{width:44px;padding:0;display:grid;place-items:center}
+.sw i{display:block;width:22px;height:22px;border-radius:50%;border:2px solid #555}
+.sw.hl i{border-radius:4px;height:14px;width:26px}
+.gap{width:10px}
+#nextup{position:absolute;right:12px;bottom:12px;background:rgba(20,21,25,.88);color:#eeeae2;padding:8px 12px;border-radius:10px;font-size:15px;pointer-events:none}
+#viewer.annot #nextup{display:none}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:30;padding:16px}
+.box{background:var(--card);color:var(--ink);border-radius:14px;padding:20px;width:min(520px,100%);max-height:85vh;display:flex;flex-direction:column;gap:12px}
+.box h2{font-size:28px}
+.pick{overflow:auto;border-top:1px solid var(--line)}
+.pick label{display:flex;gap:12px;align-items:center;min-height:50px;border-bottom:1px solid var(--line);cursor:pointer}
+.pick input{width:22px;height:22px;flex:none}
+.box input[type=text]{min-height:48px;border-radius:10px;border:1px solid var(--line);background:var(--bg);padding:0 12px;font-size:16px}
+.btns{display:flex;justify-content:flex-end;gap:8px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#eeeae2;color:#17181c;padding:10px 16px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;font-weight:600}
+#toast.on{opacity:1}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+@media(max-width:600px){.top h1{font-size:32px}.acts button{padding:0 10px;font-size:14px}}
+#update{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:50;background:var(--acc);color:#fff;border-color:var(--acc);box-shadow:0 4px 18px rgba(0,0,0,.35)}

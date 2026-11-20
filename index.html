@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Setlist Stand</title>
+<meta name="theme-color" content="#17181c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Setlist Stand">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="css/app.css">
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1>Setlist Stand</h1>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tLib" aria-selected="true">Library</button>
+      <button role="tab" id="tSets" aria-selected="false">Setlists</button>
+    </div>
+  </header>
+  <div id="warn"></div>
+  <main id="view"></main>
+</div>
+<input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
+<input type="file" id="restoreFile" accept=".zip,application/zip" hidden>
+
+<section id="viewer" aria-label="Music viewer">
+  <div id="stage"></div>
+  <div id="nextup" hidden></div>
+  <div class="chrome" id="vtop">
+    <button id="vBack">Back</button>
+    <div class="ttl"><b id="vTitle"></b><span id="vSub"></span></div>
+    <button id="vPrev" aria-label="Previous page">&#8249;</button>
+    <button id="vNext" aria-label="Next page">&#8250;</button>
+    <button id="vAnn" aria-pressed="false">Annotate</button>
+    <button id="v2up" aria-pressed="true">Two pages</button>
+    <button id="vFull">Full screen</button>
+  </div>
+  <div class="chrome" id="tools" hidden>
+    <button class="sw" data-tool="pen" data-color="#1a1a1a" aria-label="Black pen"><i style="background:#1a1a1a"></i></button>
+    <button class="sw" data-tool="pen" data-color="#d62828" aria-label="Red pen"><i style="background:#d62828"></i></button>
+    <button class="sw" data-tool="pen" data-color="#1f5fd6" aria-label="Blue pen"><i style="background:#1f5fd6"></i></button>
+    <button class="sw hl" data-tool="hl" data-color="#ffd400" aria-label="Yellow highlighter"><i style="background:#ffd400"></i></button>
+    <button class="sw hl" data-tool="hl" data-color="#7be07b" aria-label="Green highlighter"><i style="background:#7be07b"></i></button>
+    <button data-tool="erase">Eraser</button>
+    <span class="gap"></span>
+    <button id="tUndo">Undo</button>
+    <button id="tClear">Clear page</button>
+    <button id="tFinger" aria-pressed="false">Finger draws</button>
+    <button id="tDone" class="pri">Done</button>
+  </div>
+</section>
+<div id="toast" role="status"></div>
+<button id="update" hidden>Updated. Tap to reload</button>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

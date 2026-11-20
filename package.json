@@ -1,0 +1,14 @@
+{
+  "name": "setlist-stand",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Setlist Stand: a vanilla-JS PWA for reading PDF charts in setlist order.",
+  "scripts": {
+    "checks": "node tools/checks.mjs",
+    "smoke": "node tools/smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.1"
+  }
+}
