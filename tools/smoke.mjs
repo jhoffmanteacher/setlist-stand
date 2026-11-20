@@ -18,6 +18,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import vm from 'node:vm';
+import zlib from 'node:zlib';
 import {chromium} from 'playwright';
 import {splitName, displayName} from '../js/names.js';
 
@@ -897,6 +898,568 @@ async function stepDragLong(t){
   console.log(`      info: 38-row touch drag with autoscroll (scrollY ${sy0} -> 0, viewport ${vh}px) took ${ms} ms, saved and redrawn`);
 }
 
+/* ---------- Part 4: crop and text notes ---------- */
+const PW = 612, PH = 792;                       // fixture page size (letter, points)
+const near = (a, b, tol) => Math.abs(a - b) <= tol;
+const fmt = o => JSON.stringify(o, (k, v) => typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v);
+const rectNear = (r, want, tol) => !!r && ['x', 'y', 'w', 'h'].every(k => near(r[k], want[k], tol));
+const cropAspect = r => (r.w * PW) / (r.h * PH);
+async function songIdOf(page, title){
+  await toLibrary(page);
+  const row = rowFor(page, '#libList', title);
+  assert(await row.count() === 1, `library has ${await row.count()} rows titled "${title}"`);
+  return row.locator('[data-open]').getAttribute('data-open');
+}
+const cropRec = async (page, id) => (await songRec(page, s => s.id === id)).crop;
+/* Opens a song in one-page-per-view mode on page `pn`. */
+async function openAt(page, title, pn){
+  await openSong(page, title);
+  if(await page.getAttribute('#v2up', 'aria-pressed') === 'true') await page.click('#v2up');
+  await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 1, null, {timeout: 5000});
+  await gotoPage(page, pn);
+}
+async function gotoPage(page, pn){
+  for(let i = 0; i < 6; i++){
+    const m = /Page (\d+) of (\d+)/.exec(await subText(page));
+    const cur = m ? +m[1] : 0;
+    if(cur === pn && await page.locator(`#stage .ink[data-pn="${pn}"]`).count()) return;
+    if(cur !== pn) await page.keyboard.press(cur < pn ? 'ArrowRight' : 'ArrowLeft');
+    await sleep(200);
+  }
+  await page.waitForSelector(`#stage .ink[data-pn="${pn}"]`, {timeout: 3000}).catch(async () => { throw new Error(`could not get to page ${pn}; #vSub "${await subText(page)}"`); });
+}
+/* Size of the shown sheet for page pn and of its page canvas (canvas pixels). */
+const sheetOf = (page, pn) => page.evaluate(pn => {
+  const ink = document.querySelector(`#stage .ink[data-pn="${pn}"]`); if(!ink) return null;
+  const b = ink.parentElement.getBoundingClientRect(), cv = ink.parentElement.querySelector('canvas:not(.ink)');
+  return {x: b.x, y: b.y, w: b.width, h: b.height, cw: cv.width, ch: cv.height, iw: ink.width, ih: ink.height};
+}, pn);
+async function expectAspect(page, pn, want, what){
+  let s;
+  await waitFor(async () => { s = await sheetOf(page, pn); return s && near(s.w / s.h, want, want * .015); }, 'x', 5000)
+    .catch(() => { throw new Error(`${what}: page ${pn} sheet aspect ${s && (s.w / s.h).toFixed(4)}, expected ${want.toFixed(4)} (sheet ${fmt(s)})`); });
+  return s;
+}
+async function showChrome(page){
+  if(await page.locator('#viewer.hide').count()){ await stageTap(page, .5); await page.waitForSelector('#viewer:not(.hide)'); }
+}
+async function openCropperUI(page, pn){
+  await showChrome(page);
+  await page.evaluate(() => { document.querySelector('#cropHint').textContent = ''; });
+  await page.click('#vCrop');
+  await waitHint(page, pn, 'cropper did not open for page ' + pn);
+}
+/* The cropper shows page pn: #cropHint reads "Page pn of M". */
+async function waitHint(page, pn, what){
+  await page.waitForFunction(pn => !document.querySelector('#cropper').hidden && new RegExp('^Page ' + pn + ' of \\d+$').test(document.querySelector('#cropHint').textContent), pn, {timeout: 5000})
+    .catch(async () => { throw new Error(`${what}; #cropHint "${await page.locator('#cropHint').textContent()}"`); });
+}
+const disabledOf = page => page.evaluate(() => ({prev: document.querySelector('#cropPrev').disabled, next: document.querySelector('#cropNext').disabled}));
+/* The box as the cropper shows it (fractions of the page, from its % styles). */
+const cropBoxShown = page => page.evaluate(() => { const s = document.querySelector('#cropBox').style; return {x: parseFloat(s.left) / 100, y: parseFloat(s.top) / 100, w: parseFloat(s.width) / 100, h: parseFloat(s.height) / 100}; });
+/* The mouse sequence for every cropper drag: press on the grab point, 8 moves to the target, release. */
+async function mouseLine(page, from, to, steps = 8){
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, {steps});
+  await page.mouse.up();
+}
+/* Drags handle h (nw, n, ne, e, se, s, sw, w) from its centre to (fx, fy) as fractions of the page in the cropper. */
+async function dragHandle(page, h, fx, fy){
+  const s = await page.locator('#cropSheet').boundingBox(), hb = await page.locator(`#cropBox .ch[data-h=${h}]`).boundingBox();
+  await mouseLine(page, {x: hb.x + hb.width / 2, y: hb.y + hb.height / 2}, {x: s.x + s.width * fx, y: s.y + s.height * fy});
+}
+/* Drags the box body by (dfx, dfy) page fractions, grabbing it at its centre. */
+async function dragBox(page, dfx, dfy){
+  const s = await page.locator('#cropSheet').boundingBox(), b = await page.locator('#cropBox').boundingBox();
+  const from = {x: b.x + b.width / 2, y: b.y + b.height / 2};
+  await mouseLine(page, from, {x: from.x + s.width * dfx, y: from.y + s.height * dfy});
+}
+async function cropperDone(page){ await page.waitForSelector('#cropper', {state: 'hidden', timeout: 5000}); }
+async function waitCrop(page, id, pred, what){
+  let c;
+  await waitFor(async () => { c = await cropRec(page, id); return pred(c || {}); }, 'x', 5000)
+    .catch(() => { throw new Error(`${what}: stored crop ${fmt(c)}`); });
+  return c;
+}
+/* Ink pixels (alpha > 0) on page pn's ink canvas, optionally only inside a canvas-pixel rect. */
+const inkPixels = (page, pn, rect) => page.evaluate(([pn, rect]) => {
+  const cv = document.querySelector(`#stage .ink[data-pn="${pn}"]`); if(!cv) return null;
+  const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+  const r = rect ? rect.map(Math.round) : [0, 0, cv.width, cv.height];
+  let n = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+  for(let y = Math.max(0, r[1]); y < Math.min(cv.height, r[3]); y++) for(let x = Math.max(0, r[0]); x < Math.min(cv.width, r[2]); x++){
+    if(d[(y * cv.width + x) * 4 + 3] > 20){ n++; if(x < x0) x0 = x; if(y < y0) y0 = y; if(x > x1) x1 = x; if(y > y1) y1 = y; }
+  }
+  return {n, x0, y0, x1, y1, w: cv.width, h: cv.height};
+}, [pn, rect || null]);
+const inkRec = async (page, id, pn) => (await idbAll(page, 'ink'))[id + ':' + pn];
+async function newStrokeOn(page, id, pn, oldIds){
+  return waitFor(async () => liveOf(await inkRec(page, id, pn)).find(s => s.t !== 'text' && !oldIds.has(s.id)), `no new stroke saved on page ${pn}`);
+}
+/* Where the stroke starts and ends on screen (from the ink pixels), mapped back through crop cr to full-page fractions. */
+async function drawnEnds(page, pn, cr, s){
+  const px = await inkPixels(page, pn);
+  assert(px && px.n, `page ${pn} ink canvas is blank`);
+  const lw = s.w * px.w / cr.w / 2;
+  const f = (x, y) => [cr.x + x / px.w * cr.w, cr.y + y / px.h * cr.h];
+  return {start: f(px.x0 + lw, px.y0 + lw), end: f(px.x1 + 1 - lw, px.y1 + 1 - lw)};
+}
+async function expectDrawnAt(page, pn, cr, s, what){
+  const {start, end} = await drawnEnds(page, pn, cr, s), a = s.p[0], b = s.p[s.p.length - 1];
+  assert(near(start[0], a[0], .005) && near(start[1], a[1], .005) && near(end[0], b[0], .005) && near(end[1], b[1], .005),
+    `${what}: stroke drawn from ${fmt(start)} to ${fmt(end)} (mapped through crop ${fmt(cr)}), stored ${fmt(a)} to ${fmt(b)}`);
+}
+async function penOn(page){
+  if(!(await page.locator('#tools').isVisible())) await page.click('#vAnn');
+  await page.click('#tools [data-tool=pen][data-color="#1a1a1a"]');
+}
+async function textTool(page){
+  if(!(await page.locator('#tools').isVisible())) await page.click('#vAnn');
+  if(await page.getAttribute('#tools [data-tool=text]', 'aria-pressed') !== 'true') await page.click('#tools [data-tool=text]');
+  assert(await page.getAttribute('#tools [data-tool=text]', 'aria-pressed') === 'true', 'Text tool not pressed');
+}
+/* Screen point at page fractions (fx, fy) of the uncropped/cropped sheet. */
+const at = (s, fx, fy) => ({x: s.x + s.w * fx, y: s.y + s.h * fy});
+async function noteDialogFill(page, {text, size, color}, what){
+  const m = page.locator('.modal');
+  await m.locator('textarea').waitFor({timeout: 5000}).catch(() => { throw new Error(what + ': note dialog did not open'); });
+  if(text !== undefined) await m.locator('textarea').fill(text);
+  if(size) await m.locator(`[data-size=${size}]`).click();
+  if(color) await m.locator(`[data-color="${color}"]`).click();
+  await m.locator('[data-ok]').click();
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+}
+const notesOf = async (page, id, pn) => liveOf(await inkRec(page, id, pn)).filter(s => s.t === 'text');
+
+async function stepCropPage(t){
+  const {page} = t;
+  const id = t.data.cropId = await songIdOf(page, 'Three-page');
+  await openAt(page, 'Three-page', 2);
+  const before = await expectAspect(page, 2, PW / PH, 'uncropped page 2');
+  await openCropperUI(page, 2);
+  const shown = await cropBoxShown(page);
+  assert(rectNear(shown, {x: 0, y: 0, w: 1, h: 1}, .001), 'cropper box on an uncropped page starts at ' + fmt(shown));
+  /* .2-.8 by .25-.75: a square .6 x .6 crop keeps the page's own aspect, so the height is .5 to make the change visible */
+  const want = {x: .2, y: .25, w: .6, h: .5};
+  await dragHandle(page, 'nw', want.x, want.y);
+  await dragHandle(page, 'se', want.x + want.w, want.y + want.h);
+  const box = await cropBoxShown(page);
+  assert(rectNear(box, want, .03), 'cropper box after dragging NW and SE: ' + fmt(box));
+  await page.click('#cropPage');
+  await cropperDone(page);
+  const c = await waitCrop(page, id, c => c.pages && c.pages['2'], 'Crop this page');
+  assert(rectNear(c.pages['2'], want, .03), 'crop.pages["2"] = ' + fmt(c.pages['2']));
+  assert(c.all === null, 'crop.all = ' + fmt(c.all));
+  assert(Object.keys(c.pages).join() === '2', 'crop.pages keys: ' + Object.keys(c.pages).join());
+  const after = await expectAspect(page, 2, cropAspect(c.pages['2']), 'cropped page 2');
+  assert(after.cw * after.ch > before.cw * before.ch * 1.1, `cropped page canvas ${after.cw}x${after.ch} not bigger than ${before.cw}x${before.ch}`);
+  assert(after.w / (c.pages['2'].w * PW) > before.w / PW * 1.5, 'cropped music is not drawn larger');
+  for(const pn of [1, 3]){
+    await gotoPage(page, pn);
+    await expectAspect(page, pn, PW / PH, `page ${pn} (no crop)`);
+  }
+}
+
+async function stepCropSong(t){
+  const {page} = t;
+  const id = t.data.cropId;
+  await gotoPage(page, 1);
+  await openCropperUI(page, 1);
+  const want = {x: .1, y: .1, w: .8, h: .6};
+  await dragHandle(page, 'nw', want.x, want.y);
+  await dragHandle(page, 'se', want.x + want.w, want.y + want.h);
+  await page.click('#cropSong');
+  await cropperDone(page);
+  const c = await waitCrop(page, id, c => c.all, 'Crop whole song');
+  assert(rectNear(c.all, want, .03), 'crop.all = ' + fmt(c.all));
+  assert(c.pages && !Object.keys(c.pages).length, 'crop.pages not cleared: ' + fmt(c.pages));
+  const asp = cropAspect(c.all);
+  assert(!near(asp, PW / PH, .05), 'test crop aspect too close to the page aspect');
+  for(const pn of [1, 2, 3]){ await gotoPage(page, pn); await expectAspect(page, pn, asp, `page ${pn} after Crop whole song`); }
+}
+
+async function stepCropInk(t){
+  const {page} = t;
+  const id = t.data.cropId;
+  await gotoPage(page, 2);
+  const c0 = (await cropRec(page, id)).all;
+  const old = new Set(((await inkRec(page, id, 2)) || {strokes: []}).strokes.map(s => s.id));
+  await penOn(page);
+  const sh = page.locator('#stage .sheet:has(.ink[data-pn="2"])');
+  await drawOn(page, sh);
+  await page.click('#tDone');
+  const s = await newStrokeOn(page, id, 2, old);
+  t.data.cropStroke = s.id;
+  assert(s.p.every(p => p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1), 'stroke points not in 0..1: ' + fmt(s.p.slice(0, 3)));
+  assert(s.p.every(p => p[0] >= c0.x - .01 && p[0] <= c0.x + c0.w + .01 && p[1] >= c0.y - .01 && p[1] <= c0.y + c0.h + .01),
+    `stroke on a cropped page has points outside the crop ${fmt(c0)}: ` + fmt(s.p));
+  /* drawOn starts at (.3, .4) of the sheet: in full-page fractions that is the crop's x + .3 w, y + .4 h */
+  const want0 = [c0.x + .3 * c0.w, c0.y + .4 * c0.h];
+  assert(near(s.p[0][0], want0[0], .005) && near(s.p[0][1], want0[1], .005), `stroke start ${fmt(s.p[0])}, expected ${fmt(want0)} (full-page coordinates)`);
+  await expectDrawnAt(page, 2, c0, s, 'before the crop change');
+
+  await openCropperUI(page, 2);
+  assert(rectNear(await cropBoxShown(page), c0, .001), 'cropper does not open on the current crop: ' + fmt(await cropBoxShown(page)));
+  await dragBox(page, -.05, .05);
+  await page.click('#cropSong');
+  await cropperDone(page);
+  const c1 = (await waitCrop(page, id, c => c.all && !rectNear(c.all, c0, .01), 'moved song crop')).all;
+  assert(near(c1.x, c0.x - .05, .01) && near(c1.y, c0.y + .05, .01) && near(c1.w, c0.w, .002) && near(c1.h, c0.h, .002), `moved crop ${fmt(c1)} from ${fmt(c0)}`);
+  const s1 = (await inkRec(page, id, 2)).strokes.find(x => x.id === s.id);
+  assert(JSON.stringify(s1) === JSON.stringify(s), 'stored stroke changed with the crop: ' + fmt(s1) + ' was ' + fmt(s));
+  await expectAspect(page, 2, cropAspect(c1), 'redrawn after the crop change');
+  await expectDrawnAt(page, 2, c1, s, 'after the crop change (redraw)');
+  await openAt(page, 'Three-page', 2);
+  await expectAspect(page, 2, cropAspect(c1), 'reopened');
+  await expectDrawnAt(page, 2, c1, s, 'after the crop change (reopened)');
+}
+
+async function stepCropReset(t){
+  const {page} = t;
+  const id = t.data.cropId;
+  await gotoPage(page, 2);
+  const all = (await cropRec(page, id)).all;
+  await openCropperUI(page, 2);
+  await dragHandle(page, 'se', all.x + all.w * .8, all.y + all.h * .7);
+  await page.click('#cropPage');
+  await cropperDone(page);
+  let c = await waitCrop(page, id, c => c.pages && c.pages['2'], 'page crop on a song-cropped page');
+  assert(rectNear(c.all, all, 1e-6), 'song crop changed by Crop this page: ' + fmt(c.all));
+  await expectAspect(page, 2, cropAspect(c.pages['2']), 'own page crop');
+
+  await openCropperUI(page, 2);
+  await page.click('#cropReset');
+  await cropperDone(page);
+  c = await waitCrop(page, id, c => c.pages && !c.pages['2'], 'first Reset');
+  assert(rectNear(c.all, all, 1e-6), 'first Reset changed the song crop: ' + fmt(c));
+  await expectAspect(page, 2, cropAspect(all), 'after first Reset (song crop again)');
+
+  await openCropperUI(page, 2);
+  await page.click('#cropReset');
+  await cropperDone(page);
+  c = await waitCrop(page, id, c => c.all === null, 'second Reset');
+  assert(!Object.keys(c.pages || {}).length, 'pages left after second Reset: ' + fmt(c));
+  for(const pn of [2, 1]){ await gotoPage(page, pn); await expectAspect(page, pn, PW / PH, `page ${pn} after Reset`); }
+}
+
+async function stepTextNotes(t){
+  const {page} = t;
+  const id = t.data.cropId, pn = 2, RED = '#d62828';
+  await gotoPage(page, pn);
+  await textTool(page);
+  let s = await sheetOf(page, pn);
+  /* new note */
+  const p0 = at(s, .2, .7);
+  await page.mouse.click(p0.x, p0.y);
+  await noteDialogFill(page, {text: 'Verse 2', size: 'medium', color: RED}, 'new note');
+  let n = await waitFor(async () => (await notesOf(page, id, pn)).find(x => x.text === 'Verse 2'), 'note "Verse 2" not saved');
+  assert(n.t === 'text' && typeof n.id === 'string' && n.id && n.updated > 0, 'note record: ' + fmt(n));
+  assert(near(n.size, .018, 1e-6) && n.c === RED, `note size ${n.size}, colour ${n.c}`);
+  assert(near(n.x, .2, .01) && near(n.y, .7, .01), 'note position ' + fmt({x: n.x, y: n.y}));
+  const nid = n.id;
+  /* the note box (screen) and a canvas-pixel rect around its first word */
+  const box = n => { const q = at(s, n.x, n.y), fpx = n.size * s.w; return {grab: {x: q.x + 8, y: q.y + fpx * .5}, rect: [n.x * s.w, n.y * s.h, n.x * s.w + fpx * 3, n.y * s.h + fpx * 1.2]}; };
+  assert((await inkPixels(page, pn, box(n).rect)).n > 10, 'note is not drawn on the ink canvas');
+
+  /* edit by clicking it */
+  await page.mouse.click(box(n).grab.x, box(n).grab.y);
+  await page.locator('.modal [data-del]').waitFor({timeout: 5000}).catch(() => { throw new Error('clicking the note did not open the edit dialog with Delete'); });
+  assert(await page.locator('.modal textarea').inputValue() === 'Verse 2', 'edit dialog text ' + await page.locator('.modal textarea').inputValue());
+  await noteDialogFill(page, {text: 'Verse 2 bridge', size: 'large'}, 'edit');
+  n = await waitFor(async () => (await notesOf(page, id, pn)).find(x => x.id === nid && x.text === 'Verse 2 bridge'), 'edited note not saved');
+  assert(near(n.size, .028, 1e-6) && n.c === RED, 'edited note ' + fmt(n));
+  assert(near(n.x, .2, .01) && near(n.y, .7, .01), 'edit moved the note: ' + fmt(n));
+  assert((await notesOf(page, id, pn)).filter(x => x.text.startsWith('Verse')).length === 1, 'edit made a second note');
+
+  /* move by dragging */
+  const pre = {...n}, g = box(n).grab, DX = 60, DY = 40;
+  await page.mouse.move(g.x, g.y); await page.mouse.down();
+  await page.mouse.move(g.x + DX, g.y + DY, {steps: 6}); await page.mouse.up();
+  await sleep(250);
+  assert(!(await page.locator('.modal').count()), 'dragging a note opened the dialog');
+  n = await waitFor(async () => (await notesOf(page, id, pn)).find(x => x.id === nid && x.x !== pre.x), 'moved note not saved');
+  assert(near(n.x - pre.x, DX / s.w, .006) && near(n.y - pre.y, DY / s.h, .006), `note moved by ${fmt([n.x - pre.x, n.y - pre.y])}, expected ${fmt([DX / s.w, DY / s.h])}`);
+  assert(n.text === pre.text && n.size === pre.size && n.c === pre.c, 'move changed text/size/colour: ' + fmt(n));
+  assert(n.updated >= pre.updated, 'move did not refresh updated');
+
+  /* undo the move */
+  await page.click('#tUndo');
+  n = await waitFor(async () => (await notesOf(page, id, pn)).find(x => x.id === nid && x.x === pre.x && x.y === pre.y), 'Undo did not put the note back');
+  assert(n.text === pre.text && n.size === pre.size, 'undo changed the note: ' + fmt(n));
+  assert((await inkPixels(page, pn, box(n).rect)).n > 10, 'note not drawn back after Undo');
+
+  /* delete via the dialog */
+  await page.mouse.click(box(n).grab.x, box(n).grab.y);
+  const del = page.locator('.modal [data-del]');
+  await del.waitFor({timeout: 5000});
+  await del.click();
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  const mk = await waitFor(async () => (await inkRec(page, id, pn)).strokes.find(x => x.id === nid && x.deleted), 'Delete left no marker');
+  assert(Object.keys(mk).sort().join() === 'deleted,id,updated' && mk.updated > 0, 'deleted note record is not a marker: ' + fmt(mk));
+  assert((await inkPixels(page, pn, box(n).rect)).n === 0, 'deleted note still drawn');
+
+  /* the eraser skips notes (and still erases strokes) */
+  s = await sheetOf(page, pn);
+  const p1 = at(s, .6, .8);
+  await page.mouse.click(p1.x, p1.y);
+  await noteDialogFill(page, {text: 'Coda'}, 'second note');
+  const coda = await waitFor(async () => (await notesOf(page, id, pn)).find(x => x.text === 'Coda'), 'note "Coda" not saved');
+  t.data.coda = coda;
+  await page.click('#tools [data-tool=erase]');
+  const cb = box(coda);
+  await mouseLine(page, {x: cb.grab.x - 20, y: cb.grab.y}, {x: cb.grab.x + 60, y: cb.grab.y}, 10);
+  const st = (await inkRec(page, id, pn)).strokes.find(x => x.id === t.data.cropStroke);
+  assert(st && !st.deleted, 'pen stroke from the crop step missing before the eraser check');
+  /* the stroke is at full-page coordinates; page 2 is uncropped now */
+  const a = at(s, st.p[0][0], st.p[0][1]), b = at(s, st.p[st.p.length - 1][0], st.p[st.p.length - 1][1]);
+  await mouseLine(page, a, b, 10);
+  await waitFor(async () => (await inkRec(page, id, pn)).strokes.find(x => x.id === t.data.cropStroke)?.deleted, 'eraser did not erase the pen stroke (eraser check would prove nothing)');
+  const c2 = (await notesOf(page, id, pn)).find(x => x.id === coda.id);
+  assert(c2 && JSON.stringify(c2) === JSON.stringify(coda), 'eraser touched the note: ' + fmt(c2));
+  assert((await inkPixels(page, pn, cb.rect)).n > 10, 'note not drawn after the eraser pass');
+  await page.click('#tDone');
+
+  /* reload and reopen */
+  await page.reload();
+  await page.waitForSelector('#libList [data-open]');
+  await openAt(page, 'Three-page', pn);
+  const c3 = (await notesOf(page, id, pn)).find(x => x.id === coda.id);
+  assert(c3 && c3.text === 'Coda', 'note not stored after reload');
+  assert((await inkRec(page, id, pn)).strokes.find(x => x.id === nid)?.deleted, 'deleted note came back after reload');
+  s = await sheetOf(page, pn);
+  await waitFor(async () => (await inkPixels(page, pn, box(coda).rect)).n > 10, 'note not drawn after reload');
+}
+
+/* Draws one pen stroke and one note on page pn of the open song. */
+async function strokeAndNote(page, id, pn, text){
+  const old = new Set(((await inkRec(page, id, pn)) || {strokes: []}).strokes.map(s => s.id));
+  await penOn(page);
+  await drawOn(page, page.locator(`#stage .sheet:has(.ink[data-pn="${pn}"])`));
+  await newStrokeOn(page, id, pn, old);
+  await textTool(page);
+  const s = await sheetOf(page, pn), p = at(s, .1, .1);
+  await page.mouse.click(p.x, p.y);
+  await noteDialogFill(page, {text}, 'note ' + text);
+  await waitFor(async () => (await notesOf(page, id, pn)).find(x => x.text === text), `note "${text}" not saved`);
+  await page.click('#tDone');
+}
+const cropBoxOf = pg => { const b = pg.getCropBox(); return [b.x, b.y, b.width, b.height]; };
+const boxFor = r => r ? [PW * r.x, PH * (1 - r.y - r.h), PW * r.w, PH * r.h] : [0, 0, PW, PH];
+const boxNear = (a, b, tol) => a.every((v, i) => near(v, b[i], tol));
+
+async function stepCropPrint(t){
+  const {page} = t;
+  const id = t.data.cropId;
+  /* song-wide crop .1/.1/.8/.8 on Three-page, a stroke and a note on page 1 */
+  await openAt(page, 'Three-page', 1);
+  await openCropperUI(page, 1);
+  await dragHandle(page, 'nw', .1, .1);
+  await dragHandle(page, 'se', .9, .9);
+  await page.click('#cropSong');
+  await cropperDone(page);
+  const all = (await waitCrop(page, id, c => c.all, 'print crop')).all;
+  assert(rectNear(all, {x: .1, y: .1, w: .8, h: .8}, .0016), 'dragged song crop not within 1pt of .1/.1/.8/.8: ' + fmt(all));
+  await strokeAndNote(page, id, 1, 'Intro');
+  /* Two-page: only page 2 cropped */
+  const id2 = t.data.cropId2 = await songIdOf(page, 'Two-page');
+  await openAt(page, 'Two-page', 2);
+  await openCropperUI(page, 2);
+  await dragHandle(page, 'nw', .15, .2);
+  await page.click('#cropPage');
+  await cropperDone(page);
+  const c2 = await waitCrop(page, id2, c => c.pages && c.pages['2'], 'Two-page page crop');
+  assert(!c2.all && Object.keys(c2.pages).join() === '2', 'Two-page crop ' + fmt(c2));
+  await page.click('#vBack');
+
+  await newSet(page, 'Crops');
+  await addSongs(page, ['Three-page', 'Two-page']);
+  const order = songIds(await setByName(page, 'Crops'));
+  const songs = await idbAll(page, 'songs'), want = [];
+  for(const sid of order) for(let p = 1; p <= songs[sid].pages; p++){
+    const c = songs[sid].crop; want.push(c && ((c.pages && c.pages[p]) || c.all) || null);
+  }
+  assert(want.length === 5, 'expected 5 pages in set Crops, have ' + want.length);
+  const size = {};
+  for(const withInk of [true, false]){
+    const dl = await printSet(page, withInk);
+    const bytes = await fsp.readFile(dl.file), doc = await PDFDocument.load(bytes);
+    assert(doc.getPageCount() === 5, `${withInk ? 'with' : 'without'} annotations: ${doc.getPageCount()} pages, expected 5`);
+    doc.getPages().forEach((pg, i) => {
+      const got = cropBoxOf(pg), exp = boxFor(want[i]);
+      assert(boxNear(got, exp, 1), `${withInk ? 'with' : 'without'} annotations: page ${i + 1} CropBox ${fmt(got)}, expected ${fmt(exp)}`);
+    });
+    for(const i of [0, 1, 2]) assert(boxNear(cropBoxOf(doc.getPage(i)), [61.2, 79.2, 489.6, 633.6], 1), `page ${i + 1} CropBox ${fmt(cropBoxOf(doc.getPage(i)))} not the .1/.1/.8/.8 crop`);
+    assert(boxNear(cropBoxOf(doc.getPage(3)), [0, 0, PW, PH], .01), 'Two-page page 1 (no crop) printed with CropBox ' + fmt(cropBoxOf(doc.getPage(3))));
+    size[withInk] = bytes.length;
+  }
+  assert(size[true] > size[false], `PDF with annotations (${size[true]} B) is not larger than without (${size[false]} B)`);
+}
+
+async function stepCropBackup(t){
+  const {page} = t;
+  const id = t.data.cropId;
+  const crop = (await songRec(page, s => s.id === id)).crop;
+  const notes = {1: await notesOf(page, id, 1), 2: await notesOf(page, id, 2)};
+  assert(crop && crop.all && notes[1].length && notes[2].length, 'nothing to check: crop ' + fmt(crop) + ', notes ' + notes[1].length + '/' + notes[2].length);
+  await toLibrary(page);
+  const dl = await download(page, () => page.click('#view [data-backup]'));
+  const data = JSON.parse(await (await JSZip.loadAsync(await fsp.readFile(dl.file))).file('library.json').async('string'));
+  assert(JSON.stringify(data.songs.find(s => s.id === id)?.crop) === JSON.stringify(crop), 'backup song crop ' + fmt(data.songs.find(s => s.id === id)?.crop));
+  assert(JSON.stringify(data.songs.find(s => s.id === t.data.cropId2)?.crop) === JSON.stringify((await songRec(page, s => s.id === t.data.cropId2)).crop), 'backup lacks the per-page crop');
+  for(const pn of [1, 2]) for(const n of notes[pn])
+    assert(liveOf(data.ink[id + ':' + pn]).some(x => JSON.stringify(x) === JSON.stringify(n)), `backup lacks note "${n.text}" on page ${pn}`);
+
+  const b = rowFor(page, '#libList', 'Three-page').locator('[data-del]');
+  await b.click(); await b.click();
+  await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), id, {timeout: 5000})
+    .catch(() => { throw new Error('Three-page not deleted'); });
+  assert((await idbAll(page, 'songs'))[id].deleted === true, 'song record not a deletion marker');
+  assert(!Object.keys(await idbAll(page, 'ink')).some(k => k.startsWith(id + ':')), 'ink of the deleted song remains');
+
+  await page.setInputFiles('#restoreFile', dl.file);
+  await page.waitForSelector(`#libList [data-open="${id}"]`, {timeout: 15000}).catch(() => { throw new Error('song not back after restore'); });
+  const rc = (await songRec(page, s => s.id === id)).crop;
+  assert(JSON.stringify(rc) === JSON.stringify(crop), `restored crop ${fmt(rc)}, expected ${fmt(crop)}`);
+  for(const pn of [1, 2]){
+    const got = await notesOf(page, id, pn);
+    for(const n of notes[pn]) assert(got.some(x => JSON.stringify(x) === JSON.stringify(n)), `note "${n.text}" on page ${pn} not restored`);
+  }
+  await openAt(page, 'Three-page', 1);
+  await expectAspect(page, 1, cropAspect(crop.all), 'restored song shows its crop');
+  await waitFor(async () => (await inkPixels(page, 1)).n > 0, 'restored notes/ink not drawn');
+  await page.click('#vBack');
+}
+
+/* Every stream in a PDF file, inflated where it is Flate-compressed, as latin1 text. */
+function pdfStreams(buf){
+  const out = [], s = buf.toString('latin1');
+  let i = 0;
+  while((i = s.indexOf('stream', i)) >= 0){
+    let a = i + 6;
+    if(s[a] === '\r') a++;
+    if(s[a] === '\n') a++; else { i = a; continue; }
+    const b = s.indexOf('endstream', a); if(b < 0) break;
+    const raw = buf.subarray(a, b);
+    try{ out.push(zlib.inflateSync(raw).toString('latin1')); }catch(e){ out.push(raw.toString('latin1')); }
+    i = b + 9;
+  }
+  return out;
+}
+const hexOf = str => [...Buffer.from(str, 'latin1')].map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+
+async function stepPrintSharps(t){
+  const {page} = t;
+  const id = await songIdOf(page, 'One-page'), TXT = 'C♯ to B♭';
+  await openAt(page, 'One-page', 1);
+  await textTool(page);
+  const s = await sheetOf(page, 1), p = at(s, .15, .2);
+  await page.mouse.click(p.x, p.y);
+  await noteDialogFill(page, {text: TXT}, 'sharp/flat note');
+  await waitFor(async () => (await notesOf(page, id, 1)).find(x => x.text === TXT), 'note "' + TXT + '" not saved');
+  await page.click('#tDone');
+  await page.click('#vBack');
+  await newSet(page, 'Sharps');
+  await addSongs(page, ['One-page']);
+  const errs = t.errors.length;
+  const dl = await printSet(page, true).catch(async e => { throw new Error(`print failed (${e.message.split('\n')[0]}); toast "${await page.locator('#toast').textContent()}"`); });
+  assert(t.errors.length === errs, 'page errors while printing: ' + t.errors.slice(errs).join(' | '));
+  const bytes = await fsp.readFile(dl.file), doc = await PDFDocument.load(bytes);
+  assert(doc.getPageCount() === 1, `printed ${doc.getPageCount()} pages, expected 1`);
+  /* pdf-lib writes standard-font text as a WinAnsi hex string: look for "C# to Bb" in the page content */
+  const streams = pdfStreams(bytes), want = hexOf('C# to Bb');
+  assert(streams.some(x => x.toUpperCase().includes('<' + want + '>')), `no <${want}> ("C# to Bb") text in the PDF's ${streams.length} streams`);
+}
+
+async function stepCropSpread(t){
+  const {page} = t;
+  const id = await songIdOf(page, 'Two-page');
+  await openSong(page, 'Two-page');
+  /* start clean: step 23 cropped page 2 of this song */
+  const c0 = await cropRec(page, id);
+  assert(!c0 || !c0.all, 'Two-page unexpectedly has a song-wide crop: ' + fmt(c0));
+  if(await page.getAttribute('#v2up', 'aria-pressed') !== 'true') await page.click('#v2up');
+  await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 2, null, {timeout: 8000})
+    .catch(async () => { throw new Error(`two-page view shows ${await page.locator('#stage .sheet').count()} sheets`); });
+  await waitSub(page, /^Page 1–2 of 2$/, 'two-page view');
+
+  await openCropperUI(page, 1);
+  assert(await page.locator('#cropHint').textContent() === 'Page 1 of 2', '#cropHint ' + await page.locator('#cropHint').textContent());
+  let d = await disabledOf(page);
+  assert(d.prev === true && d.next === false, 'on page 1: #cropPrev disabled ' + d.prev + ', #cropNext disabled ' + d.next);
+  await page.click('#cropNext');
+  await waitHint(page, 2, '#cropNext did not show page 2');
+  d = await disabledOf(page);
+  assert(d.prev === false && d.next === true, 'on page 2 (last): #cropPrev disabled ' + d.prev + ', #cropNext disabled ' + d.next);
+  if(c0 && c0.pages && c0.pages['2']){
+    /* page 2 still has its crop from step 23: Reset it, then come back */
+    assert(rectNear(await cropBoxShown(page), c0.pages['2'], .001), 'page 2 opened without its own crop: ' + fmt(await cropBoxShown(page)));
+    await page.click('#cropReset');
+    await cropperDone(page);
+    await waitCrop(page, id, c => !(c.pages && c.pages['2']), 'Reset of page 2');
+    await openCropperUI(page, 1);
+    await page.click('#cropNext');
+    await waitHint(page, 2, '#cropNext did not show page 2 (second time)');
+  }
+  await page.click('#cropPrev');
+  await waitHint(page, 1, '#cropPrev did not go back to page 1');
+  assert((await disabledOf(page)).prev === true, '#cropPrev enabled on page 1');
+  await page.click('#cropNext');
+  await waitHint(page, 2, '#cropNext did not show page 2 again');
+  assert(rectNear(await cropBoxShown(page), {x: 0, y: 0, w: 1, h: 1}, .001), 'page 2 box not full: ' + fmt(await cropBoxShown(page)));
+  const want = {x: .1, y: .15, w: .9, h: .85};
+  await dragHandle(page, 'nw', want.x, want.y);
+  await page.click('#cropPage');
+  await cropperDone(page);
+  const c = await waitCrop(page, id, c => c.pages && c.pages['2'], 'Crop this page on page 2 of a spread');
+  assert(rectNear(c.pages['2'], want, .03), 'crop.pages["2"] = ' + fmt(c.pages['2']));
+  assert(!c.pages['1'] && Object.keys(c.pages).join() === '2', 'crop.pages keys ' + Object.keys(c.pages).join() + ' (page 1 must not be cropped)');
+  assert(!c.all, 'crop.all = ' + fmt(c.all));
+  await expectAspect(page, 2, cropAspect(c.pages['2']), 'right sheet of the spread');
+  await expectAspect(page, 1, PW / PH, 'left sheet of the spread (no crop)');
+  await page.click('#v2up');
+  await page.click('#vBack');
+}
+
+async function stepCropEarly(t){
+  const {page} = t;
+  const id = await songIdOf(page, 'One-page');
+  await openAt(page, 'One-page', 1);
+  await showChrome(page);
+  const crop0 = JSON.stringify((await cropRec(page, id)) || null), errs = t.errors.length;
+  /* the clicks run in one task, so the page cannot have rendered in between */
+  const early = await page.evaluate(() => {
+    const h = document.querySelector('#cropHint'); h.textContent = '';
+    document.querySelector('#vCrop').click();
+    document.querySelector('#cropPage').click();
+    document.querySelector('#cropReset').click();
+    document.querySelector('#cropSong').click();
+    return {hint: h.textContent, open: !document.querySelector('#cropper').hidden};
+  });
+  assert(early.open && early.hint === '', 'clicks were not before the render: ' + fmt(early));
+  await waitHint(page, 1, 'cropper did not finish opening after early clicks');
+  await sleep(300);
+  assert(t.errors.length === errs, 'page errors after early clicks: ' + t.errors.slice(errs).join(' | '));
+  assert(!(await page.locator('#cropper').isHidden()), 'early clicks closed the cropper');
+  assert(JSON.stringify((await cropRec(page, id)) || null) === crop0, 'early clicks changed the crop: ' + fmt(await cropRec(page, id)));
+  const d = await disabledOf(page);
+  assert(d.prev && d.next, 'one-page song: arrows not both disabled ' + fmt(d));
+
+  /* the same open editor still works */
+  await dragHandle(page, 'se', .8, .7);
+  await page.click('#cropPage');
+  await cropperDone(page);
+  const c = await waitCrop(page, id, c => c.pages && c.pages['1'], 'crop after early clicks');
+  assert(rectNear(c.pages['1'], {x: 0, y: 0, w: .8, h: .7}, .03), 'crop.pages["1"] = ' + fmt(c.pages['1']));
+  await expectAspect(page, 1, cropAspect(c.pages['1']), 'cropped after early clicks');
+  await openCropperUI(page, 1);
+  await page.click('#cropReset');
+  await cropperDone(page);
+  await waitCrop(page, id, c => !(c.pages && c.pages['1']), 'Reset after early clicks');
+  assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
+  await page.click('#vBack');
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -917,7 +1480,17 @@ const STEPS = [
   ['15 viewer plays breaks between songs: tap, swipe, arrow keys, back', stepViewerBreaks],
   ['16 drag to reorder with touch and mouse; order saved and survives reload', stepDragTouch],
   ['17 drag in a 38-song set with autoscroll', stepDragLong],
-  ['18 no request left localhost during the run', stepNoExternal],
+  ['18 crop one page: dragged box saved, only that page drawn cropped and larger', stepCropPage],
+  ['19 crop whole song: every page drawn with the song crop', stepCropSong],
+  ['20 ink on a cropped page is stored in full-page fractions and stays put when the crop moves', stepCropInk],
+  ['21 crop Reset: page crop first, then the song crop', stepCropReset],
+  ['22 text notes: add, edit, move, undo, delete, eraser skips them, survive reload', stepTextNotes],
+  ['23 print a cropped song: CropBox per page, annotations add bytes', stepCropPrint],
+  ['24 backup and restore keep crops and text notes', stepCropBackup],
+  ['25 a note with ♯ and ♭ prints as "C# to Bb"', stepPrintSharps],
+  ['26 two-page view: the cropper steps to page 2 and crops only that page', stepCropSpread],
+  ['27 cropper buttons pressed before the page renders do nothing and throw nothing', stepCropEarly],
+  ['28 no request left localhost during the run', stepNoExternal],
 ];
 
 /* ---------- runner ---------- */

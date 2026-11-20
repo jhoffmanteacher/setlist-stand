@@ -41,6 +41,7 @@
     <div class="ttl"><b id="vTitle"></b><span id="vSub"></span></div>
     <button id="vPrev" aria-label="Previous page">&#8249;</button>
     <button id="vNext" aria-label="Next page">&#8250;</button>
+    <button id="vCrop">Crop</button>
     <button id="vAnn" aria-pressed="false">Annotate</button>
     <button id="v2up" aria-pressed="true">Two pages</button>
     <button id="vFull">Full screen</button>
@@ -52,11 +53,26 @@
     <button class="sw hl" data-tool="hl" data-color="#ffd400" aria-label="Yellow highlighter"><i style="background:#ffd400"></i></button>
     <button class="sw hl" data-tool="hl" data-color="#7be07b" aria-label="Green highlighter"><i style="background:#7be07b"></i></button>
     <button data-tool="erase">Eraser</button>
+    <button data-tool="text">Text</button>
     <span class="gap"></span>
     <button id="tUndo">Undo</button>
     <button id="tClear">Clear page</button>
     <button id="tFinger" aria-pressed="false">Finger draws</button>
     <button id="tDone" class="pri">Done</button>
+  </div>
+</section>
+<section id="cropper" aria-label="Crop page" hidden>
+  <div id="cropStage"><div id="cropSheet"><canvas id="cropCv"></canvas><div id="cropBox">
+    <i class="ch" data-h="nw"></i><i class="ch" data-h="n"></i><i class="ch" data-h="ne"></i><i class="ch" data-h="e"></i>
+    <i class="ch" data-h="se"></i><i class="ch" data-h="s"></i><i class="ch" data-h="sw"></i><i class="ch" data-h="w"></i>
+  </div></div></div>
+  <div class="chrome" id="cropBar">
+    <div class="ttl"><b>Crop</b><span id="cropHint">Drag the edges and corners</span></div>
+    <button id="cropPrev" aria-label="Previous page">&#8249;</button><button id="cropNext" aria-label="Next page">&#8250;</button>
+    <button id="cropPage" class="pri">Crop this page</button>
+    <button id="cropSong">Crop whole song</button>
+    <button id="cropReset">Reset</button>
+    <button id="cropCancel">Cancel</button>
   </div>
 </section>
 <div id="toast" role="status"></div>

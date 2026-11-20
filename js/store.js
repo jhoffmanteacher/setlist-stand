@@ -130,8 +130,13 @@ export function reconcile(prev, next){
   const t = now(), pm = new Map((prev || []).map(s => [s.id, s])), seen = new Set(), out = [];
   for(const s of next){
     seen.add(s.id); const p = pm.get(s.id);
-    out.push(p && p.deleted && !s.deleted ? {...s, updated:t} : s);
+    const edited = p && !p.deleted && s.t === 'text' && ['text', 'x', 'y', 'size', 'c'].some(k => p[k] !== s[k]);
+    out.push(p && ((p.deleted && !s.deleted) || edited) ? {...s, updated:t} : s);
   }
   for(const p of prev || []) if(!seen.has(p.id)) out.push(p.deleted ? p : {id:p.id, deleted:true, updated:t});
   return out;
 }
+
+/* Crop: a song has `crop: {all: rect|null, pages: {"2": rect}}` where rect = {x, y, w, h} as fractions of the full page
+   (x, y = the top-left corner of the part that is kept). A page's own crop wins over the song-wide one. */
+export const cropOf = (song, pn) => (song && song.crop && ((song.crop.pages && song.crop.pages[pn]) || song.crop.all)) || null;

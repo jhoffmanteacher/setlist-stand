@@ -1,5 +1,6 @@
 import {$, toast, hooks} from './util.js';
-import {get, getInk, state, songById} from './store.js';
+import {get, getInk, state, songById, cropOf} from './store.js';
+import {openCropper} from './crop.js';
 import {paint, setAnnot, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
@@ -61,20 +62,23 @@ function calcPer(){
 }
 const lastStart = () => V.per === 2 ? (V.n % 2 ? V.n : V.n - 1) : V.n;
 
-function renderPage(pn, W, H){
-  const key = V.id + ':' + pn + ':' + W + 'x' + H;
+/* Draws one page into a canvas that just fits W x H. With a crop, only the kept part is drawn, scaled up to fill. */
+export function renderPage(pn, W, H, crop){
+  const cr = crop || {x:0, y:0, w:1, h:1};
+  const key = V.id + ':' + pn + ':' + W + 'x' + H + ':' + [cr.x, cr.y, cr.w, cr.h].join(',');
   if(V.cache.has(key)) return V.cache.get(key);
   const doc = V.doc;
   const pr = (async () => {
     const pg = await doc.getPage(pn);
     const v1 = pg.getViewport({scale:1});
-    const sc = Math.min(W / v1.width, H / v1.height);
-    const cw = Math.floor(v1.width * sc), ch = Math.floor(v1.height * sc);
+    const sc = Math.min(W / (v1.width * cr.w), H / (v1.height * cr.h));
+    const cw = Math.floor(v1.width * cr.w * sc), ch = Math.floor(v1.height * cr.h * sc);
     const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
     const cv = document.createElement('canvas');
     cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
-    await pg.render({canvasContext:cv.getContext('2d'), viewport:pg.getViewport({scale:sc * dpr})}).promise;
-    return {cv, cw, ch};
+    const vp = pg.getViewport({scale:sc * dpr});
+    await pg.render({canvasContext:cv.getContext('2d'), viewport:vp, transform:[1, 0, 0, 1, -cr.x * vp.width, -cr.y * vp.height]}).promise;
+    return {cv, cw, ch, crop};
   })();
   V.cache.set(key, pr);
   pr.catch(() => V.cache.delete(key));
@@ -100,25 +104,25 @@ export async function draw(){
   const pns = [];
   for(let i = 0; i < V.per; i++){ const p = V.page + i; if(p <= V.n) pns.push(p); }
   let res;
-  try{ res = await Promise.all(pns.map(p => renderPage(p, W, H))); }catch(e){ return; }
+  try{ res = await Promise.all(pns.map(p => renderPage(p, W, H, cropOf(V.song, p)))); }catch(e){ return; }
   if(dt !== V.dt) return;
   stage.replaceChildren(...res.map((r, i) => {
     const sh = document.createElement('div'); sh.className = 'sheet';
     sh.style.width = r.cw + 'px'; sh.style.height = r.ch + 'px';
     const ink = document.createElement('canvas'); ink.className = 'ink'; ink.dataset.pn = pns[i];
-    ink.width = r.cv.width; ink.height = r.cv.height;
+    ink.width = r.cv.width; ink.height = r.cv.height; ink._crop = r.crop;
     sh.append(r.cv, ink);
     paint(ink, V.ink.get(pns[i]) || []);
     return sh;
   }));
   updateChrome();
   const nx = V.page + V.per;
-  for(let i = 0; i < V.per; i++){ const p = nx + i; if(p <= V.n) renderPage(p, W, H).catch(() => {}); }
+  for(let i = 0; i < V.per; i++){ const p = nx + i; if(p <= V.n) renderPage(p, W, H, cropOf(V.song, p)).catch(() => {}); }
 }
 const entryLabel = e => e.type === 'break' ? e.name : (songById(e.id)?.title || '');
 function updateChrome(){
   const nu = $('#nextup'), songs = V.queue.filter(e => e.type === 'song');
-  $('#vAnn').hidden = !!V.brk;
+  $('#vAnn').hidden = !!V.brk; $('#vCrop').hidden = !!V.brk;
   if(V.brk){
     $('#vTitle').textContent = V.brk.name; $('#vSub').textContent = 'Break';
     nu.hidden = true; return;
@@ -174,6 +178,7 @@ stage.addEventListener('pointercancel', e => {
 
 export function initViewer(){
   $('#vBack').onclick = closeViewer;
+  $('#vCrop').onclick = () => openCropper();
   $('#vPrev').onclick = prev;
   $('#vNext').onclick = next;
   $('#v2up').onclick = () => { V.two = !V.two; try{ localStorage.setItem('ss-two', V.two ? '1' : '0'); }catch(e){} V.cache.clear(); draw(); };
@@ -184,7 +189,7 @@ export function initViewer(){
   };
   viewer.addEventListener('click', e => { const b = e.target.closest('button'); if(b) b.blur(); });
   addEventListener('keydown', e => {
-    if(!viewer.classList.contains('on') || document.querySelector('.modal')) return;
+    if(!viewer.classList.contains('on') || document.querySelector('.modal') || !$('#cropper').hidden) return;
     const k = e.key;
     if(['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)){ e.preventDefault(); next(); }
     else if(['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)){ e.preventDefault(); prev(); }

@@ -5,6 +5,7 @@ import {renderSetlists, onClick as setlistClick, closeSet, initSetlists} from '.
 import {backupNow, restoreFrom} from './backup.js';
 import {initViewer} from './viewer.js';
 import {initInk} from './ink.js';
+import {initCrop} from './crop.js';
 
 let tab = 'lib';
 function render(){
@@ -55,7 +56,7 @@ if('serviceWorker' in navigator){
   try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
   if(!window.pdfjsLib) $('#warn').innerHTML += '<p class="warn">The PDF reader did not load. Reload the page.</p>';
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
-  initViewer(); initInk(); initSetlists();
+  initViewer(); initInk(); initCrop(); initSetlists();
   await load(); render();
   ensureHashes().catch(() => {});
 })();

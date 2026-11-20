@@ -41,14 +41,14 @@ Running list of what the app must do. Source for the work orders.
   - Part 1 (installable offline app): done 2026-11-19.
   - Part 2 (song details, archive, replace chart): done 2026-11-19.
   - Part 3 (drag-and-drop setlists, breaks, duplicate): done 2026-11-19. Converter turns MobileSheets "Set 2"/"Set 3" placeholders into breaks (10 breaks across 6 of the 13 setlists).
-  - Part 4 (crop, text notes): not started.
+  - Part 4 (crop, text notes): done 2026-11-19. Converter carries over crops and text notes (see "Moving from MobileSheets").
 - Later work orders: Google Drive sync, songbook split import, share packages, page-turner pedal.
 
 ## Moving from MobileSheets (2026-11-19)
 - Backup `MobileSheets_2026-11-18.msb` decoded. Converter: `tools/msb_convert.py` (format notes at its top). Output restores straight into the app and applies the naming convention (artist pulled from "Artist - Title - Chords" names; "- Chords", "- Pro", "(1)" dropped; versions like OLD/2/in G moved into parentheses).
-- Library: 74 songs (all PDFs intact), 13 setlists. Converter naming fixed 2026-11-19 so "Artist - Title - Chords" no longer leaves a stray dash, and "Vancouver - Lyrics - Chords" becomes "Vancouver (lyrics)".
+- Library: 74 songs (all PDFs intact), 13 setlists, 41 pages with annotations (40 with strokes, 1 with only a text note). Converter naming fixed 2026-11-19 so "Artist - Title - Chords" no longer leaves a stray dash, and "Vancouver - Lyrics - Chords" becomes "Vancouver (lyrics)".
 - Annotations live in MobileSheets' database, not the PDFs. 40 pages carry marks: pen strokes and lines convert and line up with the music.
-- Not converted yet (WO1 adds them): 12 text boxes, crops (87 page crops across 55 songs). 1 stamp is not converted.
+- Converted in WO1 Part 4: text boxes (11 of 12; the twelfth was a single blank line) and crops (97 cropped pages in 58 songs: 20 songs get one song-wide crop, 38 songs get per-page crops). MobileSheets stores many all-zero or full-page crop rows meaning "no crop"; those are skipped. Not converted: 1 stamp, and text boxes' bold style.
 - "Set 2" / "Set 3" are placeholder songs with no file, used as set breaks in setlists → converted to Breaks (done in WO1 Part 3).
 - One song ("If It Takes A Lifetime - Chords 2") used only pages 1–2 of a 3-page PDF; the converter trims it.
 

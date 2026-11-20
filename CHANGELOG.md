@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-19: Crop margins and text notes
+- **Crop** in the viewer's top bar opens the page with a box you drag by its edges and corners. **Crop this page** crops one page, **Crop whole song** crops every page the same way, and **Reset** removes the crop. A cropped page is drawn larger to fill the screen. Your pen marks never move when you change a crop.
+- A cropped song prints cropped, with its annotations in the right place.
+- **Text** tool in the annotation bar: tap the page, type, pick small, medium or large and a pen colour. Tap a note to edit or delete it, or drag it to move it. Notes undo like pen strokes, print, and are included in backups. The eraser leaves notes alone.
+- MobileSheets conversion: your text notes (11 of 12; one was just a blank line) and your crops (97 cropped pages across 58 songs) now come across.
+
 ## 2026-11-19: Drag-and-drop setlists, breaks and duplicate
 - Reorder a setlist by dragging the handle on the left of a row (finger, stylus or mouse). The list scrolls when you drag near the top or bottom. The up and down arrows are gone.
 - **Add break** puts a break (named "Break") in the setlist. Tap its name to rename it, drag it like a song, or remove it.
