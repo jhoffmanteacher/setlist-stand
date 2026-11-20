@@ -56,10 +56,12 @@ export function modal(html){
       return;
     }
     if(e.key !== 'Tab') return;
-    const f = focusables(m); if(!f.length){ e.preventDefault(); box.focus(); return; }
-    const a = document.activeElement, i = f.indexOf(a);
-    if(e.shiftKey && (i <= 0)){ e.preventDefault(); f[f.length - 1].focus(); }
-    else if(!e.shiftKey && (i === -1 || i === f.length - 1)){ e.preventDefault(); f[0].focus(); }
+    /* Tab always moves focus here by itself, never by the browser's own Tab stops: Safari's default skips buttons and
+       checkboxes, which would drop focus out of the dialog (onto the page behind, where Escape does nothing). */
+    e.preventDefault();
+    const f = focusables(m); if(!f.length){ box.focus(); return; }
+    const i = f.indexOf(document.activeElement);
+    f[e.shiftKey ? (i <= 0 ? f.length - 1 : i - 1) : (i === -1 || i === f.length - 1 ? 0 : i + 1)].focus();
   });
   const remove = m.remove.bind(m);
   m.remove = () => {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-20: Screen-on button, protected charts print, Safari checked
+- **Screen-on button:** a sun button in the song's top bar shows whether the tablet is being kept awake. Tap it to let the screen dim or keep it on (it remembers). If the tablet refuses (older iPads), the button shows a "may dim" warning and the app says once to set Auto-Lock to Never in Settings.
+- **Protected charts print:** password-locked charts (many purchased PDFs) now print as pictures, with your pen marks, notes and crop in the right place, instead of being left out. The print dialog says the text won't be selectable and the file is bigger; "Print without them" and "Cancel" are still there. A chart that needs a real password to open is listed and left out.
+- **Safari checked:** the whole walkthrough now also runs in Safari's engine (WebKit). Findings fixed: the Tab key inside dialogs now stays inside them when you use a keyboard; a private Safari window now says it can't save files instead of a generic error; a "tablet is full" error is no longer hidden behind a generic one.
+
 ## 2026-11-20: Tougher against bad files, bad updates and stray taps
 - **The update note stays out of your way:** "Updated. Tap to reload" is hidden while a song is on screen and appears when you go Back, so a stray tap in the middle of a song can't reload the app.
 - **Emergency off switch:** if a bad update ever reaches the tablets, `BREAK-GLASS.md` explains how to switch the app's saved copy off and reload it from the web. It never touches your library.

@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, fileHashes, download, requireUmd} from './harness.mjs';
 
 const PL = requireUmd(path.join(ROOT, 'vendor', 'pdf-lib.min.js'));
@@ -93,6 +94,17 @@ function kit(){
       }
       return {max, nDiff, total: da.length / 4, mean: sum / (da.length / 4)};
     },
+    /* Like diff, but both pages are first scaled down to w x h (smoothed), so resampling and JPEG noise average out:
+       per pixel the largest channel difference; returns its mean, 99th percentile and max. */
+    smallDiff(a, i, b, j, w, h){
+      const shrink = src => { const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        const c = cv.getContext('2d'); c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+        c.fillStyle = '#fff'; c.fillRect(0, 0, w, h); c.drawImage(src, 0, 0, w, h); return c.getImageData(0, 0, w, h).data; };
+      const A = this.store[a][i], B = this.store[b][j], da = shrink(A), db = shrink(B), m = [];
+      for(let o = 0; o < da.length; o += 4) m.push(Math.max(Math.abs(da[o] - db[o]), Math.abs(da[o + 1] - db[o + 1]), Math.abs(da[o + 2] - db[o + 2])));
+      const sorted = m.slice().sort((x, y) => x - y);
+      return {mean: m.reduce((s, v) => s + v, 0) / m.length, p99: sorted[Math.floor(sorted.length * .99)], max: sorted.at(-1), sizes: [A.width, A.height, B.width, B.height]};
+    },
   };
 }
 async function ensureKit(page){ if(!(await page.evaluate(() => !!window.__pl))) await page.evaluate(`(${kit.toString()})()`); }
@@ -103,6 +115,7 @@ async function renderPdf(page, key, bytes, scale = 2){
 async function grabViewer(page, key, pn){ await ensureKit(page); return page.evaluate(([k, p]) => window.__pl.grabViewer(k, p), [key, pn]); }
 const boxOf = (page, key, i, spec, region) => page.evaluate(([k, i, s, r]) => window.__pl.box(k, i, s, r), [key, i, spec, region || null]);
 const pixDiff = (page, a, i, b, j) => page.evaluate(([a, i, b, j]) => window.__pl.diff(a, i, b, j), [a, i, b, j]);
+const smallDiff = (page, a, i, b, j, w, h) => page.evaluate(([a, i, b, j, w, h]) => window.__pl.smallDiff(a, i, b, j, w, h), [a, i, b, j, w, h]);
 
 /* ---------- driving the app ---------- */
 async function toLibrary(page){
@@ -275,6 +288,54 @@ async function sourceUntouched(page, ids, files){
   const h = await fileHashes(page);
   for(const [f, id] of Object.entries(ids)) if(files[f]) assert(h[id] === sha256(fs.readFileSync(files[f])), `stored PDF of ${f} changed: SHA-256 ${h[id]} != fixture`);
 }
+
+/* ---------- protected (encrypted) PDFs ---------- */
+/* An encrypted copy of src, made with pypdf (it lives in the user's site-packages, so python3 runs without -I).
+   user '' = opens anywhere without a password (typical for bought charts); owner password set. */
+function encryptPdf(src, dst, user = ''){
+  execFileSync('python3', ['-c', `import sys
+from pypdf import PdfReader, PdfWriter
+w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt(sys.argv[3], 'owner', algorithm='RC4-128'); w.write(sys.argv[2])`, src, dst, user]);
+  assert(fs.readFileSync(dst, 'latin1').includes('/Encrypt'), `${path.basename(dst)} is not encrypted (test setup)`);
+  return dst;
+}
+/* Writes one record straight into IndexedDB (b64: the value is a PDF Blob of these bytes). */
+const idbPut = (page, store, key, value, b64) => page.evaluate(([store, key, value, b64]) => new Promise((res, rej) => {
+  if(b64){ const bin = atob(b64), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); value = new Blob([u], {type: 'application/pdf'}); }
+  const r = indexedDB.open('setlist-stand');
+  r.onerror = () => rej(r.error);
+  r.onsuccess = () => { const d = r.result, tx = d.transaction(store, 'readwrite'); tx.objectStore(store).put(value, key);
+    tx.oncomplete = () => { d.close(); res(); }; tx.onerror = () => rej(tx.error); };
+}), [store, key, value, b64 || null]);
+const dialogText = page => page.locator('.modal').textContent().catch(() => '(closed)');
+/* Print through the real dialog up to the protected-charts question; returns its list items and buttons. */
+async function askProtected(page, withInk){
+  await page.click('#view [data-print]');
+  const m = page.locator('.modal');
+  await m.waitFor();
+  await m.locator('#pInk').setChecked(withInk);
+  await m.locator('[data-ok]').click();
+  await page.waitForFunction(() => document.querySelector('.modal #printLocked'), null, {timeout: 30000})
+    .catch(async () => { throw new Error(`no question about protected charts. Dialog: "${await dialogText(page)}", toast "${await page.locator('#toast').textContent()}"`); });
+  return {items: (await page.locator('.modal li').allTextContents()).map(x => x.trim()),
+    buttons: (await page.locator('.modal .btns button').allTextContents()).map(x => x.trim()), text: await dialogText(page)};
+}
+/* Taps "Print them as pictures"; returns the PDF bytes and every progress line shown while it worked. */
+async function printAsPictures(page){
+  await page.evaluate(() => { window.__stat = []; window.__statOb = new MutationObserver(() => {
+    const t = document.querySelector('#pStatus')?.textContent; if(t && window.__stat.at(-1) !== t) window.__stat.push(t); });
+    window.__statOb.observe(document.body, {subtree: true, childList: true, characterData: true}); });
+  const dl = await download(page, () => page.click('.modal [data-pics]'));
+  const statuses = await page.evaluate(() => { window.__statOb.disconnect(); return window.__stat; });
+  if(await page.locator('.modal').count()){ const x = page.locator('.modal [data-x]'); await x.waitFor({timeout: 5000}); await x.click(); }
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  return {bytes: await fsp.readFile(dl.file), statuses};
+}
+const PROTECTED_LINE = 'These charts are protected, so they print as pictures: the text will not be selectable and the file is larger.';
+/* A picture page must look like the same page printed from the open copy: both shrunk to a quarter of their size,
+   mean channel difference under 3 and 99% of pixels within 40 (JPEG and resampling noise; a wrong page, a shifted
+   page or missing marks are far outside this). */
+const LOOK = {mean: 3, p99: 40};
 
 /* ======================================================================================================== */
 export const loops = [
@@ -561,6 +622,125 @@ export const loops = [
       }
     }
     await sourceUntouched(page, ids, Object.fromEntries(files.map(f => [path.basename(f), f])));
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+{name: 'print: protected charts print as pictures (order, look, pen/highlighter/note, crop, /Rotate 90) next to copied songs', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    /* fixtures: an open /Rotate 90 page with a green marker and a label; encrypted copies of it and of two-page.pdf */
+    const doc = await PL.PDFDocument.create(), font = await doc.embedFont(PL.StandardFonts.HelveticaBold);
+    const rp = doc.addPage([PW, PH]);
+    rp.drawRectangle({x: 100, y: 160, width: 80, height: 80, color: PL.rgb(0, 160 / 255, 0)});
+    rp.drawText('Rotated 90', {x: 200, y: 400, size: 30, font, color: PL.rgb(0, 0, 0)});
+    rp.setRotation(PL.degrees(90));
+    const rotOpen = path.join(TMP, 'pic-rot90-open.pdf'); fs.writeFileSync(rotOpen, await doc.save());
+    const twoLocked = encryptPdf(path.join(FIX, 'two-page.pdf'), path.join(TMP, 'pic-two-locked.pdf'));
+    const rotLocked = encryptPdf(rotOpen, path.join(TMP, 'pic-rot90-locked.pdf'));
+    await s.goto();
+    const files = [path.join(FIX, 'two-page.pdf'), twoLocked, rotOpen, rotLocked, path.join(FIX, 'three-page.pdf')];
+    const ids = await importFiles(page, files);
+    const A = ids['two-page.pdf'], LA = ids['pic-two-locked.pdf'], R = ids['pic-rot90-open.pdf'], LR = ids['pic-rot90-locked.pdf'], B = ids['three-page.pdf'];
+    /* the same marks and crop on each protected song and its open twin (stored records are the input) */
+    const marks = [{id: 'pen', updated: 1, t: 'pen', c: RED, w: .006, p: [[.15, .15], [.3, .2], [.45, .28]]},
+      {id: 'hl', updated: 1, t: 'hl', c: YELLOW, w: .02, p: [[.5, .7], [.7, .72], [.85, .75]]},
+      {id: 'note', updated: 1, t: 'text', x: .12, y: .4, text: 'Verse 2', size: .018, c: BLUE}];
+    const cropP2 = {x: .1, y: .1, w: .8, h: .75}, cropR = {x: .08, y: .12, w: .87, h: .73};
+    for(const id of [A, LA]) for(const pn of [1, 2]) await idbPut(page, 'ink', id + ':' + pn, {updated: 1, strokes: marks});
+    for(const id of [R, LR]) await idbPut(page, 'ink', id + ':1', {updated: 1, strokes: marks});
+    const songs0 = await songsById(page);
+    for(const [id, crop] of [[A, {all: null, pages: {2: cropP2}}], [LA, {all: null, pages: {2: cropP2}}], [R, {all: cropR, pages: {}}], [LR, {all: cropR, pages: {}}]])
+      await idbPut(page, 'songs', id, {...songs0[id], crop});
+    await s.goto();                                         // the app reads songs (and their crops) at start
+    const songs = await songsById(page);
+    await setOf(page, 'Pictures', [LA, B, A, LR, R, LA]);
+    const ask = await askProtected(page, true);
+    assert(fmt(ask.items) === fmt([songs[LA].title, songs[LR].title]), `protected list ${fmt(ask.items)}, expected ${fmt([songs[LA].title, songs[LR].title])}`);
+    assert(ask.text.includes(PROTECTED_LINE), 'the dialog does not explain pictures: ' + ask.text);
+    assert(fmt(ask.buttons) === fmt(['Cancel', 'Print without them', 'Print them as pictures']), 'buttons ' + fmt(ask.buttons));
+    const {bytes, statuses} = await printAsPictures(page);
+    assert(statuses.length && statuses.every(t => /^Preparing protected pages: [0-3] of 3$/.test(t)) && statuses.at(-1) === 'Preparing protected pages: 3 of 3',
+      'progress lines ' + fmt(statuses));
+    /* page order: LA1 LA2 | B1 B2 B3 | A1 A2 | LR1 | R1 | LA1 LA2 */
+    const pages = await renderPdf(page, 'pics', bytes, 1);
+    assert(pages.length === 11, `printed ${pages.length} pages, expected 11`);
+    const opened = {2: 'Fixture Song B — page 1', 3: 'Fixture Song B — page 2', 4: 'Fixture Song B — page 3', 5: 'Fixture Song A — page 1', 6: 'Fixture Song A — page 2', 8: 'Rotated 90'};
+    for(const [i, t] of Object.entries(opened)) assert(pages[i].text.includes(t), `printed page ${+i + 1} reads "${pages[i].text}", expected it to contain "${t}"`);
+    const pics = {0: 5, 1: 6, 7: 8, 9: 5, 10: 6};          // picture page -> the open twin's printed page
+    for(const i of Object.keys(pics)) assert(!/Fixture Song|Rotated/.test(pages[i].text), `printed page ${+i + 1} is not a picture: its text reads "${pages[i].text}"`);
+    const fails = [];
+    for(const [i, j] of Object.entries(pics).map(([i, j]) => [+i, j])){
+      const name = `picture page ${i + 1} vs open page ${j + 1}`;
+      if(!near(pages[i].vw, pages[j].vw, .5) || !near(pages[i].vh, pages[j].vh, .5)) fails.push(`${name}: visible area ${pages[i].vw.toFixed(1)}x${pages[i].vh.toFixed(1)}pt vs ${pages[j].vw.toFixed(1)}x${pages[j].vh.toFixed(1)}pt`);
+      const d = await smallDiff(page, 'pics', i, 'pics', j, Math.round(pages[j].w / 4), Math.round(pages[j].h / 4));
+      if(!(d.mean <= LOOK.mean && d.p99 <= LOOK.p99)) fails.push(`${name}: looks different: mean ${d.mean.toFixed(2)}, p99 ${d.p99}, max ${d.max} (allowed ${fmt(LOOK)})`);
+      /* the other page of the same song must look clearly less alike (the order check has teeth) */
+      const other = {5: 6, 6: 5, 8: null}[j];
+      if(other != null){
+        const o = await smallDiff(page, 'pics', i, 'pics', other, Math.round(pages[j].w / 4), Math.round(pages[j].h / 4));
+        if(!(o.mean > d.mean * 2 || o.p99 > LOOK.p99)) fails.push(`${name}: open page ${other + 1} looks as alike (mean ${o.mean.toFixed(2)}, p99 ${o.p99}) as its twin (mean ${d.mean.toFixed(2)}, p99 ${d.p99})`);
+      }
+      for(const [k, spec] of [['pen', {c: RED, aMin: .5}], ['highlighter', {c: YELLOW, aMin: .3, aMax: .5, tol: 10}], ['note', {c: BLUE, aMin: .5}], ...(j === 8 ? [['marker', {c: MARKER, aMin: .9, tol: 30}]] : [])]){
+        const got = await boxOf(page, 'pics', i, spec), want = await boxOf(page, 'pics', j, spec);
+        if(!want.n) fails.push(`${name}: open page has no ${k} pixels (test setup)`);
+        else if(!boxNear(got, want, .006)) fails.push(`${name}: ${k} printed at ${bb(got)}, on the open copy at ${bb(want)}`);
+      }
+    }
+    /* the pages themselves: picture pages have no /Rotate, are as big as the page shown, and carry the same crop */
+    const out = await PL.PDFDocument.load(bytes), opg = out.getPages();
+    const cropWant = (W, H, c) => ({x: c.x * W, y: (1 - c.y - c.h) * H, width: c.w * W, height: c.h * H});
+    const expect = {0: [PW, PH, null], 1: [PW, PH, cropP2], 7: [PH, PW, cropR], 9: [PW, PH, null], 10: [PW, PH, cropP2]};
+    for(const [i, [W, H, c]] of Object.entries(expect)){
+      const pg = opg[i], mb = pg.getMediaBox(), cb = pg.getCropBox(), want = c ? cropWant(W, H, c) : {x: 0, y: 0, width: W, height: H};
+      if(pg.getRotation().angle !== 0 || !near(mb.width, W, .01) || !near(mb.height, H, .01)) fails.push(`page ${+i + 1}: media box ${fmt(mb)} rotate ${pg.getRotation().angle}, expected ${W}x${H} rotate 0`);
+      if(!['x', 'y', 'width', 'height'].every(k => near(cb[k], want[k], .5))) fails.push(`page ${+i + 1}: crop box ${fmt(cb)}, expected ${fmt(want)}`);
+    }
+    assert(pages[7].vw > pages[7].vh, `the /Rotate 90 picture page is ${pages[7].vw.toFixed(1)}x${pages[7].vh.toFixed(1)}pt, expected landscape like the viewer`);
+    assert(!fails.length, fails.join('; '));
+    await sourceUntouched(page, ids, Object.fromEntries(files.map(f => [path.basename(f), f])));
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'print: an all-protected set offers only pictures or Cancel; a chart that needs a password is named and left out', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    const oneLocked = encryptPdf(path.join(FIX, 'one-page.pdf'), path.join(TMP, 'pic-one-locked.pdf'));
+    /* "Needs Password": imported as an openable protected copy, then its stored bytes are replaced by a copy that
+       needs the password "secret" (the app refuses such files at import; a restore can still bring one in) */
+    const placeholder = encryptPdf(path.join(FIX, 'three-page.pdf'), path.join(TMP, 'Needs Password.pdf'));
+    const pw = fs.readFileSync(encryptPdf(path.join(FIX, 'three-page.pdf'), path.join(TMP, 'pic-real-password.pdf'), 'secret'));
+    await s.goto();
+    const ids = await importFiles(page, [oneLocked, placeholder, path.join(FIX, 'two-page.pdf')]);
+    const LO = ids['pic-one-locked.pdf'], NP = ids['Needs Password.pdf'], A = ids['two-page.pdf'];
+    await idbPut(page, 'files', NP, null, pw.toString('base64'));
+    const why = await page.evaluate(async b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      try{ const d = await pdfjsLib.getDocument({data: u}).promise; d.destroy(); return 'opened'; }catch(e){ return e.name; } }, pw.toString('base64'));
+    assert(why === 'PasswordException', 'test setup: the password copy gives ' + why + ' in pdf.js');
+    const songs = await songsById(page);
+    const npLine = `${songs[NP].title} needs a password, so it can't be printed.`;
+    /* all protected: no "Print without them" (there would be nothing to print) */
+    await setOf(page, 'All locked', [LO, NP, LO]);
+    const ask = await askProtected(page, true);
+    assert(fmt(ask.items) === fmt([songs[LO].title, npLine]), `list ${fmt(ask.items)}, expected ${fmt([songs[LO].title, npLine])}`);
+    assert(fmt(ask.buttons) === fmt(['Cancel', 'Print them as pictures']), 'buttons ' + fmt(ask.buttons));
+    const {bytes, statuses} = await printAsPictures(page);
+    assert(statuses.at(-1) === 'Preparing protected pages: 1 of 1', 'progress lines ' + fmt(statuses));
+    const got = await renderPdf(page, 'allpics', bytes, 1), src = await renderPdf(page, 'one', fs.readFileSync(path.join(FIX, 'one-page.pdf')), 1);
+    assert(got.length === 2, `printed ${got.length} pages, expected 2 (the password chart left out)`);
+    for(const i of [0, 1]){
+      const d = await smallDiff(page, 'allpics', i, 'one', 0, Math.round(src[0].w / 4), Math.round(src[0].h / 4));
+      assert(d.mean <= LOOK.mean && d.p99 <= LOOK.p99, `picture page ${i + 1} does not look like one-page.pdf: mean ${d.mean.toFixed(2)}, p99 ${d.p99} (allowed ${fmt(LOOK)})`);
+    }
+    /* only the password chart and an open song: it is named on its own line; Print without them prints the rest */
+    await setOf(page, 'Password and open', [NP, A]);
+    const ask2 = await askProtected(page, true);
+    assert(fmt(ask2.items) === fmt([npLine]) && !ask2.text.includes(PROTECTED_LINE), 'dialog ' + ask2.text);
+    assert(fmt(ask2.buttons) === fmt(['Cancel', 'Print without them']), 'buttons ' + fmt(ask2.buttons));
+    const dl = await download(page, () => page.click('.modal [data-without]'));
+    if(await page.locator('.modal').count()) await page.click('.modal [data-x]');
+    const rest = await renderPdf(page, 'rest', await fsp.readFile(dl.file), .5);
+    assert(fmt(rest.map(p => p.text)) === fmt(['Fixture Song A — page 1', 'Fixture Song A — page 2']), 'printed ' + fmt(rest.map(p => p.text)));
     noErrors(s);
   } finally { await s.close(); }
 }},

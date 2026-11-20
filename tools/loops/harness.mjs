@@ -15,8 +15,9 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import vm from 'node:vm';
-import {chromium} from 'playwright';
+import {launchBrowser, WEBKIT} from './browser.mjs';
 
+export {WEBKIT, ENGINE} from './browser.mjs';
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const FIX = path.join(ROOT, 'tests', 'fixtures');
 export const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'setlist-loops-'));
@@ -80,7 +81,7 @@ export async function startServer({root = ROOT, overrides = new Map()} = {}){
 /* A browser session: new context + page. `errors` collects page errors and console errors; `requests` every URL requested. */
 export async function openSession(base, {viewport = {width: 1280, height: 800}, hasTouch = false, browser, storage} = {}){
   const own = !browser;
-  browser = browser || await chromium.launch();
+  browser = browser || await launchBrowser();
   const context = await browser.newContext({viewport, hasTouch, acceptDownloads: true, serviceWorkers: 'allow', ...(storage ? {storageState: storage} : {})});
   const page = await context.newPage();
   const errors = [], requests = [];
@@ -168,6 +169,11 @@ export async function backupNow(page){
   return download(page, () => page.click('[data-backup]'));
 }
 /* Wipe the app's database (as a fresh install would be). */
-export const wipe = page => page.evaluate(() => new Promise(res => {
-  const r = indexedDB.deleteDatabase('setlist-stand'); r.onsuccess = r.onerror = r.onblocked = () => res();
-}));
+export const wipe = async page => {
+  /* The app keeps its database open, so the delete is "blocked" until the page goes away. Chromium then finishes it after the
+     reload; WebKit drops it and the data stays. Under WebKit delete from a bare page of the same site (no connection open). */
+  if(WEBKIT && /^https?:/.test(page.url())) await page.goto(new URL('/css/app.css', page.url()).href);
+  await page.evaluate(() => new Promise(res => {
+    const r = indexedDB.deleteDatabase('setlist-stand'); r.onsuccess = r.onerror = r.onblocked = () => res();
+  }));
+};

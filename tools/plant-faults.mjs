@@ -27,6 +27,10 @@ import {fileURLToPath} from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const FAULTS = [
+  {id: 'awake-ignores-preference', file: 'js/awake.js', find: "const wanted = () => { try{ return localStorage.getItem(KEY) !== '0'; }catch(e){ return true; } };", replace: 'const wanted = () => true;',
+    loop: 'wakelock: the lock follows', why: 'the "Screen can dim" setting is saved but ignored: the screen is kept on anyway, and a song opened with it off still asks for the lock'},
+  {id: 'awake-release-not-shown', file: 'js/awake.js', find: "got.addEventListener('release', () => { if(sentinel === got){ sentinel = null; render(); } });", replace: '',
+    loop: 'wakelock: the lock follows', why: 'when the system takes the screen lock back, the button still says the screen stays on'},
   {id: 'backup-no-ink', file: 'js/backup.js', find: 'songs:out, sets, ink}));', replace: 'songs:out, sets}));',
     loop: 'reproduces every record', why: 'a backup without annotations loses every mark on restore'},
   {id: 'restore-skips-missing-pdf', file: 'js/backup.js',
@@ -108,6 +112,17 @@ const FAULTS = [
     loop: 'import.loop', why: 'the stored hash is not the PDF\'s, so duplicates and restore checks go wrong'},
   {id: 'duplicate-shares-break-ids', file: 'js/setlists.js', find: "it.type === 'break' ? {...it, id:uid()} : {...it}", replace: '({...it})',
     loop: 'model.loop', why: 'a duplicated setlist\'s breaks keep the original ids (renaming one could rename the other)'},
+  {id: 'dialog-tab-native', file: 'js/util.js',
+    find: "    e.preventDefault();\n    const f = focusables(m); if(!f.length){ box.focus(); return; }",
+    replace: "    const f = focusables(m); if(!f.length){ e.preventDefault(); box.focus(); return; }\n    if(f.indexOf(document.activeElement) > 0 && f.indexOf(document.activeElement) < f.length - 1) return;\n    e.preventDefault();",
+    loop: 'viewer-hardening 13', why: 'in Safari, Tab skips the dialog buttons and focus falls out onto the page behind'},
+  {id: 'private-window-message', file: 'js/errors.js', find: 'if(isPrivateWindow(err)) return', replace: 'if(false) return',
+    loop: 'viewer-hardening 14', why: 'in a private Safari window every import fails with only a generic message'},
+  {id: 'print-picture-marks-misplaced', file: 'js/print.js', find: 'await markPage(pg, {x:0, y:0, width:pic.w, height:pic.h}, 0, id, song, i + 1);',
+    replace: 'await markPage(pg, {x:0, y:0, width:pic.h, height:pic.w}, 0, id, song, i + 1);',
+    loop: 'print: protected charts print as pictures', why: 'marks and crop on a protected chart printed as a picture land in the wrong place'},
+  {id: 'print-protected-still-dropped', file: 'js/print.js', find: 'if(r.pics) for(const [i, pic] of r.pics.entries()){', replace: 'if(false) for(const [i, pic] of r.pics.entries()){',
+    loop: 'all-protected set', why: '"Print them as pictures" still leaves the protected charts out'},
 ];
 
 const args = process.argv.slice(2);

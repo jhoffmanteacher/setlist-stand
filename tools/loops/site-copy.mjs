@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {TMP, sleep, assert} from './harness.mjs';
+import {TMP, sleep, assert, WEBKIT} from './harness.mjs';
 
 /* ---------- sw.js, read as tools/checks.mjs reads it ---------- */
 function stripJsComments(src){
@@ -108,6 +108,7 @@ export async function goOffline(context, server){
               controls the page a reload is answered from the cache and does not reach the server.
    An "exactly one reload" needs committed, docs and loads all to be 1 (and asked <= 1). */
 export async function navCounter(page, server){
+  if(WEBKIT) throw new Error('navCounter needs Chromium DevTools (CDP); run without SS_BROWSER=webkit');
   const c = {committed: 0, docs: 0, loads: 0, asked: 0, serverDocs: 0};
   page.on('framenavigated', f => { if(f === page.mainFrame()) c.committed++; });
   page.on('request', r => { if(r.isNavigationRequest() && r.frame() === page.mainFrame()) c.docs++; });

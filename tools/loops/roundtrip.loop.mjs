@@ -527,7 +527,10 @@ async function loopInterrupt(ctx){
       outcomes.push(`${delay}ms: ${same ? 'unchanged' : done ? 'complete' : 'PARTIAL'}`);
       assert(same || done, `reload ${delay}ms into the restore of the ${src} left a PARTIAL library: ` +
         stores.map(k => `${k} ${Object.keys(B[k]).length} (before ${Object.keys(b0[k]).length}, complete ${Object.keys(b0[k]).length + restored[k].length})`).join(', '));
-      assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
+      /* This test reloads the page while it is still reading the picked file. WebKit reports that cancelled read as a failed
+         blob fetch ("... due to access control checks") from the page being torn down; that is the interruption itself, not an app error. */
+      const errs = process.env.SS_BROWSER === 'webkit' ? s.errors.filter(e => !/due to access control checks/i.test(e)) : s.errors;
+      assert(errs.length === 0, 'page errors: ' + errs.join(' | '));
     } finally { await s.close(); }
   }
   if(ctx.opts.verbose) console.log('  interrupted restores: ' + outcomes.join('; '));

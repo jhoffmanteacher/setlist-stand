@@ -248,7 +248,7 @@ export const loops = [
   } finally { await s.close(); }
 }},
 
-{name: 'viewer-hardening 2: an encrypted PDF is named in the print dialog and left out; no blank pages are printed', async run(ctx){
+{name: 'viewer-hardening 2: an encrypted PDF is named in the print dialog; Cancel saves nothing, Print without them leaves it out; no blank pages are printed', async run(ctx){
   const s = await ctx.session(), page = s.page;
   try{
     /* encrypted copy of one-page.pdf: empty user password (opens in pdf.js), owner password set */
@@ -261,16 +261,19 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     const ids = await importFiles(page, [path.join(FIX, 'three-page.pdf'), enc, path.join(FIX, 'two-page.pdf')]);
     const L = ids['Locked Chart.pdf'], B = ids['three-page.pdf'], A = ids['two-page.pdf'];
     await newSet(page, 'With lock', [B.title, L.title, A.title, L.title]);
+    const sentence = 'These charts are protected, so they print as pictures: the text will not be selectable and the file is larger.';
+    const askShown = () => page.waitForFunction(t => document.querySelector('.modal')?.textContent.includes(t), sentence, {timeout: 20000})
+      .catch(async () => { throw new Error(`print dialog does not explain the protected song. Dialog: "${await page.locator('.modal').textContent().catch(() => '(closed)')}", toast "${await page.locator('#toast').textContent()}"`); });
     /* Cancel: nothing is saved */
     let m = await openPrint(page, true);
     let downloads = 0; const onDl = () => downloads++; page.on('download', onDl);
     await m.locator('[data-ok]').click();
-    const msg = `${L.title} is password-protected, so it can't be printed; it still plays on the screen.`;
-    await page.waitForFunction(t => document.querySelector('.modal')?.textContent.includes(t), msg, {timeout: 20000})
-      .catch(async () => { throw new Error(`print dialog does not name the locked song. Dialog: "${await page.locator('.modal').textContent().catch(() => '(closed)')}", toast "${await page.locator('#toast').textContent()}"`); });
-    const items = await page.locator('.modal li').allTextContents();
-    assert(items.length === 1 && items[0] === msg, 'locked list ' + fmt(items));
-    assert(await page.locator('.modal [data-ok]').textContent() === 'Print without them' && await page.locator('.modal [data-x]').textContent() === 'Cancel', 'buttons: ' + fmt(await page.locator('.modal button').allTextContents()));
+    await askShown();
+    const items = (await page.locator('.modal li').allTextContents()).map(x => x.trim());
+    assert(items.length === 1 && items[0] === L.title, 'locked list ' + fmt(items) + ', expected ' + fmt([L.title]));
+    const btns = (await page.locator('.modal .btns button').allTextContents()).map(x => x.trim());
+    assert(fmt(btns) === fmt(['Cancel', 'Print without them', 'Print them as pictures']), 'buttons: ' + fmt(btns));
+    assert(await page.locator('.modal [data-pics].pri').count() === 1, 'Print them as pictures is not the main button');
     await page.click('.modal [data-x]');
     await page.waitForFunction(() => !document.querySelector('.modal'));
     await sleep(800);
@@ -279,8 +282,8 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     /* Print without them */
     m = await openPrint(page, true);
     await m.locator('[data-ok]').click();
-    await page.waitForFunction(t => document.querySelector('.modal')?.textContent.includes(t), msg, {timeout: 20000});
-    const dl = await download(page, () => page.click('.modal [data-ok]'));
+    await askShown();
+    const dl = await download(page, () => page.click('.modal [data-without]'));
     await closeModal(page);
     const pages = await renderBack(page, await fsp.readFile(dl.file));
     const want = ['B — page 1', 'B — page 2', 'B — page 3', 'A — page 1', 'A — page 2'].map(x => 'Fixture Song ' + x);
@@ -642,5 +645,53 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     assert(await page.locator('#viewer.on').count() === 1, 'the song is no longer open');
     noErrors(s);
   } finally { ctx.server.root = ctx.root; await s.close(); removeCopy(v2); }
+}},
+
+{name: 'viewer-hardening 13: Tab inside a dialog moves focus by itself through every field and button and wraps (Safari skips buttons)', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    const {id} = (await importFiles(page, [path.join(FIX, 'one-page.pdf')]))['one-page.pdf'];
+    await page.click(`#libList [data-edit="${id}"]`);
+    await page.waitForSelector('.modal input[data-k=song]');
+    /* A synthetic Tab never moves focus by the browser's own rules, so only the dialog's own handling can move it. */
+    const tab = shift => page.evaluate(shift => {
+      const ev = new KeyboardEvent('keydown', {key: 'Tab', shiftKey: shift, bubbles: true, cancelable: true});
+      (document.activeElement || document.body).dispatchEvent(ev);
+      const a = document.activeElement;
+      return {prevented: ev.defaultPrevented, where: a ? (a.dataset.k ? 'input:' + a.dataset.k : a.hasAttribute('data-x') ? 'cancel' : a.hasAttribute('data-ok') ? 'save' : a.tagName) : 'none', inside: !!(a && a.closest('.modal'))};
+    }, shift);
+    const forward = [];
+    for(let i = 0; i < 6; i++) forward.push(await tab(false));
+    const names = forward.map(r => r.where);
+    assert(forward.every(r => r.prevented && r.inside), `a Tab left the dialog or was not handled by it: ${JSON.stringify(forward)}`);
+    assert(new Set(names).size === 5 && names[5] === names[0], `Tab did not visit all five controls and wrap: ${names.join(' > ')}`);
+    assert(names.includes('cancel') && names.includes('save'), `Tab never reached Cancel and Save: ${names.join(' > ')}`);
+    const back = await tab(true);
+    assert(back.prevented && back.inside && back.where === names[4], `Shift+Tab went to ${back.where}, expected ${names[4]}`);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 5000}).catch(() => { throw new Error('Escape did not close the dialog'); });
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'viewer-hardening 14: a private Safari window gets a plain message; a full tablet and other errors keep theirs', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    const out = await page.evaluate(async () => {
+      const {explainError} = await import('./js/errors.js');
+      return {
+        priv: explainError({name: 'UnknownError', message: 'Error preparing Blob/File data to be stored in object store'}),
+        quota: explainError({name: 'QuotaExceededError', message: 'x'}),
+        other: explainError(new Error('boom')),
+        nul: explainError(null),
+      };
+    });
+    assert(/private window/i.test(out.priv) && /Nothing was changed/.test(out.priv), `private window message: ${out.priv}`);
+    assert(/tablet is full/i.test(out.quota), `quota message: ${out.quota}`);
+    assert(out.other === 'Something went wrong. Nothing was lost.' && out.nul === out.other, `generic message: ${out.other} / ${out.nul}`);
+    noErrors(s);
+  } finally { await s.close(); }
 }},
 ];

@@ -19,7 +19,7 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import vm from 'node:vm';
 import zlib from 'node:zlib';
-import {chromium} from 'playwright';
+import {launchBrowser, WEBKIT} from './loops/browser.mjs';
 import {acquireSlot} from './loops/slot.mjs';
 import {splitName, displayName} from '../js/names.js';
 
@@ -1509,6 +1509,9 @@ const STEPS = [
 ];
 
 /* ---------- runner ---------- */
+/* Under SS_BROWSER=webkit these steps SKIP: they send touch input through Chromium's DevTools protocol (Input.dispatchTouchEvent);
+   Playwright's WebKit can tap but cannot drag with a finger. */
+const WEBKIT_SKIP = new Map([[stepDragTouch, 'touch drag needs Chromium DevTools (CDP)'], [stepDragLong, 'touch drag needs Chromium DevTools (CDP)']]);
 const TMP = await fsp.mkdtemp(path.join(os.tmpdir(), 'setlist-smoke-'));
 process.on('exit', () => { if(!process.env.SS_KEEP_TMP && !failed) try{ fs.rmSync(TMP, {recursive: true, force: true}); }catch(e){} });   // a failed run keeps its folder (the failure screenshot is in it)
 let failed = 0, server, browser;
@@ -1517,10 +1520,10 @@ try{
   server = await startServer();
   const base = `http://127.0.0.1:${server.address().port}/`;
   await acquireSlot('smoke');            // one browser run at a time, and only when the Mac is not busy
-  browser = await chromium.launch({headless: true});
+  browser = await launchBrowser({headless: true});
   const context = await browser.newContext({viewport: {width: 1280, height: 800}, acceptDownloads: true, hasTouch: true});
   const page = await context.newPage();
-  const cdp = await context.newCDPSession(page);
+  const cdp = WEBKIT ? null : await context.newCDPSession(page);      // CDP is Chromium only
   page.setDefaultTimeout(15000);
   const t = {page, context, cdp, base, data: {}, external: [], errors: []};
   context.on('request', r => { const u = r.url(); try{ const h = new URL(u).hostname; if(!['127.0.0.1', 'localhost'].includes(h)) t.external.push(u); }catch(e){ t.external.push(u); } });
@@ -1528,6 +1531,7 @@ try{
   let stop = false;
   for(const [name, fn] of STEPS){
     if(stop){ console.log(`SKIP: ${name}`); continue; }
+    if(WEBKIT && WEBKIT_SKIP.has(fn)){ console.log(`SKIP: ${name} (WebKit: ${WEBKIT_SKIP.get(fn)})`); continue; }
     try{ await fn(t); console.log(`PASS: ${name}`); }
     catch(e){
       failed++; stop = true;

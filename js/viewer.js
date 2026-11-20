@@ -1,17 +1,13 @@
 import {$, toast, hooks} from './util.js';
 import {get, getInk, songById, cropOf} from './store.js';
 import {openCropper} from './crop.js';
+import {awakeOpen, awakeClose, initAwake} from './awake.js';
 import {paint, setAnnot, inkBusy, inkReset, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
 export const V = {queue:[], qi:0, brk:null, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
   tool:'pen', color:'#1a1a1a', tok:0, dt:0, busy:false, cache:new Map(), ink:new Map(), hist:[]};
 try{ V.two = localStorage.getItem('ss-two') !== '0'; }catch(e){}
-
-let wl = null;
-async function lock(){ try{ wl = await navigator.wakeLock.request('screen'); }catch(e){} }
-function unlock(){ try{ wl && wl.release(); }catch(e){} wl = null; }
-document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && viewer.classList.contains('on')) lock(); });
 
 /* entries: [{type:'song', id} | {type:'break', id, name}] */
 export async function openViewer(entries, qi, page = 1){
@@ -20,7 +16,7 @@ export async function openViewer(entries, qi, page = 1){
   viewer.classList.add('on'); viewer.classList.remove('hide');
   document.body.style.overflow = 'hidden';
   document.body.classList.add('playing');      // hides the "Updated. Tap to reload" banner: a stray tap mid-song must not reload the app
-  lock();
+  awakeOpen();
   await show(qi, page);
 }
 /* Where the viewer is, for putting it back after the page reloads. null when it is closed. */
@@ -36,7 +32,7 @@ export function closeViewer(){
   V.cache.clear(); stage.innerHTML = '';
   document.body.style.overflow = '';
   document.body.classList.remove('playing');
-  unlock();
+  awakeClose();
   if(document.fullscreenElement) document.exitFullscreen().catch(() => {});
   hooks.render();
 }
@@ -191,6 +187,7 @@ stage.addEventListener('pointercancel', e => {
 
 export function initViewer(){
   $('#vBack').onclick = closeViewer;
+  initAwake();
   $('#vCrop').onclick = () => openCropper();
   $('#vPrev').onclick = prev;
   $('#vNext').onclick = next;

@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {chromium} from 'playwright';
+import {launchBrowser, WEBKIT} from './loops/browser.mjs';
 import {ROOT, startServer, openSession, privatePath} from './loops/harness.mjs';
 import {acquireSlot} from './loops/slot.mjs';
 
@@ -32,14 +32,20 @@ if(args.includes('--list')){ for(const l of all) console.log(`${l.file}  ${l.nam
 await acquireSlot('loops');            // one browser run at a time, and only when the Mac is not busy
 const root = opt('--root') ? path.resolve(opt('--root')) : ROOT;
 const server = await startServer({root});
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 const o = {seed: Number(opt('--seed') || 1), case: opt('--case') == null ? null : Number(opt('--case')), cases: opt('--cases') == null ? null : Number(opt('--cases')), verbose: args.includes('--verbose'), wait: Number(opt('--wait') || 0)};
 const ctx = {root, opts: o, base: server.base, server, live: liveUrl, library: privatePath('setlist-stand-from-mobilesheets.zip'), msb: privatePath('MobileSheets_2026-11-18.msb'),
   browser, session: o => openSession(server.base, {browser, ...o})};
+/* Under SS_BROWSER=webkit these loops SKIP: they drive Chromium's DevTools protocol (CDP), which WebKit does not have. */
+const CDP = 'needs Chromium DevTools (CDP) to count reloads or throttle the network';
+const WEBKIT_SKIP = [[/^update /, CDP], [/^kill switch/, CDP], [/^offline h:/, CDP]];
 let failed = 0, n = 0;
+const skippedWebkit = [];
 for(const l of all){
   if(only && !(l.name + ' ' + l.file).toLowerCase().includes(only.toLowerCase())) continue;
   n++;
+  const why = WEBKIT && WEBKIT_SKIP.find(([re]) => re.test(l.name));
+  if(why){ console.log(`SKIP: ${l.name} (WebKit: ${why[1]})`); skippedWebkit.push(l.name); continue; }
   const missing = (l.needs || []).filter(k => !ctx[k]);
   if(missing.length){ console.log(`SKIP: ${l.name} (needs ${missing.join(', ')})`); continue; }
   const t0 = Date.now();
@@ -47,5 +53,6 @@ for(const l of all){
   catch(e){ failed++; console.log(`FAIL: ${l.name}: ${e.message}`); if(process.env.SS_TRACE) console.log(e.stack); }
 }
 await browser.close(); server.close();
+if(skippedWebkit.length) console.log(`skipped under WebKit (${skippedWebkit.length}): ${skippedWebkit.join('; ')}`);
 console.log(failed ? `${failed} of ${n} loops FAILED` : `all ${n} loops ran clean`);
 process.exit(failed ? 1 : 0);

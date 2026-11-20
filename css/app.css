@@ -72,6 +72,12 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 .sw i{display:block;width:22px;height:22px;border-radius:50%;border:2px solid #555}
 .sw.hl i{border-radius:4px;height:14px;width:26px}
 .gap{width:10px}
+#vAwake{position:relative;width:44px;padding:0;display:grid;place-items:center}
+#vAwake svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+#vAwake .slash{display:none}
+#vAwake[data-state=off] .slash{display:inline}
+#vAwake[data-state=dim]{border:2px dashed #e0a800;color:#ffcf40}
+#vAwake[data-state=dim]::after{content:"!";position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#e0a800;color:#1a1a1a;font-size:13px;font-weight:700;line-height:18px;text-align:center}
 #nextup{position:absolute;right:12px;bottom:12px;background:rgba(20,21,25,.88);color:#eeeae2;padding:8px 12px;border-radius:10px;font-size:15px;pointer-events:none}
 #viewer.annot #nextup{display:none}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:30;padding:16px}

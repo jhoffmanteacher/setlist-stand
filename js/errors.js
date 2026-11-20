@@ -5,9 +5,13 @@ import {esc, toast, modal} from './util.js';
 
 const isQuota = err => !!err && (err.name === 'QuotaExceededError' || err.code === 22 || /quota/i.test(String(err.message || '')));
 
+/* Safari's private windows cannot store files ("Error preparing Blob/File data to be stored in object store"). */
+const isPrivateWindow = err => !!err && err.name === 'UnknownError' && /blob|file data/i.test(String(err.message || ''));
+
 /* One plain sentence for an error. `fallback` replaces the generic sentence when the caller knows better. */
 export function explainError(err, fallback = 'Something went wrong. Nothing was lost.'){
   if(isQuota(err)) return 'The tablet is full. Free up some space, then try again. Nothing was changed.';
+  if(isPrivateWindow(err)) return "This window can't save files (is it a private window?). Open Setlist Stand in a normal tab or from the home screen. Nothing was changed.";
   return fallback;
 }
 

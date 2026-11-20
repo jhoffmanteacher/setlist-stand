@@ -13,11 +13,14 @@ function db(){
   });
   return dbp;
 }
+/* A failed request reports its error on the request (e.target.error); the transaction's own `error` is still null at that
+   moment in Safari, which would hide a "tablet is full" error behind a generic one. */
+const txErr = (t, e) => (e && e.target && e.target.error) || t.error || new Error('The save failed');
 async function tx(store, mode, fn){
   const d = await db();
   return new Promise((res, rej) => {
     const t = d.transaction(store, mode); const r = fn(t.objectStore(store));
-    t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error);
+    t.oncomplete = () => res(r && r.result); t.onerror = e => rej(txErr(t, e));
     t.onabort = () => rej(t.error || new Error('aborted'));     // a full disk at commit aborts without an error event
   });
 }
@@ -46,7 +49,7 @@ export async function putAll(ops){
   await new Promise((res, rej) => {
     const stores = [...new Set(ops.map(storeOf))], t = d.transaction(stores, 'readwrite');
     t.oncomplete = () => res();
-    t.onerror = () => rej(t.error);
+    t.onerror = e => rej(txErr(t, e));
     t.onabort = () => rej(t.error || new Error('aborted'));
     /* A key range delete is one request, so it stays in order with the puts around it (a cursor would not).
        A request that throws (say a value that cannot be stored) aborts the whole transaction: the earlier ops are undone too. */
@@ -69,7 +72,7 @@ export async function update(store, key, fn){
     const t = d.transaction(store, 'readwrite'), st = t.objectStore(store);
     let out;
     t.oncomplete = () => res(out);
-    t.onerror = () => rej(t.error);
+    t.onerror = e => rej(txErr(t, e));
     t.onabort = () => rej(t.error || new Error('aborted'));
     const r = st.get(key);
     r.onsuccess = () => {
@@ -184,7 +187,7 @@ export async function delInkFor(songId){
   await new Promise((res, rej) => {
     const t = d.transaction('ink', 'readwrite'), st = t.objectStore('ink');
     st.openKeyCursor(IDBKeyRange.bound(lo, hi)).onsuccess = e => { const c = e.target.result; if(c){ st.delete(c.key); c.continue(); } };
-    t.oncomplete = res; t.onerror = () => rej(t.error);
+    t.oncomplete = res; t.onerror = e => rej(txErr(t, e));
     t.onabort = () => rej(t.error || new Error('aborted'));
   });
 }
