@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-21: Pages turn faster, and the next song in a setlist is ready before you get to it
+- **Page turns:** turning forward or back a page now shows the next page straight away. The page on either side is drawn ahead.
+- **Next song in a setlist:** while the last page of a song is showing (or a break page), the next song is opened and its first page drawn, so the turn into it takes no waiting. Going back into the previous song works the same way, and so does the song after a break.
+- **Memory:** the app keeps a limited number of drawn pages (by size, not only by count) and gives the memory back for the ones it drops, so it should stay steady on an iPad. A song opened ahead and not played is closed again.
+- Page turns, break pages and Back behave as before.
+
 ## 2026-11-21: Three line thicknesses for the pens
 - **Pen thickness:** when a pen is chosen, three small buttons next to the colours let you pick a thin, medium or thick line. Medium is the line the pen always drew. The app remembers your choice.
 - The highlighter stays as it was, and so do all the marks you already made. Thin, medium and thick lines print as drawn.
