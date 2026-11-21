@@ -487,7 +487,7 @@ async function stepArchive(t){
   assert((await songRec(page, s => s.id === id)).archived === false, 'song record still archived after Restore');
 }
 
-async function stepReplace(t){
+async function stepNewVersion(t){
   const {page} = t;
   const id = t.data.edId;
   await openSong(page, ED_TITLE);
@@ -498,37 +498,73 @@ async function stepReplace(t){
   for(let i = 0; i < 2; i++) await drawOn(page, page.locator('#stage .sheet').nth(i));
   await page.click('#tDone');
   await waitFor(async () => { const ink = await idbAll(page, 'ink'); return liveOf(ink[id + ':1']).length && liveOf(ink[id + ':2']).length; },
-    'strokes on both pages not saved before replace');
+    'strokes on both pages not saved before New version');
   await page.click('#vBack');
 
-  const before = await songRec(page, s => s.id === id);
+  const before = await songRec(page, s => s.id === id), inkBefore = await idbAll(page, 'ink');
+  const known = new Set(Object.keys(await idbAll(page, 'songs')));
   const posBefore = songIds(await gigSet(page)).indexOf(id);
-  assert(posBefore >= 0, 'song not in Gig before replace');
+  assert(posBefore >= 0, 'song not in Gig before New version');
+  assert(before.pages === 2, 'pages before New version = ' + before.pages);
   await toLibrary(page);
-  const b = rowFor(page, '#libList', ED_TITLE).locator('[data-replace]');
-  await b.click();
-  assert(await b.textContent() === 'Clears notes. Tap again', 'first tap on Replace PDF shows "' + await b.textContent() + '"');
-  assert(before.pages === 2, 'pages before replace = ' + before.pages);
-  await b.click();
-  await page.setInputFiles('#replaceFile', path.join(FIX, 'one-page.pdf'));
+  const b = rowFor(page, '#libList', ED_TITLE).locator('[data-newversion]');
+  assert(await b.textContent() === 'New version', 'the library button says "' + await b.textContent() + '", not "New version"');
+  await b.click();                                   // one tap opens the file picker (the confirm comes after the pick)
+  await page.setInputFiles('#newVersionFile', path.join(FIX, 'one-page.pdf'));
+  const m = page.locator('.modal.nvask');
+  await m.waitFor({timeout: 10000}).catch(() => { throw new Error('no New version question after the pick'); });
+  const q = (await m.locator('p').textContent()).replace(/\s+/g, ' ').trim();
+  assert(q === `Use one-page.pdf as the new version of ${ED_TITLE}? The current chart and its marks move to Archived.`, 'New version question: ' + q);
+  assert(await m.locator('[data-ok]').textContent() === 'New version' && await m.locator('[data-x]').textContent() === 'Cancel', 'New version question buttons');
+  await m.locator('[data-ok]').click();
   await page.waitForFunction(id => /^1 page$/.test(document.querySelector(`#libList [data-open="${id}"] .s`)?.textContent || ''), id, {timeout: 10000})
-    .catch(async () => { throw new Error('library row after replace: ' + await rowFor(page, '#libList', ED_TITLE).innerText().catch(() => '(missing)')); });
+    .catch(async () => { throw new Error('library row after New version: ' + await rowFor(page, '#libList', ED_TITLE).innerText().catch(() => '(missing)')); });
+  assert(/^New version in place\. The old one is in Archived\./.test(await page.locator('#toast').textContent()), 'toast after New version: ' + await page.locator('#toast').textContent());
 
   const after = await songRec(page, s => s.id === id);
-  assert(after && !after.deleted && after.title === ED_TITLE, 'song lost its id or details after replace');
-  assert(after.pages === 1, 'pages after replace = ' + after.pages);
+  assert(after && !after.deleted && after.title === ED_TITLE, 'song lost its id or details after New version');
+  assert(after.pages === 1, 'pages after New version = ' + after.pages);
   assert(/^[0-9a-f]{64}$/.test(after.hash) && after.hash !== before.hash, `hash not updated (${before.hash} -> ${after.hash})`);
-  assert(songIds(await gigSet(page)).indexOf(id) === posBefore, 'song moved or left setlist Gig after replace');
+  assert(songIds(await gigSet(page)).indexOf(id) === posBefore, 'song moved or left setlist Gig after New version');
   const ink = await idbAll(page, 'ink');
   for(const k of Object.keys(ink).filter(k => k.startsWith(id + ':'))){
     const v = ink[k];
     assert(v && Array.isArray(v.strokes) && v.strokes.every(s => s.deleted === true && s.id && s.updated), `ink ${k} still has live strokes: ` + JSON.stringify(v).slice(0, 200));
   }
+  /* the old chart: one new archived song with the old hash, the version marked old, and the old marks on the same pages */
+  const fresh = Object.values(await idbAll(page, 'songs')).filter(s => !known.has(s.id));
+  assert(fresh.length === 1, 'New version made ' + fresh.length + ' new song records');
+  const old = fresh[0];
+  assert(old.archived === true && old.hash === before.hash && old.pages === 2 && old.song === ED.song && old.artist === ED.artist && /^live take, old \d{4}-\d\d-\d\d$/.test(old.version)
+    && old.title === `${ED.song} (${old.version}) - ${ED.artist}`, 'the old copy: ' + JSON.stringify(old));
+  for(const pn of [1, 2]) assert(JSON.stringify(liveOf(ink[old.id + ':' + pn])) === JSON.stringify(liveOf(inkBefore[id + ':' + pn])), `the old copy's marks on page ${pn} are not the old chart's`);
+  assert(!songIds(await gigSet(page)).includes(old.id), 'the old copy is in setlist Gig');
   await openSong(page, ED_TITLE);
-  await waitSub(page, /^Page 1 of 1$/, 'replaced chart');
+  await waitSub(page, /^Page 1 of 1$/, 'new chart');
   await sleep(300);
-  assert(!(await canvasHasMarks(page, '#stage .ink', 'ink')), 'old annotations still drawn on the replaced chart');
+  assert(!(await canvasHasMarks(page, '#stage .ink', 'ink')), 'old annotations still drawn on the new chart');
   await page.click('#vBack');
+
+  /* in Archived it opens with its marks; deleting it there never touches the new chart */
+  await toLibrary(page);
+  await page.check('#showArch');
+  const orow = page.locator(`#libList li.row:has([data-restoresong="${old.id}"])`);
+  assert(await orow.count() === 1, 'the old copy is not listed under Archived');
+  await orow.locator('[data-open]').click();
+  await page.waitForFunction(t => document.querySelector('#vTitle').textContent === t && !!document.querySelector('#stage .ink'), old.title, {timeout: 8000});
+  await waitSub(page, /^Page 1 of 2$/, 'old copy');
+  await waitFor(() => canvasHasMarks(page, '#stage .ink', 'ink'), 'the old copy opens without its marks');
+  await page.click('#vBack');
+  await toLibrary(page);
+  const nowNew = {song: await songRec(page, s => s.id === id), ink: Object.fromEntries(Object.entries(await idbAll(page, 'ink')).filter(([k]) => k.startsWith(id + ':'))), file: (await idbAll(page, 'files'))[id]};
+  const del = page.locator(`#libList [data-del="${old.id}"]`);
+  await del.click(); await del.click();
+  await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), old.id, {timeout: 5000})
+    .catch(() => { throw new Error('deleted old copy still listed'); });
+  await page.uncheck('#showArch');
+  const left = {song: await songRec(page, s => s.id === id), ink: Object.fromEntries(Object.entries(await idbAll(page, 'ink')).filter(([k]) => k.startsWith(id + ':'))), file: (await idbAll(page, 'files'))[id]};
+  assert(JSON.stringify(left) === JSON.stringify(nowNew), 'deleting the old copy changed the new chart');
+  assert((await songRec(page, s => s.id === old.id)).deleted === true, 'the old copy is not a deletion marker after Delete');
 }
 
 async function stepDelete(t){
@@ -1574,7 +1610,7 @@ const STEPS = [
   ['8 backup, delete everything, restore', stepBackup],
   ['9 edit song details; persists; search by artist and version', stepEditSong],
   ['10 archive a song in a setlist; still plays; Show archived; restore', stepArchive],
-  ['11 replace PDF: same id and setlist place, notes cleared, new hash', stepReplace],
+  ['11 New version: same id and setlist place, notes cleared, new hash; the old chart and its marks kept in Archived', stepNewVersion],
   ['12 delete leaves a marker in IndexedDB and in the backup', stepDelete],
   ['13 restore a version 1 backup', stepRestoreV1],
   ['14 setlist items: break, rename, print skips it, remove keeps song, duplicate', stepSetItems],

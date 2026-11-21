@@ -2,7 +2,7 @@
 
      node tools/loops.mjs --only model [--seed S] [--cases N] [--case I] [--verbose]
 
-   THE QUESTION. After any mix of what a user does (import, edit, archive, delete, replace a chart, build and
+   THE QUESTION. After any mix of what a user does (import, edit, archive, delete, New version of a chart, build and
    reorder setlists with breaks, draw, erase, undo, clear, text notes, crops, reloads), does the app show and
    store exactly what it should, and does a backup bring all of it back?
 
@@ -473,19 +473,39 @@ A.deleteSong = {w: 0.8, plan: (M, r) => { const c = liveSongs(M); return c.lengt
     song.deleted = true; song.ink = new Map();
     for(const st of liveSets(M)) st.items = st.items.filter(it => !(it.type === 'song' && it.label === song.label));
   }};
-A.replace = {w: 1.5, plan: (M, r) => { const c = libSongs(M); return c.length ? {song: r.pick(c).label, file: r.pick(FILES)} : null; },
-  desc: a => `replace PDF of ${a.song} with ${a.file} (two taps)`,
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+A.newVersion = {w: 1.5, plan: (M, r) => { const c = libSongs(M); return c.length ? {song: r.pick(c).label, file: r.pick(FILES)} : null; },
+  desc: a => `New version of ${a.song} with ${a.file} (one tap, then the question)`,
   async run(s, M, a){
-    const song = songOf(M, a.song), fx = FIXTURES[a.file];
+    const song = songOf(M, a.song), fx = FIXTURES[a.file], page = s.page;
     await toLib(s, M);
-    const b = s.page.locator(`#libList [data-replace="${song.id}"]`);
+    const b = page.locator(`#libList [data-newversion="${song.id}"]`);
+    if(await b.textContent() !== 'New version') throw new Error(`the button for ${song.label} says "${await b.textContent()}"`);
+    await clearToast(page);
+    const days = [today()], dup = liveSongs(M).some(x => x.hash === fx.hash);     // archived songs and the song itself count
     await b.click();
-    if(await b.textContent() !== 'Clears notes. Tap again') throw new Error(`first tap on Replace PDF shows "${await b.textContent()}"`);
-    await clearToast(s.page);
-    await b.click();
-    await s.page.setInputFiles('#replaceFile', path.join(FIX, a.file));
-    await waitToast(s.page, /^Chart replaced/);
-    /* annotations start fresh: every mark of the pages that remain becomes a deletion marker; pages past the end go */
+    await page.setInputFiles('#newVersionFile', path.join(FIX, a.file));
+    /* a PDF already in the library first brings up the duplicate question (the model always adds anyway), then the confirm */
+    await page.waitForFunction(() => !!document.querySelector('.dupask, .nvask'), null, {timeout: 15000});
+    if(!!(await page.locator('.dupask').count()) !== dup) throw new Error(`the duplicate question ${dup ? 'did not show' : 'showed'} for ${a.file} (model: ${dup ? 'already' : 'not'} in the library)`);
+    if(dup) await page.click('.dupask [data-dupadd]');
+    await page.locator('.nvask').waitFor({timeout: 5000});
+    await page.click('.nvask [data-ok]');
+    await waitToast(page, /^New version in place\. The old one is in Archived\./);
+    days.push(today());
+    /* the old chart becomes a NEW archived song: the same PDF (hash), details with the version marked old, the crop, and
+       every live mark under the new id; it is in no setlist */
+    const known = new Set(M.songs.map(x => x.id));
+    const rec = await until(async () => Object.values(await idbAll(page, 'songs')).find(x => !known.has(x.id)), 4000, 'the old copy\'s record');
+    const versions = [...new Set(days)].map(d => (song.version ? song.version + ', ' : '') + 'old ' + d);     // a run across midnight may give either date
+    const ink = new Map();
+    for(const [pn, items] of song.ink){ const live = items.filter(i => !i.deleted); if(live.length) ink.set(pn, clone(live)); }
+    const old = {label: 'S' + (++M.nSong), n: M.nSong, id: rec.id, song: song.song, artist: song.artist, version: versions.includes(rec.version) ? rec.version : versions[0],
+      archived: true, pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, deleted: false};
+    M.songs.push(old);
+    a.got = `old copy ${old.label}`;
+    /* the song keeps its id, details, crop and setlist places; its marks start fresh: every mark of the pages that remain
+       becomes a deletion marker; pages past the end go */
     for(const [pn, items] of [...song.ink]){
       if(pn > fx.pages) song.ink.delete(pn);
       else song.ink.set(pn, items.map(tomb));

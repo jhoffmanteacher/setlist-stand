@@ -313,18 +313,26 @@ print(json.dumps(out))`;
     const rw = () => page.evaluate(() => window.__tx.filter(t => t.mode === 'readwrite').map(t => t.stores));
     const reset = () => page.evaluate(() => { window.__tx.length = 0; });
 
-    /* replace the 2-page chart with a 1-page one */
+    /* New version (the button that took the place of Replace PDF; this loop keeps its old name for tools/plant-faults.mjs):
+       the 2-page chart becomes a 1-page one, and the 2-page chart with its marks is kept as an archived song */
+    const H2 = sha256(fs.readFileSync(path.join(FIX, 'two-page.pdf')));
     await reset(); await clearToast(page);
-    await page.click(`#libList [data-replace="${id}"]`); await page.click(`#libList [data-replace="${id}"]`);
-    await page.setInputFiles('#replaceFile', path.join(FIX, 'one-page.pdf'));
-    await waitToast(page, /^Chart replaced/);
+    await page.click(`#libList [data-newversion="${id}"]`);
+    await page.setInputFiles('#newVersionFile', path.join(FIX, 'one-page.pdf'));
+    await page.click('.modal.nvask [data-ok]');
+    await waitToast(page, /^New version in place/);
     await sleep(300);
     const r1 = await rw();
-    assert(r1.length === 1 && r1[0] === 'files+ink+songs', 'replace PDF wrote in ' + JSON.stringify(r1));
-    const ink = await idbAll(page, 'ink'), song = (await idbAll(page, 'songs'))[id];
+    assert(r1.length === 1 && r1[0] === 'files+ink+songs', 'New version wrote in ' + JSON.stringify(r1));
+    const ink = await idbAll(page, 'ink'), songs = await idbAll(page, 'songs'), song = songs[id], hashes = await fileHashes(page);
     assert(!ink[id + ':2'], 'ink of a page that no longer exists was kept');
     assert(ink[id + ':1'] && ink[id + ':1'].strokes.every(x => x.deleted), 'page 1 ink is not deletion markers: ' + JSON.stringify(ink[id + ':1']));
-    assert(song.pages === 1 && song.hash === H1 && (await fileHashes(page))[id] === H1, 'song after replace: ' + JSON.stringify([song.pages, song.hash]));
+    assert(song.pages === 1 && song.hash === H1 && hashes[id] === H1, 'song after New version: ' + JSON.stringify([song.pages, song.hash]));
+    const oldIds = Object.keys(songs).filter(k => k !== id);
+    assert(oldIds.length === 1 && songs[oldIds[0]].archived === true && songs[oldIds[0]].hash === H2 && hashes[oldIds[0]] === H2, 'the old chart was not kept as one archived song: ' + JSON.stringify(songs).slice(0, 300));
+    const old = oldIds[0];
+    assert(JSON.stringify(ink[old + ':1'].strokes) === JSON.stringify([pen]) && JSON.stringify(ink[old + ':2'].strokes) === JSON.stringify([{...pen, id: 'k2'}]), 'the old copy lost its marks: ' + JSON.stringify([ink[old + ':1'], ink[old + ':2']]));
+    const oldCopy = {song: songs[old], file: hashes[old], ink1: ink[old + ':1'], ink2: ink[old + ':2']};
 
     /* delete fails part-way (the set cannot be written): nothing changes */
     const before = await snapshot(page);
@@ -346,6 +354,8 @@ print(json.dumps(out))`;
     assert(!after.files[id] && !Object.keys(after.ink).some(k => k.startsWith(id + ':')), 'PDF or ink left after delete');
     assert(JSON.stringify(Object.keys(after.songs[id]).sort()) === '["deleted","id","updated"]' && after.songs[id].deleted === true, 'song is not a marker: ' + JSON.stringify(after.songs[id]));
     assert(JSON.stringify(after.sets.gig.items) === '[{"type":"break","id":"b","name":"Break"}]', 'set after delete: ' + JSON.stringify(after.sets.gig.items));
+    /* deleting the new chart never touches the old copy in Archived */
+    expectSame(oldCopy, {song: after.songs[old], file: after.files[old], ink1: after.ink[old + ':1'], ink2: after.ink[old + ':2']}, 'the archived old copy after the new chart was deleted');
     noErrors(s, /disk is full/);
   } finally { await s.close(); }
 }},

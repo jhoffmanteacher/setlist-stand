@@ -319,6 +319,22 @@ const FAULTS = [
     loop: 'share 5', why: 'a second import started while the first is open or writing adds every song twice'},
   {id: 'import-question-wrong-name', file: 'js/shareimport.js', find: '<b>${esc(freeSetName(plan.setlist))}</b>', replace: "<b>${esc(plan.setlist.name.trim() || 'Shared setlist')}</b>",
     loop: 'share 5', why: 'the question says the setlist will be called "Gig" when it will be saved as "Gig (2)"'},
+  {id: 'new-version-marks-not-copied', file: 'js/library.js', find: "      if(copy && marks.length) ops.push({store:'ink', key:copy.id + ':' + p, value:inkRecord(marks)});   // the old chart keeps its marks\n", replace: '',
+    loop: 'new version 1', why: 'New version moves the old chart to Archived without its marks: they are lost'},
+  {id: 'new-version-old-not-archived', file: 'js/library.js', find: '      copy.archived = true;\n', replace: '',
+    loop: 'new version 1', why: 'the old chart shows in the library next to the new one instead of in Archived'},
+  {id: 'new-version-crop-not-kept', file: 'js/library.js', find: '      if(s.crop !== undefined) copy.crop = JSON.parse(JSON.stringify(s.crop));\n', replace: '',
+    loop: 'new version 1', why: 'the old copy opens without the crop the chart had'},
+  {id: 'new-version-old-gets-new-bytes', file: 'js/library.js', find: "{store:'files', key:copy.id, value:new Blob([old], {type:'application/pdf'})}", replace: "{store:'files', key:copy.id, value:new Blob([buf], {type:'application/pdf'})}",
+    loop: 'new version 1', why: 'the archived old copy holds the NEW chart\'s PDF (and a hash that is not of its bytes)'},
+  {id: 'new-version-no-question', file: 'js/library.js', find: '  if(!(await askNewVersion(file.name, s, !!old))) return;\n', replace: '',
+    loop: 'new version 1', why: 'New version writes as soon as a file is picked: there is no question and no Cancel'},
+  {id: 'new-version-two-writes', file: 'js/library.js', find: '    await putAll(ops);\n    await load(); hooks.render();\n    toast((copy', replace: '    for(const o of ops) await putAll([o]);\n    await load(); hooks.render();\n    toast((copy',
+    loop: 'new version 2', why: 'a full tablet part-way through New version leaves half of it saved (an old copy without its marks, or a song without its PDF)'},
+  {id: 'new-version-no-duplicate-question', file: 'js/library.js', find: 'if(state.songs.some(x => x.hash === r.hash) && !(await askDuplicates([file.name]))){', replace: 'if(false){',
+    loop: 'new version 2', why: 'a PDF already in the library becomes a new version without the duplicate question'},
+  {id: 'new-version-long-version', file: 'js/library.js', find: '.slice(0, 200 - tag.length - 2)', replace: '',
+    loop: 'new version 2', why: 'a long version makes the old copy\'s version longer than 200 characters, which share import refuses'},
 ];
 
 const args = process.argv.slice(2);
