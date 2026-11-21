@@ -116,8 +116,8 @@ function askDuplicates(names){
      marks and notes of every page, under the new id (ids, points and times as they were).
    - A PDF already in the library (this song's own included) gets the usual duplicate question first; then one confirm; then
      ONE putAll(): the new PDF, the song, its cleared marks and the old copy's PDF, record and marks are all saved, or none.
-   - A song whose stored PDF cannot be read here still takes the new chart, but then nothing can move to Archived: the
-     confirm says so before anything is written. */
+   - A song with no stored PDF at all still takes the new chart, but then nothing can move to Archived: the confirm says so
+     before anything is written. A stored PDF that is there but cannot be read stops New version: nothing is changed. */
 export async function newVersion(file){
   const id = newVersionOf; newVersionOf = null;
   const s = songById(id); if(!s || !file) return;
@@ -126,10 +126,11 @@ export async function newVersion(file){
   await ensureHashes().catch(() => {});
   if(state.songs.some(x => x.hash === r.hash) && !(await askDuplicates([file.name]))){ toast('That PDF is already in your library. Nothing was changed.'); return; }
   let old = null;                                   // the bytes of the chart the song has now, as they are stored
-  try{ const f = await get('files', id); if(f) old = await f.arrayBuffer(); }catch(err){}
+  /* No stored PDF at all (nothing to keep) is different from one that is there but cannot be read right now (too little
+     memory, a storage hiccup): the second must never be written over, so it stops here and nothing is changed. */
+  try{ const f = await get('files', id); if(f) old = await f.arrayBuffer(); }
+  catch(err){ toast('Could not read the current chart, so it cannot be kept. Nothing was changed.'); return; }
   if(!(await askNewVersion(file.name, s, !!old))) return;
-  /* load() makes new records: a different one here means the song was edited or deleted meanwhile (do not bring it back) */
-  if(songById(id) !== s){ toast('That song changed in the meantime. Nothing was changed.'); return; }
   try{
     const {buf, pages:n, hash} = r, ops = [];
     let copy = null;
@@ -148,6 +149,9 @@ export async function newVersion(file){
       else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []))});     // keep deletion markers for the pages that remain
     }
     ops.push({store:'songs', key:id, value:{...s, pages:n, hash, title:displayName(s), updated:Date.now()}});
+    /* load() makes new records: a different one here means the song was edited or deleted while the dialogs were open
+       (do not bring it back). Checked last, with no wait between it and putAll, because the reads above take time. */
+    if(songById(id) !== s){ toast('That song changed in the meantime. Nothing was changed.'); return; }
     await putAll(ops);
     await load(); hooks.render();
     toast((copy ? 'New version in place. The old one is in Archived.' : 'New version in place. Its marks were cleared.') + (s.crop ? ' Crop kept. Use Reset in the crop screen if the layout changed.' : ''));

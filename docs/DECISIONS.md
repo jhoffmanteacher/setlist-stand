@@ -24,7 +24,7 @@ Running list of what the app must do. Source for the work orders.
 - **Breaks** inside a setlist; while playing, a break shows a full-screen break page with its name and the next song
 - **Crop** margins, with a choice of one crop for the whole song or a crop per page
 - **Split import** (done, WO2): one big PDF (songbook/fake book) becomes separate songs, using the PDF's bookmarks when present and hand-marked page ranges
-- **Replace chart**: swap in a corrected PDF; annotations start fresh
+- **New version** (was Replace chart; Jonathan, 2026-11-21): swap in a new PDF; the song keeps its place in every setlist and starts with fresh marks; the old chart, its marks and its crop are kept in Archived as "<song> (old YYYY-MM-DD)"
 - **Archive songs**: hidden from the library, still shown and playable in old setlists
 - Print a setlist as one combined PDF (annotations optional); cropped songs print cropped
 - Back up everything to one .zip; restore from it
@@ -59,6 +59,7 @@ Running list of what the app must do. Source for the work orders.
   - Part 3, done 2026-11-21: **faster page turns.** Both neighbouring pages are drawn ahead; the songs either side of the one showing (breaks skipped) are opened ahead with the page a turn lands on drawn; the song just left stays open for the turn back; anything else is closed. Drawn pages are limited by size (24 million pixels) as well as count, and the memory of a page that is dropped is given back (iPad Safari). A song's ink is read in one go.
   - Part 4, done 2026-11-21: **Restore and Back up show what they are doing** ("Opening the backup…", "Checking song N of M…", "Saving to this tablet…"; "Packing song N of M…", "Making the backup file… N%"). **Stop** works while Restore is reading and checking (it then says "Restore stopped. Nothing was changed.") and at any point of a backup (nothing is downloaded and the "last backup" time is not set); from the one write of a restore on, Stop is taken away. Long refusal messages stay on screen longer. Split, share import and print are unchanged.
   - Part 5, done 2026-11-21: **the library is in A to Z order by song name** (library, Archived list, search results, and the song pickers). Case and accents are ignored, numbers sort as numbers, the same name goes by artist then version. **Nothing is dropped from the name: "The" and "A" (and "An") count like any other word** ("The Weight" is under T; Jonathan, 2026-11-21, replacing the earlier rule that skipped them). The order is made when a list is drawn; nothing is stored in that order and no song is written. A setlist keeps its own drag-and-drop order.
+  - Part 6, done 2026-11-21: **Replace PDF is now New version.** The song keeps its id, details, crop and setlist places and takes the new chart with fresh marks; the chart it had, with its marks and crop, becomes a new archived song "<song> (old YYYY-MM-DD) - <artist>" in no setlist (the stored bytes copied as they are). One confirm, one write. A song whose old PDF cannot be read still takes the new chart (the confirm says nothing can be kept). The old copy is an ordinary song: it can be restored from Archived, edited or deleted, and deleting either copy leaves the other alone.
 - Later work orders: Google Drive sync, page-turner pedal.
 
 ## Moving from MobileSheets (2026-11-19)
