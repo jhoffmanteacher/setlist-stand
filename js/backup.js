@@ -1,4 +1,4 @@
-import {toast, saveBlob, hooks} from './util.js';
+import {toast, saveBlob, hooks, busy} from './util.js';
 import {explainError} from './errors.js';
 import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, ensureHashes, putAll, sha256} from './store.js';
 
@@ -9,40 +9,52 @@ export const LAST_BACKUP = 'ss-last-backup';     // localStorage: time (ms) of t
 /* A backup must always restore. Restore is strict (every live song has its PDF, and the PDF matches the recorded hash), so
    each song's hash is computed here from the PDF actually stored, and a live song with no stored PDF is left out (and counted
    in `skipped`) rather than written as a record without a file. Resolves to {blob, skipped}. */
-export async function makeBackup(){
+export async function makeBackup(job){
   const zip = new JSZip(), ink = {}, out = [];
-  let skipped = 0;
-  const songs = await all('songs'), sets = await all('sets');
+  let skipped = 0, k = 0;
+  const songs = await all('songs'), sets = await all('sets'), total = songs.filter(s => !s.deleted).length;
   for(const s of songs){
+    if(job && job.stopped) return null;                    // Stop: nothing is made
     if(s.deleted){ out.push(s); continue; }
+    if(job) job.say(`Packing song ${++k} of ${total}…`);
     const f = await get('files', s.id);
     if(!f){ skipped++; continue; }
     const buf = await f.arrayBuffer();
     zip.file('files/' + s.id + '.pdf', buf);
     out.push({...s, hash:await sha256(buf)});
     for(let p = 1; p <= s.pages; p++){
-      const k = s.id + ':' + p, {record} = upgradeInk(await get('ink', k));
-      if(record.strokes.length) ink[k] = record;
+      const key = s.id + ':' + p, {record} = upgradeInk(await get('ink', key));
+      if(record.strokes.length) ink[key] = record;
     }
   }
+  if(job && job.stopped) return null;
   zip.file('library.json', JSON.stringify({app:'setlist-stand', version:BACKUP_VERSION, saved:new Date().toISOString(), songs:out, sets, ink}));
-  return {blob:await zip.generateAsync({type:'blob'}), skipped};
+  if(job) job.say('Making the backup file…');
+  const blob = await zip.generateAsync({type:'blob'}, job ? m => job.say(`Making the backup file… ${Math.round(m.percent)}%`) : undefined);
+  if(job && job.stopped) return null;                     // pressed during the last step, which cannot be interrupted: the file is thrown away
+  return {blob, skipped};
 }
 
+/* Back up: a box says what it is doing ("Packing song 12 of 74…", then the percentage of the file) and has Stop, which
+   works at any point and saves nothing (and leaves "last backup" as it was). */
 export async function backupNow(b){
   if(!state.songs.length && !state.sets.length){ toast('Nothing to back up yet'); return; }
   const label = b.textContent;
   b.disabled = true; b.textContent = 'Working…';
+  const job = busy('Backing up', 'Getting ready…');      // before the first await
   let saved = false;
   try{
-    const {blob, skipped} = await makeBackup();
-    if(saveBlob(blob, 'setlist-stand-backup-' + new Date().toISOString().slice(0, 10) + '.zip')){
+    const made = await makeBackup(job);
+    job.close();
+    if(!made) toast('Backup stopped. Nothing was saved.');
+    else if(saveBlob(made.blob, 'setlist-stand-backup-' + new Date().toISOString().slice(0, 10) + '.zip')){
+      const {skipped} = made;
       saved = true;
       toast(skipped ? `Backup saved. ${skipped == 1 ? '1 song had' : skipped + ' songs had'} no PDF and ${skipped == 1 ? 'was' : 'were'} left out.` : 'Backup saved');
       try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}
     }
   }
-  catch(err){ toast(explainError(err, 'Backup failed. Nothing was lost.')); }
+  catch(err){ job.close(); toast(explainError(err, 'Backup failed. Nothing was lost.')); }
   b.disabled = false; b.textContent = label;
   if(saved) hooks.render();         // the backup reminder on the Library changes
 }
@@ -52,7 +64,12 @@ export async function backupNow(b){
    transaction. Any problem, or an interrupted page, leaves the library exactly as it was. */
 export async function restoreFrom(f, render){
   if(!f) return;
-  const stop = msg => { toast(msg); };
+  /* A box says what is happening, opened before the first await so nothing looks frozen: "Opening the backup…", "Checking
+     song 12 of 74…", "Saving to this tablet…". Stop works while it is only reading and checking (nothing has been written
+     yet) and says "Restore stopped. Nothing was changed."; from the one write on, Stop is taken away. */
+  const job = busy('Restoring a backup', 'Opening the backup…');
+  const stop = msg => { job.close(); toast(msg); };
+  const wasStopped = () => { if(!job.stopped) return false; stop('Restore stopped. Nothing was changed.'); return true; };
   let data, zip;
   try{
     zip = await JSZip.loadAsync(f, {checkCRC32:true});
@@ -62,16 +79,19 @@ export async function restoreFrom(f, render){
     if(zip && zip.file('share.json')) return stop('That is a share package, not a backup. Use Import a share package. Nothing was changed.');
     return stop(/crc/i.test(String(err && err.message)) ? 'That backup is damaged. Nothing was changed.' : 'That file is not a Setlist Stand backup');
   }
+  if(wasStopped()) return;
   if(Number(data.version) > BACKUP_VERSION) return stop('That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.');
   const bad = validateBackup(data);
   if(bad) return stop(`That backup has something the app can't read (${bad}). Nothing was changed.`);
-  let n = 0, sets = 0;
+  let n = 0, sets = 0, k = 0;
+  const total = data.songs.filter(s => !s.deleted).length;
   try{
     const ops = [], skip = new Set();
     /* A deletion marker only wins over a record here that is not newer than it. */
     const local = {songs:new Map((await all('songs')).map(r => [r.id, r])), sets:new Map((await all('sets')).map(r => [r.id, r]))};
     const newerHere = (store, m) => { const r = local[store].get(m.id); return !!r && !r.deleted && (Number(r.updated) || 0) > (Number(m.updated) || 0); };
     for(const s of data.songs){
+      if(wasStopped()) return;
       if(s.deleted){
         skip.add(s.id);                 // the backup has no annotations for a deleted song: any it lists are left out
         if(newerHere('songs', s)) continue;           // keep the newer song here, with its PDF and annotations
@@ -79,6 +99,7 @@ export async function restoreFrom(f, render){
         ops.push({store:'files', key:s.id, delete:true}, {deleteInkFor:s.id}, {store:'songs', key:s.id, value:marker(s)});
         continue;
       }
+      job.say(`Checking song ${++k} of ${total}…`);
       const entry = zip.file('files/' + s.id + '.pdf');
       if(!entry) return stop(`That backup is missing the PDF for "${s.title || s.song || s.id}". Nothing was changed.`);
       const buf = await entry.async('arraybuffer');
@@ -93,13 +114,16 @@ export async function restoreFrom(f, render){
       upgradeSet(st); ops.push({store:'sets', key:st.id, value:st}); sets++;
     }
     for(const [k, v] of Object.entries(data.ink || {})) if(!skip.has(k.split(':')[0])) ops.push({store:'ink', key:k, value:upgradeInk(v).record});
+    if(wasStopped()) return;
+    job.lock('Saving to this tablet…');                 // the one write: from here Stop is gone, and Escape does nothing
     await putAll(ops);
   }catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
   /* The backup is written by now: a problem from here on must not say "Nothing was changed". */
   try{
-    await load(); await ensureHashes(); render();
+    await load(); await ensureHashes(); job.close(); render();
     toast(`Restored ${n} song${n == 1 ? '' : 's'} and ${sets} setlist${sets == 1 ? '' : 's'}`);
   }catch(err){ stop('The backup was restored, but the screen did not update. Reload the app to see it.'); }
+  job.close();
 }
 
 const marker = r => ({id:r.id, deleted:true, updated:Number(r.updated) || 0});

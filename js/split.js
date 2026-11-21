@@ -1,7 +1,7 @@
 /* Split a songbook: one big PDF becomes separate songs. The screen lists the songs (a first guess from the PDF's
    bookmarks, then edited by hand or by tapping the first page of each song), shows the book's pages as small pictures,
    and then saves every ticked song as its own PDF. The songbook itself is never saved or changed; only the songs are. */
-import {$, esc, toast, modal, armed, hooks} from './util.js';
+import {$, esc, toast, modal, busy, armed, hooks} from './util.js';
 import {state, putAll, load, sha256, newSong, ensureHashes} from './store.js';
 import {parseTypedTitle} from './importname.js';
 import {explainError} from './errors.js';
@@ -13,13 +13,7 @@ const plural = (n, w) => `${n} ${w}${n == 1 ? '' : 's'}`;
 let S = null;       // the open songbook: {name, n, doc, lib, rows, urls, queue, dirty, ...}; null when the screen is closed
 
 /* ---------- dialogs ---------- */
-/* A waiting dialog with a Stop button (Escape presses it). `stopped` turns true; the caller decides when to carry on. */
-function busy(title, text){
-  const m = modal(`<h2>${esc(title)}</h2><p class="hint" role="status">${esc(text)}</p><div class="btns"><button data-x>Stop</button></div>`);
-  const line = m.querySelector('p'), job = {stopped:false, say:t => { line.textContent = t; }, close:() => m.remove()};
-  m.querySelector('[data-x]').onclick = () => { job.stopped = true; line.textContent = 'Stopping…'; };
-  return job;
-}
+/* The waiting dialog with a Stop button is busy() in js/util.js, shared with Restore and Back up. */
 function notice(title, text){
   const m = modal(`<h2>${esc(title)}</h2><p>${esc(text)}</p><div class="btns"><button class="pri" data-x>OK</button></div>`);
   m.querySelector('[data-x]').onclick = () => m.remove();

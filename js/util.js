@@ -31,7 +31,8 @@ export const hooks = {render(){}};
 let toastT;
 export function toast(m){
   const t = $('#toast'); t.textContent = m; t.classList.add('on');
-  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2200);
+  /* a short message stays 2.2 s; a long one (a refusal that explains itself) stays long enough to read, up to 9 s */
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), Math.min(9000, Math.max(2200, String(m).length * 55)));
 }
 
 /* Every dialog goes through modal(): it is a real dialog for screen readers and keyboards. Focus moves in and Tab
@@ -87,6 +88,19 @@ export function modal(html){
     if(opener && opener.isConnected && opener !== document.body && typeof opener.focus === 'function') opener.focus();
   };
   return m;
+}
+/* A waiting dialog with a status line (role=status, so a screen reader reads each change) and a Stop button; Escape presses
+   Stop. `job.stopped` turns true when Stop is pressed: the caller decides when to carry on, and where it is safe to stop.
+   job.say(text) changes the line; job.close() removes the box; job.lock(text) takes Stop away (and makes Escape do
+   nothing) for the part of a job that cannot be stopped, such as the one write that saves a restored library.
+   Open it before the first await of a long job: Escape and Stop then reach this dialog, not the screen behind. */
+export function busy(title, text){
+  const m = modal(`<h2>${esc(title)}</h2><p class="hint" role="status">${esc(text)}</p><div class="btns"><button data-x>Stop</button></div>`);
+  const line = m.querySelector('p'), stop = m.querySelector('[data-x]');
+  const job = {stopped:false, locked:false, say:t => { line.textContent = t; }, close:() => m.remove(),
+    lock:t => { job.locked = true; stop.hidden = true; if(t) line.textContent = t; }};
+  stop.onclick = () => { if(job.locked) return; job.stopped = true; line.textContent = 'Stopping…'; };
+  return job;
 }
 export function ask(title, val = ''){
   return new Promise(res => {

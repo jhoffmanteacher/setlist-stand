@@ -14,6 +14,7 @@ paths:
 ## Writing code here (data, backup, restore)
 
 1. **Restore is all or nothing:** validate everything first (zip CRC, our `library.json`, not from a newer `BACKUP_VERSION`, every song's PDF present and matching its hash), then ONE `putAll` transaction. Never write record by record.
+1b. **Restore and Back up show a box (`busy()` in `js/util.js`) and can be stopped, but only where nothing has been written.** Restore opens the box before its first `await` and says "Opening the backup…", "Checking song N of M…", "Saving to this tablet…"; Stop (and Escape) works until the one `putAll`, says "Restore stopped. Nothing was changed.", and from `job.lock()` on is gone. Back up says "Packing song N of M…", "Making the backup file… N%"; Stop at any point downloads nothing and does not set `ss-last-backup` (set only when a file was actually saved). Every refusal still names its reason and leaves the library as it was. Proof: `--only "roundtrip progress"`.
 2. **Never change a user's PDF bytes.** Stored bytes equal the file picked; the hash is of those bytes.
 3. **Deletion leaves a marker** (`{id, deleted:true, updated}`) so a later Drive sync can tell "deleted" from "never had it"; markers are never garbage-collected. The UI hides them; backups include them.
 4. **A new field needs a default in `upgradeSong` / `upgradeSet`** and old backups must still restore (BACKUP_VERSION only goes up; restore reads every older version). Marks stay fractions of the full page.
