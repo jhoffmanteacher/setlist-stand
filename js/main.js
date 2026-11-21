@@ -9,7 +9,12 @@ import {initInk} from './ink.js';
 import {initCrop} from './crop.js';
 import {startSplit, initSplit} from './split.js';
 import {importPackage} from './shareimport.js';
+import {takeReturn} from './googleauth.js';
+import {driveClick, announceSignIn} from './syncui.js';
 
+/* FIRST, before anything else runs: if the page has just come back from Google's sign-in, read the answer and take the
+   `#` part (it holds the token) off the address. Nothing else in the app reads the address. */
+const signIn = takeReturn();
 initErrors();      // first: the private problem log (Library → Problem log) catches anything that goes wrong after this
 
 let tab = 'lib';
@@ -34,6 +39,7 @@ $('#view').addEventListener('click', async e => {
   const d = b.dataset;
   if('restore' in d) return $('#restoreFile').click();
   if('backup' in d || 'backupnow' in d) return backupNow(b);
+  if(await driveClick(b, d)) return;
   if(await libraryClick(b, d)) return;
   await setlistClick(b, d);
 });
@@ -100,6 +106,7 @@ async function applyResume(){
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
   initViewer(); initInk(); initCrop(); initSetlists(); initSplit();
   await load(); render();
+  announceSignIn(signIn).catch(() => {});      // only when the page came back from a sign-in the person started
   await applyResume();
   ensureHashes().catch(() => {});
 })();

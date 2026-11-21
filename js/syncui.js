@@ -1,0 +1,135 @@
+/* The Google Drive control in the Library: Connect, "Connected until ...", Test connection, Disconnect, and what the app
+   says when it comes back from Google. Part 1 only signs in and tests a folder; nothing is copied to Drive yet.
+   Everything here happens only when a button is tapped (or when the page returns from a sign-in the person started). */
+import {$, esc, toast, modal} from './util.js';
+import {explainError, logProblem} from './errors.js';
+import {FOLDER_NAME} from './driveconfig.js';
+import {beginSignIn, cancelSignIn, signInState, getToken, disconnect} from './googleauth.js';
+import {testConnection} from './drive.js';
+
+const clock = t => {
+  const d = new Date(t), time = d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  return d.toDateString() === new Date().toDateString() ? time : `${time} on ${d.toLocaleDateString([], {month:'short', day:'numeric'})}`;
+};
+/* The manifest says display "fullscreen", so the installed Android app matches fullscreen, not standalone; the iPad's Home Screen app sets navigator.standalone. */
+const inApp = () => { try{ return ['fullscreen', 'standalone', 'minimal-ui'].some(m => matchMedia(`(display-mode: ${m})`).matches) || navigator.standalone === true; }catch(e){ return false; } };
+
+/* A message that stays until OK (never a toast that vanishes). */
+function notice(title, text){
+  const m = modal(`<h2>${esc(title)}</h2><p>${esc(text)}</p><div class="btns"><button class="pri" data-x data-ok>OK</button></div>`);
+  m.querySelector('[data-ok]').onclick = () => { m.remove(); refocus(); };
+  return m;
+}
+/* A dialog gives focus back to the button that opened it; when the Library line was redrawn meanwhile that button is gone,
+   so put focus on the line's first button instead of leaving it on the page. */
+function refocus(){
+  const a = document.activeElement;
+  if(a && a !== document.body && a.isConnected) return;
+  const b = $('#libDrive button'); if(b) b.focus();
+}
+
+export function renderDrive(){
+  const el = $('#libDrive'); if(!el) return;
+  const s = signInState();
+  const html = s.state === 'connected'
+    ? `<p class="hint" data-drivestatus>Connected to Google Drive until ${esc(clock(s.until))}.</p><div class="bar"><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button></div>`
+    : s.state === 'expired'
+    ? `<p class="hint warnline" data-drivestatus>Your Google sign-in ran out at ${esc(clock(s.until))}. Tap Connect again.</p><div class="bar"><button data-driveconnect>Connect again</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button></div>`
+    : `<div class="bar"><button data-driveconnect>Connect Google Drive</button></div><p class="hint" data-drivestatus>Connect your own Google Drive so your library can follow you between tablets. Nothing is copied yet.</p>`;
+  /* only when something changed: a dialog gives focus back to the button that opened it, so that button must still be there */
+  if(el.dataset.shown === html) return;
+  el.dataset.shown = html; el.innerHTML = html;
+}
+/* The line says when the sign-in ends: bring it up to date when the tablet is picked up again. */
+document.addEventListener('visibilitychange', () => { if(!document.hidden) renderDrive(); });
+addEventListener('pageshow', e => { if(e.persisted) renderDrive(); });             // a page brought back by the Back button was not redrawn
+
+const NOT_SENT = {
+  offline: 'You are offline. Connect to the internet, then tap Connect again. Nothing was changed.',
+  storage: 'This browser would not keep the notes the sign-in needs, so it did not start. Nothing was changed.',
+};
+/* Sends the page to Google. If it cannot go, says why and changes nothing. */
+function go(then, dialog){
+  const r = beginSignIn(then);
+  if(r.ok) return;                         // the page is leaving
+  if(dialog) dialog.remove();
+  notice('Cannot connect', NOT_SENT[r.why] || NOT_SENT.storage);
+}
+
+/* A dialog whose OK sends the page to Google. Cancel (or Escape) after OK must really stop the trip: the browser is
+   already on its way, and without window.stop() Google's page (or the browser's no-internet page) would replace the app a
+   moment later, maybe in the middle of a song. */
+function leaveDialog(m, then){
+  const ok = m.querySelector('[data-ok]'); let leaving = false;
+  m.querySelector('[data-x]').onclick = () => { if(leaving){ try{ window.stop(); }catch(e){} cancelSignIn(); } m.remove(); refocus(); };
+  ok.onclick = () => { ok.disabled = true; m.querySelector('[data-x]').focus(); leaving = true; go(then, m); };    // a switched-off button drops focus to the page: Escape would no longer reach the dialog
+  addEventListener('pageshow', e => { if(e.persisted && m.isConnected){ ok.disabled = false; leaving = false; } }, {once:true});   // came back with the Back button
+}
+function connectDialog(then = 'connect'){
+  leaveDialog(modal(`<h2>Connect Google Drive</h2><p>Google will ask you to sign in and to let Setlist Stand use its own folder in your Drive. The app can see only the files it makes itself. You come back to this app afterwards.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Continue</button></div>`), then);
+}
+
+/* The sign-in ran out (or was taken back): say so, and offer to sign in again for what the person was doing. */
+function signedOutDialog(then){
+  leaveDialog(modal(`<h2>Sign in again</h2><p>Your Google sign-in has run out. Tap Connect again. Nothing was changed.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Connect again</button></div>`), then);
+}
+
+const files = n => `${n} file${n === 1 ? '' : 's'}`;
+async function runTest(){
+  if(!getToken()){ renderDrive(); return signedOutDialog('test'); }
+  const stop = new AbortController();
+  const m = modal(`<h2>Testing the connection</h2><p>Asking Google Drive for the "${esc(FOLDER_NAME)}" folder…</p><div class="btns"><button data-x>Cancel</button></div>`);
+  m.querySelector('[data-x]').onclick = () => { stop.abort(); m.remove(); };
+  document.body.classList.add('busy');                // hides the "Updated. Tap to reload" banner while the test runs (see busy() in util.js)
+  try{
+    const r = await testConnection({signal:stop.signal});
+    if(stop.signal.aborted) return;
+    m.remove();
+    notice('Connected', `Connected. Folder '${FOLDER_NAME}' is ready (${files(r.count)}).${r.created ? ' The folder was just made in your Drive.' : ''}`);
+  }catch(err){
+    if(stop.signal.aborted || (err && err.name === 'AbortError')) return;
+    m.remove();
+    if(err && err.kind === 'auth') signedOutDialog('test');
+    else{
+      if(!(err && err.plain)) logProblem('drive', String(err && err.message || err).slice(0, 200));
+      notice('Not connected', explainError(err));
+    }
+  }finally{ document.body.classList.remove('busy'); renderDrive(); }
+}
+
+function disconnectDialog(){
+  const m = modal(`<h2>Disconnect Google Drive?</h2><p>This tablet forgets the sign-in. Your songs on this tablet and the "${esc(FOLDER_NAME)}" folder in your Drive are not touched. To take the app's access away completely, use the security page of your Google account.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Disconnect</button></div>`);
+  m.querySelector('[data-x]').onclick = () => m.remove();
+  m.querySelector('[data-ok]').onclick = () => { disconnect(); m.remove(); toast('Disconnected from Google Drive.'); renderDrive(); const b = $('#libDrive button'); if(b) b.focus(); };
+}
+
+/* Returns true when the click was for the Drive control. */
+export async function driveClick(b, d){
+  if('driveconnect' in d){ connectDialog('connect'); return true; }
+  if('drivetest' in d){ await runTest(); return true; }
+  if('drivedisconnect' in d){ disconnectDialog(); return true; }
+  return false;
+}
+
+const RETURN_FAILED = {
+  denied: 'You did not allow access, so Google Drive is not connected. Nothing was changed.',
+  foreign: () => `This sign-in answer did not come from a sign-in started in this window, so it was ignored. Nothing was changed. (This window is ${inApp() ? 'the installed app' : 'the browser, not the installed app'}.)`,
+  late: 'The sign-in took more than 15 minutes, so its answer was ignored. Nothing was changed. Tap Connect and try again.',
+  mismatch: 'This sign-in answer did not match the sign-in started here (another window may have started its own), so it was ignored. Nothing was changed. Tap Connect and try again.',
+  short: 'Google gave a sign-in that ends right away, so it was not used. Nothing was changed. Try again.',
+  scope: 'Google did not give this app permission to use its Drive folder. Nothing was changed. Tap Connect and allow it.',
+  storage: 'This browser would not keep the sign-in. Nothing was changed.',
+  bad: "Google's answer was not what the app expected. Nothing was changed. Try again.",
+};
+/* After the page came back from Google (main.js passes what takeReturn() found). */
+export async function announceSignIn(r){
+  if(!r) return;
+  renderDrive();
+  if(r.ok){
+    toast('Connected to Google Drive.');
+    if(r.then === 'test') await runTest();            // the person had tapped Test connection: carry on with it
+    return;
+  }
+  const t = r.kind === 'error' ? `Google could not sign you in (${r.code}). Nothing was changed.` : RETURN_FAILED[r.kind];
+  notice('Not connected', typeof t === 'function' ? t() : t || RETURN_FAILED.bad);
+}

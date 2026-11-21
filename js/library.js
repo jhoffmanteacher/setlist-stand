@@ -6,6 +6,7 @@ import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
 import {unique} from './shareimport.js';
+import {renderDrive} from './syncui.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
 
@@ -14,11 +15,13 @@ export function renderLibrary(v){
     <label class="sw-row"><input type="checkbox" id="showArch" ${showArchived ? 'checked' : ''}>Show archived</label>
     <div class="bar" style="margin-top:12px"><button data-backup>Back up everything</button><button data-restore>Restore from backup</button></div>
     <p class="hint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
+    <div id="libDrive"></div>
     <div id="libSafety"><p class="hint" id="libLastBackup"></p><div id="libStorage"></div><div id="libProblems"></div></div>`;
   $('#q').oninput = e => { q = e.target.value; renderLib(); };
   $('#showArch').onchange = e => { showArchived = e.target.checked; renderLib(); };
   renderLib();
   renderSafety();
+  renderDrive();
 }
 const matches = s => (s.title + ' ' + s.song + ' ' + s.artist + ' ' + s.version).toLowerCase().includes(q.trim().toLowerCase());
 const pages = s => `${esc(s.pages)} page${s.pages == 1 ? '' : 's'}`;

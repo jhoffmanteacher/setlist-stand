@@ -10,6 +10,7 @@ const isPrivateWindow = err => !!err && err.name === 'UnknownError' && /blob|fil
 
 /* One plain sentence for an error. `fallback` replaces the generic sentence when the caller knows better. */
 export function explainError(err, fallback = 'Something went wrong. Nothing was lost.'){
+  if(err && typeof err.plain === 'string') return err.plain;       // an error that carries its own plain sentence (a DriveError, js/drive.js)
   if(isQuota(err)) return 'The tablet is full. Free up some space, then try again. Nothing was changed.';
   if(isPrivateWindow(err)) return "This window can't save files (is it a private window?). Open Setlist Stand in a normal tab or from the home screen. Nothing was changed.";
   return fallback;
@@ -25,7 +26,7 @@ export function clearProblems(){
 }
 
 let lastToast = 0;
-export function logProblem(kind, message){
+export function logProblem(kind, message, {quiet = false} = {}){      // quiet: no "Something went wrong" toast (a plain dialog is already on screen)
   const msg = String(message == null ? '' : message).slice(0, 300);
   if(/ResizeObserver loop/i.test(msg)) return;               // harmless browser noise
   try{
@@ -33,7 +34,7 @@ export function logProblem(kind, message){
     list.push({t:Date.now(), kind:String(kind), msg});
     localStorage.setItem(KEY, JSON.stringify(list.slice(-MAX)));
   }catch(e){}
-  if(Date.now() - lastToast > 10000){
+  if(!quiet && Date.now() - lastToast > 10000){
     lastToast = Date.now();
     try{ toast('Something went wrong. Your music is safe. Details: Library → Problem log.'); }catch(e){}
   }

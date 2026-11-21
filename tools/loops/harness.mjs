@@ -80,10 +80,10 @@ export async function startServer({root = ROOT, overrides = new Map()} = {}){
 }
 
 /* A browser session: new context + page. `errors` collects page errors and console errors; `requests` every URL requested. */
-export async function openSession(base, {viewport = {width: 1280, height: 800}, hasTouch = false, browser, storage} = {}){
+export async function openSession(base, {viewport = {width: 1280, height: 800}, hasTouch = false, browser, storage, serviceWorkers = 'allow'} = {}){
   const own = !browser;
   browser = browser || await launchBrowser();
-  const context = await browser.newContext({viewport, hasTouch, acceptDownloads: true, serviceWorkers: 'allow', ...(storage ? {storageState: storage} : {})});
+  const context = await browser.newContext({viewport, hasTouch, acceptDownloads: true, serviceWorkers, ...(storage ? {storageState: storage} : {})});
   const page = await context.newPage();
   const errors = [], requests = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));

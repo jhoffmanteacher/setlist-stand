@@ -8,8 +8,8 @@ Running list of what the app must do. Source for the work orders.
 
 ## Platform
 - Web app installed from the browser (PWA), hosted on GitHub Pages. Android and iPad.
-- Must work fully offline: app files, PDF libraries and every chart stored on the tablet. Sync only when online.
-- Sync: Google Drive with the `drive.file` permission only. The app sees its own "Setlist Stand" folder and files picked in Google's picker, nothing else.
+- Must work fully offline: app files, PDF libraries and every chart stored on the tablet. Sync only when online, and only when Jonathan taps Sync (2026-11-21): never on opening the app, never in the background, never while a song is open.
+- Sync: Google Drive with the `drive.file` permission only. The app sees only the files it made itself, in its own "Setlist Stand" folder (no Google Picker, no script from Google).
 - Repo: `jhoffmanteacher/setlist-stand` (public), code only — no PDFs in the repo.
 
 ## Must have
@@ -61,6 +61,10 @@ Running list of what the app must do. Source for the work orders.
   - Part 5, done 2026-11-21: **the library is in A to Z order by song name** (library, Archived list, search results, and the song pickers). Case and accents are ignored, numbers sort as numbers, the same name goes by artist then version. **Nothing is dropped from the name: "The" and "A" (and "An") count like any other word** ("The Weight" is under T; Jonathan, 2026-11-21, replacing the earlier rule that skipped them). The order is made when a list is drawn; nothing is stored in that order and no song is written. A setlist keeps its own drag-and-drop order.
   - Part 6, done 2026-11-21: **Replace PDF is now New version.** The song keeps its id, details, crop and setlist places and takes the new chart with fresh marks; the chart it had, with its marks and crop, becomes a new archived song "<song> (old YYYY-MM-DD) - <artist>" in no setlist (the stored bytes copied as they are). One confirm, one write. A song whose old PDF cannot be read still takes the new chart (the confirm says nothing can be kept). The old copy is an ordinary song: it can be restored from Archived, edited or deleted, and deleting either copy leaves the other alone.
 - Later work orders: Google Drive sync, page-turner pedal.
+- WO5 Google Drive sync (2026-11-21, `WORK-ORDER-drive-sync.md`; also still listed under Later until Part 3 ships), three parts, each shipped before the next. Part 1 (sign-in and a test folder, nothing synced): built 2026-11-21; it waits at a gate until Jonathan has tested it on both tablets.
+  - The app may talk to Google at two addresses and nowhere else (Jonathan, 2026-11-21): `connect-src` gained `https://www.googleapis.com`, and the page navigates to `https://accounts.google.com/o/oauth2/v2/auth` to sign in. No Google script is ever loaded. The Client ID (public) is `553752641676-d3mb2enmv622rpl2bjlfvqpfe7922h18.apps.googleusercontent.com`; there is no client secret. The Google project is in Testing (only listed test users can sign in, and Google shows a "hasn't verified this app" screen).
+  - Sign-in is the "implicit" redirect flow (no server of ours): the token lasts about an hour and there is no refresh token, so renewing it sends the page to Google again. Whether that works from the installed app on both tablets, whether Testing mode brings the consent screen back, and whether Drive answers browser requests are what the Part 1 gate settles.
+  - Known limit (Part 1): the browser's own history list (not the page's) may keep the address Google sent the token back to, for as long as the token lives (about an hour). The app takes the `#` part off the page's address and history entry at once.
 
 ## Moving from MobileSheets (2026-11-19)
 - Backup `MobileSheets_2026-11-18.msb` decoded. Converter: `tools/msb_convert.py` (format notes at its top). Output restores straight into the app and applies the naming convention (artist pulled from "Artist - Title - Chords" names; "- Chords", "- Pro", "(1)" dropped; versions like OLD/2/in G moved into parentheses).

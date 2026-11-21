@@ -16,6 +16,33 @@ const APP_DIRS = ['css', 'js', 'vendor', 'icons'];
 const APP_FILES = ['index.html', 'manifest.webmanifest'];
 const IGNORE = new Set(['.DS_Store', 'Thumbs.db']);
 
+// The only remote URLs app code may hold, per file. A match is allowed only in that file and only when its text equals
+// one of these exactly (a fifth URL in the file, or one of these in another file, still fails).
+const ALLOWED_URLS = {
+  'js/driveconfig.js': [
+    'https://www.googleapis.com/auth/drive.file',
+    'https://accounts.google.com/o/oauth2/v2/auth',
+    'https://www.googleapis.com/drive/v3',
+    'https://www.googleapis.com/upload/drive/v3',
+  ],
+};
+
+// The Content-Security-Policy index.html must carry, exactly (order of directives and of sources is ignored).
+// Loosening the CSP needs Jonathan's OK; when he gives it, change this pinned policy in the same commit.
+const PINNED_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+  + "font-src 'self'; connect-src 'self' blob: data: https://www.googleapis.com; worker-src 'self' blob:; "
+  + "manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
+// A remote URL: http(s):// in any case, or a protocol-relative //host in a string, after src=/href= or in url( ).
+const URL_RE = /https?:\/\/[^\s'"`)<>]*|(?:['"`]|\b(?:src|href)\s*=\s*['"]?|url\(\s*['"]?)\/\/[a-z0-9][^\s'"`)<>]*/gi;
+const CSP_META = /<meta\b[^>]*?\bhttp-equiv\s*=\s*(["']?)content-security-policy\1[^>]*>/gi;
+
+// Google client secret markers, built from pieces so this file does not flag itself.
+const SECRET_MARKS = ['client' + '_secret', 'GOCSPX' + '-'];
+const BINARY_EXT = new Set(['.png', '.pdf', '.zip', '.ttf', '.ico', '.msb', '.woff', '.woff2']);
+const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+const SKIP_DIRS = new Set(['node_modules', '.git']);           // at any depth
+const SKIP_ROOT_DIRS = new Set(['vendor', 'Claude outputs']);  // at the repo root only
+
 const color = process.stdout.isTTY && !process.env.NO_COLOR;
 const red = (s) => (color ? `\x1b[31m${s}\x1b[0m` : s);
 const green = (s) => (color ? `\x1b[32m${s}\x1b[0m` : s);
@@ -47,39 +74,98 @@ function parseVersion(src) {
   return m ? m[1] : null;
 }
 
+let precacheError = null; // why PRECACHE could not be read, when it was found but its text did not parse
 function parsePrecache(src) {
   const m = /const\s+PRECACHE\s*=\s*\[([\s\S]*?)\]/.exec(src);
   if (!m) return null;
-  return [...stripJsComments(m[1]).matchAll(/(['"`])([^'"`]*)\1/g)].map((x) => x[2]);
+  const [text, why] = tryStrip(stripJsComments, m[1]);
+  if (why) { precacheError = why; return null; }
+  return [...text.matchAll(/(['"`])([^'"`]*)\1/g)].map((x) => x[2]);
 }
 
 // Normalise a PRECACHE URL to a repo path ('./' -> index.html).
 const toRepoPath = (u) => (u === './' || u === '' ? 'index.html' : u.replace(/^\.\//, ''));
 
-// Remove // and /* */ comments while leaving string/template contents intact,
-// so 'https://x' is never mistaken for a line comment.
+// Remove // and /* */ comments (blanked to spaces, newlines kept, so length and line numbers stay) while leaving
+// string, template and regular-expression contents intact, so 'https://x' is never mistaken for a line comment and
+// a quote inside a regex (/'/g) never looks like the start of a string. Throws when a string, template or block
+// comment is still open at the end (the check must fail then, never pass on text it could not read).
+const REGEX_AFTER = new Set('(,=:[!&|?{};+-*%<>~^'.split(''));
+const REGEX_KEYWORD = /(?:^|[^\w$.])(?:return|typeof|case|do|else|in|of|void|delete|new|throw|yield)$/;
 function stripJsComments(src) {
-  let out = '';
-  for (let i = 0; i < src.length; i++) {
+  let out = '', i = 0;
+  const subs = []; // one entry per open `${ }`: how many `{` are open inside it
+  const parens = []; // one entry per open `(`: is it the head of if / while / for / with (a regex may follow its `)`)?
+  let headClosed = false; // did the last `)` close such a head?
+  const blank = (s) => s.replace(/[^\n]/g, ' ');
+  // Copy template text from i up to its closing backtick, or up to and including a `${` (a substitution opens).
+  const template = () => {
+    for (; i < src.length; i++) {
+      const c = src[i];
+      out += c;
+      if (c === '\\') out += src[++i] ?? '';
+      else if (c === '`') { i++; return; }
+      else if (c === '$' && src[i + 1] === '{') { out += '{'; i += 2; subs.push(0); return; }
+    }
+    throw new Error('unterminated template');
+  };
+  // Where a regex literal starting at i ends (index of its closing slash), or -1 when this slash is a division.
+  const regexEnd = () => {
+    let k = out.length - 1;
+    while (k >= 0 && /\s/.test(out[k])) k--;
+    if (k >= 0) {
+      const prev = out[k];
+      if ((prev === '+' || prev === '-') && out[k - 1] === prev) return -1;                       // n++ / 2: a division
+      if (prev === ')') { if (!headClosed) return -1; }                                            // f(x) / 2 is a division, if (x) /re/.test(y) is not
+      else if (!REGEX_AFTER.has(prev) && !REGEX_KEYWORD.test(out.slice(Math.max(0, k - 7), k + 1))) return -1;
+    }
+    for (let j = i + 1, cls = false; j < src.length && src[j] !== '\n'; j++) {
+      if (src[j] === '\\') j++;
+      else if (src[j] === '[') cls = true;
+      else if (src[j] === ']') cls = false;
+      else if (src[j] === '/' && !cls) return j;
+    }
+    return -1;
+  };
+  while (i < src.length) {
     const c = src[i], n = src[i + 1];
-    if (c === '"' || c === "'" || c === '`') {
-      const q = c; out += c;
-      for (i++; i < src.length && src[i] !== q; i++) {
-        out += src[i];
-        if (src[i] === '\\') out += src[++i] ?? '';
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      for (; j < src.length && src[j] !== c; j++) {
+        if (src[j] === '\\') j += src[j + 1] === '\r' && src[j + 2] === '\n' ? 2 : 1;
+        else if (src[j] === '\n') throw new Error('unterminated string');
       }
-      out += src[i] ?? '';
+      if (j >= src.length) throw new Error('unterminated string');
+      out += src.slice(i, j + 1); i = j + 1;
+    } else if (c === '`') {
+      out += c; i++; template();
     } else if (c === '/' && n === '/') {
-      while (i < src.length && src[i] !== '\n') i++;
-      out += '\n';
+      let j = i;
+      while (j < src.length && src[j] !== '\n') j++;
+      out += blank(src.slice(i, j)); i = j;
     } else if (c === '/' && n === '*') {
       const end = src.indexOf('*/', i + 2);
-      const chunk = src.slice(i, end < 0 ? src.length : end + 2);
-      out += chunk.replace(/[^\n]/g, ' ');
-      i = end < 0 ? src.length : end + 1;
-    } else out += c;
+      if (end < 0) throw new Error('unterminated comment');
+      out += blank(src.slice(i, end + 2)); i = end + 2;
+    } else if (c === '/' && regexEnd() > 0) {
+      const end = regexEnd();
+      out += src.slice(i, end + 1); i = end + 1;
+    } else if (c === '}' && subs.length && !subs[subs.length - 1]) {
+      subs.pop(); out += c; i++; template();
+    } else {
+      if (subs.length && (c === '{' || c === '}')) subs[subs.length - 1] += c === '{' ? 1 : -1;
+      if (c === '(') parens.push(/(?:^|[^\w$.])(?:if|while|for|with|for\s+await)\s*$/.test(out));
+      else if (c === ')') headClosed = parens.pop() === true;
+      out += c; i++;
+    }
   }
+  if (subs.length) throw new Error('unterminated template');
   return out;
+}
+
+// Same, but a failure to read the text comes back as a note instead of an exception: [stripped, null] or [null, why].
+function tryStrip(fn, src) {
+  try { return [fn(src), null]; } catch (e) { return [null, e.message]; }
 }
 
 function stripCssComments(src) {
@@ -96,6 +182,48 @@ function stripHtml(src) {
 }
 
 function lineOf(src, idx) { return src.slice(0, idx).split('\n').length; }
+
+// Blank out ONLY the CSP meta tag (its characters become spaces, newlines stay) so a URL anywhere else still fails.
+const blankCspMeta = (html) => html.replace(CSP_META, (m) => m.replace(/[^\n]/g, ' '));
+
+// "a; b 'x' y" -> directives {name -> Set(sources)} plus any directive name that appears twice.
+function parseCsp(text) {
+  const dirs = new Map(), repeated = [];
+  for (const part of text.split(';')) {
+    const [name, ...sources] = part.trim().split(/\s+/);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (dirs.has(key)) repeated.push(key);
+    dirs.set(key, new Set(sources));
+  }
+  return { dirs, repeated };
+}
+
+// What differs between the policy found and the pinned one, as short phrases (empty list = equal).
+function cspDiff(found, pinned) {
+  const out = found.repeated.map((d) => `${d} appears twice`);
+  for (const [d, want] of pinned.dirs) {
+    const have = found.dirs.get(d);
+    if (!have) { out.push(`missing directive ${d}`); continue; }
+    const extra = [...have].filter((s) => !want.has(s)), lost = [...want].filter((s) => !have.has(s));
+    if (extra.length) out.push(`${d}: extra ${extra.join(' ')}`);
+    if (lost.length) out.push(`${d}: missing ${lost.join(' ')}`);
+  }
+  for (const d of found.dirs.keys()) if (!pinned.dirs.has(d)) out.push(`extra directive ${d}`);
+  return out;
+}
+
+// Every file in the repo (relative paths) except tool/vendor folders and the machine's own files.
+function walkRepo(rel = '') {
+  return fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true }).flatMap((d) => {
+    if (d.isSymbolicLink() || IGNORE.has(d.name) || SKIP_DIRS.has(d.name) || (!rel && SKIP_ROOT_DIRS.has(d.name))) return [];
+    const r = rel ? `${rel}/${d.name}` : d.name;
+    return d.isDirectory() ? walkRepo(r) : [r];
+  });
+}
+
+// "line mark" for every line of text holding one of the marks.
+const marksIn = (text, marks) => text.split('\n').flatMap((ln, i) => marks.filter((m) => ln.includes(m)).map((m) => `${i + 1} ${m}`));
 
 // ---------------------------------------------------------------- --bump
 if (process.argv.includes('--bump')) {
@@ -142,7 +270,7 @@ const swSrc = exists('sw.js') ? read('sw.js') : '';
 const precache = parsePrecache(swSrc);
 {
   if (!precache) {
-    fail('precache parse', 'could not find `const PRECACHE = [...]` in sw.js');
+    fail('precache parse', precacheError ? `cannot parse sw.js (${precacheError})` : 'could not find `const PRECACHE = [...]` in sw.js');
   } else {
     const missing = precache.filter((u) => !exists(toRepoPath(u)));
     missing.length
@@ -160,21 +288,63 @@ const precache = parsePrecache(swSrc);
 
 // ---------------------------------------------------------------- (c)(d) app code scans
 {
-  const code = [
-    ...jsFiles().map((f) => [f, stripJsComments(read(f))]),
-    ...['sw.js'].filter(exists).map((f) => [f, stripJsComments(read(f))]),
-    ...['index.html'].filter(exists).map((f) => [f, stripHtml(read(f))]),
-    ...['css/app.css'].filter(exists).map((f) => [f, stripCssComments(read(f))]),
-  ];
-  const scan = (name, re, label) => {
-    const hits = [];
+  const code = [], unparsable = [];
+  const add = (f, fn) => {
+    const [text, why] = tryStrip(fn, read(f));
+    why ? unparsable.push(`cannot parse ${f} (${why})`) : code.push([f, text]);
+  };
+  for (const f of jsFiles()) add(f, stripJsComments);
+  if (exists('sw.js')) add('sw.js', stripJsComments);
+  if (exists('index.html')) add('index.html', (t) => blankCspMeta(stripHtml(t)));
+  if (exists('css/app.css')) add('css/app.css', stripCssComments);
+  const scan = (name, re, label, allowed = () => false) => {
+    const hits = [...unparsable];
     for (const [f, src] of code) {
-      for (const m of src.matchAll(re)) hits.push(`${f}:${lineOf(src, m.index)} ${label(m)}`);
+      for (const m of src.matchAll(re)) {
+        if (!allowed(f, m[0])) hits.push(`${f}:${lineOf(src, m.index)} ${label(m)}`);
+      }
     }
     hits.length ? fail(name, hits.join('; ')) : pass(name);
   };
-  scan('no remote URLs in app code', /https?:\/\/[^\s'"`)<>]*/g, (m) => m[0]);
+  // http(s) URLs in any letter case, and protocol-relative ones ("//host/x" in quotes or after src=, href=, url( ).
+  scan('no remote URLs in app code', URL_RE, (m) => m[0], (f, url) => !!ALLOWED_URLS[f]?.includes(url));
   scan('no window.claude in app code', /window\s*\.\s*claude\b/g, () => 'window.claude');
+}
+
+// ---------------------------------------------------------------- (c2) CSP pinned
+{
+  const name = 'CSP pinned';
+  const [html, why] = exists('index.html') ? tryStrip(stripHtml, read('index.html')) : ['', null];
+  const metas = html ? [...html.matchAll(CSP_META)] : [];
+  if (why) {
+    fail(name, `cannot parse index.html (${why})`);
+  } else if (metas.length !== 1) {
+    fail(name, metas.length ? `${metas.length} Content-Security-Policy meta tags in index.html, need exactly 1` : 'no Content-Security-Policy meta tag in index.html');
+  } else {
+    const content = /\bcontent\s*=\s*(["'])([\s\S]*?)\1/i.exec(metas[0][0]);
+    // A CSP meta only governs what comes after it, so no script, link or style tag may come before it.
+    const early = /<(script|link|style)\b/i.exec(html.slice(0, metas[0].index));
+    if (!content) fail(name, 'the Content-Security-Policy meta tag has no content');
+    else {
+      const diff = cspDiff(parseCsp(content[2]), parseCsp(PINNED_CSP));
+      if (early) fail(name, `<${early[1].toLowerCase()}> on line ${lineOf(html, early.index)} comes before the Content-Security-Policy meta tag (line ${lineOf(html, metas[0].index)}), which only covers what follows it`);
+      else diff.length ? fail(name, `differs from the pinned policy in tools/checks.mjs: ${diff.join('; ')}`) : pass(name);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- (c3) no Google client secret
+{
+  const name = 'no Google client secret in the repo';
+  const appFiles = [...jsFiles(), ...['sw.js', 'index.html', 'css/app.css', 'manifest.webmanifest'].filter(exists)];
+  const hits = appFiles.flatMap((f) => marksIn(read(f), SECRET_MARKS).map((h) => `${f}:${h}`));
+  const covered = new Set(appFiles);
+  for (const f of walkRepo()) {
+    if (covered.has(f) || BINARY_EXT.has(path.extname(f).toLowerCase())) continue;
+    if (fs.statSync(path.join(ROOT, f)).size > MAX_TEXT_BYTES) continue;
+    hits.push(...marksIn(read(f), SECRET_MARKS.slice(1)).map((h) => `${f}:${h}`));
+  }
+  hits.length ? fail(name, hits.join('; ')) : pass(name);
 }
 
 // ---------------------------------------------------------------- (e) VERSION bump

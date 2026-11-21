@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-21: Connect the app to your Google Drive (nothing is copied yet)
+- **Connect Google Drive:** the Library has a new "Connect Google Drive" button. It takes you to Google to sign in and to let Setlist Stand use its own folder in your Drive, then brings you back to the app. The app can see only the files it makes itself, never the rest of your Drive.
+- **Test connection:** makes (or finds) a folder called "Setlist Stand" in your Drive and says how many files are in it. This is only a first step: your songs, setlists and marks are not copied anywhere yet, and nothing in your library changes.
+- **Sign-in lasts about an hour.** After that the Library says "Your Google sign-in ran out" and "Connect again" does it again in two taps. **Disconnect** makes this tablet forget the sign-in (your Drive is not touched).
+- **Plain messages:** no internet, Google busy, Drive full, sign-in refused or taking too long: each says what happened in plain words and changes nothing. Cancel works at every step.
+- **Gigs are unaffected:** the app never talks to Google unless you tap one of these buttons, so it still works fully offline.
+
 ## 2026-11-21: Fixes from the iPad playtest
 - **The stylus draws without tapping Annotate.** With Annotate off, a stylus draws with the pen (or the highlighter, if that was chosen last); a finger still only turns pages. Tap Annotate for Undo, colours, thickness, the eraser and Text. A hint says so the first time.
 - **Text notes with a finger:** a finger tap is ignored while annotating unless "Finger draws" is on, so a tap with Text chosen seemed to do nothing. It now says: tap "Finger draws" first.

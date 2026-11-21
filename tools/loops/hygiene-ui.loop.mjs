@@ -70,8 +70,12 @@ async function cspLoop(ctx){
     const dirs = Object.fromEntries(metas[0].split(';').map(d => d.trim()).filter(Boolean).map(d => { const [k, ...v] = d.split(/\s+/); return [k.toLowerCase(), v]; }));
     assert((dirs['default-src'] || []).join(' ') === "'self'", 'default-src is ' + JSON.stringify(dirs['default-src']));
     assert((dirs['script-src'] || []).join(' ') === "'self'", 'script-src is ' + JSON.stringify(dirs['script-src']));
-    assert(!/unsafe-eval|wasm-unsafe-eval|https?:|\*/i.test(metas[0]), 'policy allows eval, a host or a wildcard: ' + metas[0]);
-    for(const [k, v] of Object.entries(dirs)) for(const src of v) assert(ALLOWED_SOURCES.has(src), `${k} allows "${src}"`);
+    /* one outside host is allowed, by the Google Drive work order: Drive's API, in connect-src and nowhere else */
+    const GOOGLE_API = 'https://www.googleapis.com';
+    assert((dirs['connect-src'] || []).filter(x => x === GOOGLE_API).length === 1, 'connect-src does not hold exactly Drive\'s API address: ' + JSON.stringify(dirs['connect-src']));
+    assert(!/unsafe-eval|wasm-unsafe-eval|\*/i.test(metas[0]) && metas[0].split(GOOGLE_API).length === 2 && !/https?:/i.test(metas[0].split(GOOGLE_API).join('')),
+      'policy allows eval, a wildcard or a host besides Drive\'s API: ' + metas[0]);
+    for(const [k, v] of Object.entries(dirs)) for(const src of v) assert(ALLOWED_SOURCES.has(src) || (k === 'connect-src' && src === GOOGLE_API), `${k} allows "${src}"`);
     for(const k of ['object-src', 'base-uri', 'form-action']) assert((dirs[k] || []).join() === "'none'", `${k} is ${JSON.stringify(dirs[k])}`);
     assert(await page.evaluate(() => document.querySelector('meta[name=referrer]')?.content) === 'no-referrer', 'no referrer meta');
     assert(await page.evaluate(() => window.pdfjsLib.noEval === true && Object.getPrototypeOf(window.pdfjsLib).getDocument !== window.pdfjsLib.getDocument),
