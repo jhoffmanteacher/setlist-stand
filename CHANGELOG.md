@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-21: The library is in A to Z order by song name
+- **A to Z by song name:** the Library, the Archived list, your search results, and the lists you pick songs from ("Add songs" on a setlist, "Share songs") are all in A to Z order by the song's name. Upper and lower case and accents do not matter, and numbers count as numbers ("2 Fast" comes before "10 Years Gone").
+- **Every word counts:** "The Weight" is under T and "A Hard Day's Night" is under A. Before, a leading "The", "A" or "An" was ignored.
+- Two songs with the same name go by artist, then version.
+- The order of songs inside a setlist is still yours: drag them wherever you like.
+
 ## 2026-11-21: Restore and Back up show what they are doing, and can be stopped before anything changes
 - **Restore from backup** now opens a box right away: "Opening the backup…", then "Checking song 12 of 74…", then "Saving to this tablet…". It no longer looks as if the app has hung.
 - **Stop** works while Restore is only reading and checking. It leaves everything as it was and says "Restore stopped. Nothing was changed." Once the library starts to be saved, the Stop button goes away, because that last step is all or nothing.

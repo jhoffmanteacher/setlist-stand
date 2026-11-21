@@ -78,8 +78,18 @@ export function displayName({ song = '', artist = '', version = '' } = {}) {
   return song + (version ? ` (${version})` : '') + (artist ? ` - ${artist}` : '');
 }
 
-export function sortKey(song) {
-  const s = String(song ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
-  const m = /^(the|an|a) (.*)$/s.exec(s);
-  return m && m[2].trim() ? m[2] : s;
+/* The order of songs in the library, the Archived list, search results and the song pickers: A to Z by song name.
+   The song name is what is compared (the `song` field, the title for a record with no `song`), with extra spaces taken
+   out and NOTHING else dropped: "The" and "A" are words like any other ("The Weight" is under T). Upper and lower case and
+   accents do not matter (sensitivity 'base'), numbers sort as numbers ("2 Fast" before "10 Years Gone"). Songs with the
+   same name go by artist, then version, then id (so the order never depends on the order they are stored in).
+   It is applied when a list is DRAWN; nothing is written to a song and the stored order is left alone. */
+export const sortKey = song => String(song ?? '').replace(/\s+/g, ' ').trim();
+const COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+const text = v => String(v ?? '');
+export function compareSongs(a, b) {
+  return COLLATOR.compare(sortKey(a.song || a.title), sortKey(b.song || b.title))
+    || COLLATOR.compare(text(a.artist), text(b.artist))
+    || COLLATOR.compare(text(a.version), text(b.version))
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }

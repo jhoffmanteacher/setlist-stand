@@ -1,4 +1,5 @@
 /* Small helpers shared by every module. */
+import {compareSongs} from './names.js';
 
 /* The Content-Security-Policy in index.html forbids eval. pdf.js would otherwise probe it with new Function(""), which
    the browser reports as a policy violation; isEvalSupported:false makes it draw glyphs without compiled code.
@@ -132,6 +133,7 @@ export function form(title, fields){
 }
 /* A checklist of songs: resolves to the ticked ids. The title and the button can be changed ({title, button}); the defaults are the setlist's "Add songs". */
 export function pick(songs, {title = 'Add songs', button = 'Add', needOne = false} = {}){
+  songs = [...songs].sort(compareSongs);          // A to Z by song name, like the library (items carry song, artist, version, or just a title)
   return new Promise(res => {
     const m = modal(`<h2>${esc(title)}</h2><div class="pick">${songs.map(s => `<label><input type="checkbox" value="${esc(s.id)}">${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>'}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>${esc(button)}</button></div>`);
     const ok = m.querySelector('[data-ok]');

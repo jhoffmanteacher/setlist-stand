@@ -65,13 +65,23 @@ const liveSong = (s, id, extra = {}) => ({id, title: 'Song ' + id, song: 'Song '
 
 export const loops = [
 
-{name: 'hardening: sortKey ignores extra spaces; a duplicate-download suffix does not swap title and artist', async run(ctx){
+{name: 'hardening: the song order ignores extra spaces, case and accents and drops no word ("The", "A"); a duplicate-download suffix does not swap title and artist', async run(ctx){
   /* the modules of the folder under test (ctx.root: a scratch copy when tools/plant-faults.mjs plants a fault in it) */
   const R = (ctx && ctx.root) || ROOT;
-  const {sortKey} = await import(pathToFileURL(path.join(R, 'js', 'names.js')).href);
+  const {sortKey, compareSongs} = await import(pathToFileURL(path.join(R, 'js', 'names.js')).href);
   const {parseFileName} = await import(pathToFileURL(path.join(R, 'js', 'importname.js')).href);
-  const keys = {'The  End': 'end', '  The End ': 'end', 'A   Day\tin': 'day in', 'The': 'the', 'Theme': 'theme'};
+  /* sortKey only takes out extra spaces: no leading "The" or "A" is dropped (Jonathan, 2026-11-21) */
+  const keys = {'The  End': 'The End', '  The End ': 'The End', 'A   Day\tin': 'A Day in', 'The': 'The', 'Theme': 'Theme', 'An Angel': 'An Angel'};
   for(const [k, want] of Object.entries(keys)) assert(sortKey(k) === want, `sortKey(${JSON.stringify(k)}) = ${JSON.stringify(sortKey(k))}, expected ${JSON.stringify(want)}`);
+  /* compareSongs: the whole order, from records given in a different order */
+  const S = (id, song, artist = '', version = '') => ({id, song, artist, version});
+  const given = [S('9', 'zebra'), S('8', 'The Weight'), S('7', 'Éclair', 'P', 'b'), S('6', 'Eclair', 'P', 'a'), S('5', '10 Years'), S('4', '2 Fast'), S('3', 'apple pie', 'Beta'), S('2', 'Apple Pie', 'Alpha'), S('1', 'A Day'), S('0', 'An Angel'), {id: 'x', title: 'Untitled'}];
+  const got = [...given].sort(compareSongs).map(r => r.id);
+  /* numbers as numbers; "A Day" and "An Angel" before "Apple" (nothing dropped); the same name in other case goes by artist;
+     Éclair (version b) and Eclair (version a) are the same name at base sensitivity, so the version decides: a before b;
+     a record with no song is sorted by its title; "The Weight" is under T */
+  const expect = ['4', '5', '1', '0', '2', '3', '6', '7', '8', 'x', '9'];
+  assert(got.join() === expect.join(), `compareSongs order ${got.join()}, expected ${expect.join()} (2 Fast, 10 Years, A Day, An Angel, Apple Pie/Alpha, apple pie/Beta, Eclair/a, Éclair/b, The Weight, Untitled, zebra)`);
   const names = {
     'War Pigs - Black Sabbath (1).pdf': ['War Pigs', 'Black Sabbath', ''],
     'War Pigs - Black Sabbath (2).pdf': ['War Pigs', 'Black Sabbath', ''],

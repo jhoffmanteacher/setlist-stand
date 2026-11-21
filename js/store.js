@@ -1,4 +1,4 @@
-import {splitName, displayName, sortKey} from './names.js';
+import {splitName, displayName, compareSongs} from './names.js';
 import {uid} from './util.js';
 
 /* Storage: IndexedDB `setlist-stand` (stores songs, files, sets, ink), with an in-memory fallback. */
@@ -120,14 +120,11 @@ export function upgradeSet(st){
 }
 /* A set's items minus songs that no longer exist. Breaks always stay. */
 export const liveItems = st => st.items.filter(it => it.type === 'break' || songById(it.id));
-const byName = (a, b) => sortKey(a.song).localeCompare(sortKey(b.song), undefined, {numeric:true}) ||
-  a.song.localeCompare(b.song, undefined, {numeric:true}) || (a.artist + a.version).localeCompare(b.artist + b.version);
-
 export async function load(){
   const songs = await all('songs'), sets = await all('sets');
   for(const s of songs) if(upgradeSong(s)) await put('songs', s.id, s);
   for(const st of sets) if(upgradeSet(st)) await put('sets', st.id, st);
-  state.songs = songs.filter(s => !s.deleted).sort(byName);
+  state.songs = songs.filter(s => !s.deleted).sort(compareSongs);     // the lists sort again when they are drawn (compareSongs in js/names.js)
   state.sets = sets.filter(s => !s.deleted).sort((a, b) => b.created - a.created);
 }
 export const songById = id => state.songs.find(s => s.id === id);

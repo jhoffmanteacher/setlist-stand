@@ -9,7 +9,7 @@ const plural = (n, w) => `${n} ${w}${n == 1 ? '' : 's'}`;
 /* Library: tick songs, then make the package. */
 export async function shareSongs(){
   if(!state.songs.length){ toast('Add some songs first'); return; }
-  const ids = await pick(state.songs.map(s => ({id:s.id, title:s.title + (s.archived ? ' (archived)' : '')})), {title:'Share songs', button:'Share', needOne:true});
+  const ids = await pick(state.songs.map(s => ({id:s.id, title:s.title + (s.archived ? ' (archived)' : ''), song:s.song, artist:s.artist, version:s.version})), {title:'Share songs', button:'Share', needOne:true});
   if(ids.length) await sharePackage(ids, null, 'Songs');
 }
 

@@ -84,11 +84,11 @@ function rng(seed){
 
 /* ---------- the model's own rules (from CLAUDE.md, docs/DECISIONS.md) ---------- */
 const titleOf = s => s.song + (s.version ? ` (${s.version})` : '') + (s.artist ? ` - ${s.artist}` : '');
-/* Library order: by song title, a leading "The ", "A " or "An " ignored, numbers in natural order;
-   then the song title itself, then artist+version. Equal ones keep their stored (key) order. */
-const sortKey = t => { const s = t.toLowerCase(); const m = /^(the|an|a) (.*)$/s.exec(s); return m && m[2].trim() ? m[2] : s; };
-const byNameNoId = (a, b) => sortKey(a.song).localeCompare(sortKey(b.song), undefined, {numeric: true}) ||
-  a.song.localeCompare(b.song, undefined, {numeric: true}) || (a.artist + a.version).localeCompare(b.artist + b.version);
+/* Library order (Jonathan, 2026-11-21): A to Z by song name, case and accents ignored, numbers in natural order, NO word
+   dropped ("The Weight" is under T); the same name goes by artist, then version. Equal ones keep their stored (id) order. */
+const COLL = new Intl.Collator(undefined, {sensitivity: 'base', numeric: true});
+const nameOf = s => (s.song || s.title || '').replace(/\s+/g, ' ').trim();
+const byNameNoId = (a, b) => COLL.compare(nameOf(a), nameOf(b)) || COLL.compare(a.artist || '', b.artist || '') || COLL.compare(a.version || '', b.version || '');
 const byName = (a, b) => byNameNoId(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const pagesText = n => `${n} page${n == 1 ? '' : 's'}`;
 const cropOf = (s, pn) => (s.crop && ((s.crop.pages && s.crop.pages[pn]) || s.crop.all)) || null;
