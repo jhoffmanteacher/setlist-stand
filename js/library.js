@@ -4,11 +4,12 @@ import {parseFileName} from './importname.js';
 import {displayName} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
+import {shareSongs} from './share.js';
 
 let q = '', showArchived = false, replaceTarget = null;
 
 export function renderLibrary(v){
-  v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button></div><div id="libNudge"></div><div id="libList"></div>
+  v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button><button data-sharesongs>Share songs</button></div><div id="libNudge"></div><div id="libList"></div>
     <label class="sw-row"><input type="checkbox" id="showArch" ${showArchived ? 'checked' : ''}>Show archived</label>
     <div class="bar" style="margin-top:12px"><button data-backup>Back up everything</button><button data-restore>Restore from backup</button></div>
     <p class="hint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
@@ -128,6 +129,7 @@ export async function replacePdf(file){
 export async function onClick(b, d){
   if('add' in d){ $('#file').click(); return true; }
   if('split' in d){ $('#splitFile').click(); return true; }
+  if('sharesongs' in d){ await shareSongs(); return true; }
   if('persist' in d){ await askPersist(b); return true; }
   if('problems' in d){ showProblemLog(); return true; }
   if(d.open){ openViewer([{type:'song', id:d.open}], 0); return true; }

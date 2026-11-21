@@ -2,6 +2,7 @@ import {$, esc, uid, ask, pick, armed, hooks, toast} from './util.js';
 import {load, state, songById, saveSet, markDeleted, liveItems} from './store.js';
 import {openViewer} from './viewer.js';
 import {printDialog} from './print.js';
+import {shareSet} from './share.js';
 
 export let openSet = null;
 export const closeSet = () => { openSet = null; };
@@ -20,7 +21,7 @@ export function renderSetlists(v){
     const items = liveItems(st), n = songCount(st);
     let k = 0;
     v.innerHTML = `<div class="bar"><button data-allsets>&#8249; Setlists</button><h2>${esc(st.name)}</h2></div>
-      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-dup>Duplicate</button><button data-renset>Rename</button></div>
+      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-shareset ${n ? '' : 'disabled'}>Share</button><button data-dup>Duplicate</button><button data-renset>Rename</button></div>
       ${items.length ? `<ul class="list" id="items">${items.map((it, i) => {
         if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${esc(i)}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${esc(i)}">Remove</button></div></li>`;
         const s = songById(it.id); k++;
@@ -57,6 +58,7 @@ export async function onClick(b, d){
   const items = liveItems(st);
   const save = async () => { st.items = items; await saveSet(st); await load(); hooks.render(); };
   if(d.playat){ openViewer(entriesOf(st), +d.playat); return true; }
+  if('shareset' in d){ await shareSet(st); return true; }
   if('print' in d){ printDialog(st, items.filter(it => it.type === 'song').map(it => it.id)); return true; }
   if('dup' in d){ await duplicate(st); return true; }
   if('addto' in d){ const add = await pick(songs.filter(s => !s.archived)); if(add.length){ items.push(...add.map(id => ({type:'song', id}))); await save(); } return true; }

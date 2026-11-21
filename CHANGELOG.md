@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-20: Share songs or a setlist as one file
+- **Share songs** (Library, next to Split a songbook): tick songs and it makes one file, `Songs - Setlist Stand share.zip`, with their PDFs, titles, artists, versions and crops. Songs marked archived are listed and can be shared too.
+- **Share** on a setlist: one file with every song the setlist uses (each once, archived ones included), the order, and the breaks.
+- Your pen marks and text notes are never in the file. Your own library is not changed by sharing. The file is saved to your downloads; where the browser lets the tablet send it directly, a **Share…** button appears too.
+- The other person can't open these files yet: **Import a share package** comes in the next update.
+
 ## 2026-11-20: Split a songbook into songs
 - **Split a songbook** (Library, next to Add PDFs): pick one big PDF (a fake book or songbook) and it becomes separate songs, each its own PDF in your library. The songbook itself is not kept; only the songs you add.
 - **Bookmarks do the first pass.** If the PDF has bookmarks, every song bookmark is listed with its pages (a section like "Part One" is not listed as a song; Cover, Contents and Index start unticked). With no bookmarks, the book's pages show as small pictures: tap the first page of each song and type its title.

@@ -6,6 +6,7 @@ paths:
   - "js/errors.js"
   - "js/split.js"
   - "js/songpdf.js"
+  - "js/sharepack.js"
   - "tools/msb_convert.py"
 ---
 
@@ -16,4 +17,4 @@ paths:
 3. **Deletion leaves a marker** (`{id, deleted:true, updated}`) so a later Drive sync can tell "deleted" from "never had it"; markers are never garbage-collected. The UI hides them; backups include them.
 4. **A new field needs a default in `upgradeSong` / `upgradeSet`** and old backups must still restore (BACKUP_VERSION only goes up; restore reads every older version). Marks stay fractions of the full page.
 5. **Anything shown from a backup or file name is untrusted:** escape it (`esc`) in templates, including ids in attributes.
-6. After a change: `node tools/loops.mjs --only roundtrip`, `--only hygiene-data`, `--only import`, `--only split` (split import writes songs and PDFs: one `putAll` per song, hash of the stored bytes), and `node tools/names-parity.mjs <the .msb>` after touching names or the converter.
+6. After a change: `node tools/loops.mjs --only roundtrip`, `--only hygiene-data`, `--only import`, `--only share` (a share package must hold the stored PDF bytes and no annotations), `--only split` (split import writes songs and PDFs: one `putAll` per song, hash of the stored bytes), and `node tools/names-parity.mjs <the .msb>` after touching names or the converter.

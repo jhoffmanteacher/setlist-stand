@@ -198,6 +198,19 @@ async function dialogLoop(ctx){
     await escapeBack(page, ed, 'Edit dialog');
     assert(!(await page.locator('.modal').count()), 'Edit dialog still open');
 
+    /* library Share songs (checklist), then the package-saved dialog */
+    const sh = '#view [data-sharesongs]';
+    await page.focus(sh); await page.keyboard.press('Enter');
+    await page.locator('.modal .pick').waitFor();
+    await checkDialog(page, 'Share songs dialog');
+    await escapeBack(page, sh, 'Share songs dialog');
+    await page.focus(sh); await page.keyboard.press('Enter');
+    await page.locator('.modal .pick input').first().check();
+    await download(page, () => page.click('.modal [data-ok]'));
+    await page.locator('.modal [role=dialog]', {hasText: 'Package saved'}).waitFor();
+    await checkDialog(page, 'Package saved dialog');
+    await escapeBack(page, sh, 'Package saved dialog');
+
     /* new-setlist ask */
     await page.click('#tSets');
     await page.focus('#view [data-newset]'); await page.keyboard.press('Enter');

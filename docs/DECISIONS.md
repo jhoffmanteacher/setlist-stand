@@ -49,7 +49,8 @@ Running list of what the app must do. Source for the work orders.
   - If a run fails (say the tablet is full) or is stopped, the screen stays open with the songs not yet added still ticked, and a dialog says what was added and what was not.
   - Not done: a protected (restricted) songbook, one that hides layers by default or uses layer rules (OCMD), and one with a damaged page tree are refused with a plain message. Printing already renders protected charts as pictures; splitting could do the same later. A book's own layer settings are not carried into songs, which is why such books are refused.
   - Memory: the book is held in memory about three times over while the screen is open, so a very large book can fail on a tablet with little memory; nothing is changed when it does.
-- Later work orders: Google Drive sync, share packages, page-turner pedal.
+- WO3 share packages (2026-11-20, `WORK-ORDER-share-packages.md`): Part 1 done 2026-11-20 (Share songs in the Library, Share on a setlist; the file only, nothing imports it yet). A package carries the stored PDF bytes, song details (title, artist, version) and crops, and for a setlist its order and breaks; never annotations (crops and details: Jonathan, 2026-11-20). Part 2 (Import a share package) is next.
+- Later work orders: Google Drive sync, page-turner pedal.
 
 ## Moving from MobileSheets (2026-11-19)
 - Backup `MobileSheets_2026-11-18.msb` decoded. Converter: `tools/msb_convert.py` (format notes at its top). Output restores straight into the app and applies the naming convention (artist pulled from "Artist - Title - Chords" names; "- Chords", "- Pro", "(1)" dropped; versions like OLD/2/in G moved into parentheses).
@@ -63,8 +64,9 @@ Running list of what the app must do. Source for the work orders.
 - Same user on two tablets: save each stroke with its own id and merge by id when syncing (deleted strokes kept as markers), so marks made on both tablets offline are never lost.
 - Duplicate matching on import: fingerprint each PDF file's contents.
 - MobileSheets setlist order = SetlistSong row order (no position column).
+- Known limit: a share package holds every PDF in memory while it is built (about twice their total, like a backup), so a very large selection can fail on a tablet with little memory; nothing is changed when it does.
 - Known limit: every song cut from a songbook carries its own copy of the fonts and images its pages use (pdf-lib copies what a page points at), so the songs together can take more space than the book did.
 - Known limit: a restore holds the zip and every PDF in memory before it writes (about 3 times the zip's size), so a very large backup can fail on a tablet with little memory; nothing is changed when it does.
 
 ## Open questions
-- Share package: include crop settings and song details (title, key), or PDFs only?
+- None.

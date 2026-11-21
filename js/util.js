@@ -100,9 +100,12 @@ export function form(title, fields){
     m.onkeydown = e => { if(e.key === 'Enter' && e.target.matches('input[type=text]')){ e.preventDefault(); done(true); } if(e.key === 'Escape') done(false); };
   });
 }
-export function pick(songs){
+/* A checklist of songs: resolves to the ticked ids. The title and the button can be changed ({title, button}); the defaults are the setlist's "Add songs". */
+export function pick(songs, {title = 'Add songs', button = 'Add', needOne = false} = {}){
   return new Promise(res => {
-    const m = modal(`<h2>Add songs</h2><div class="pick">${songs.map(s => `<label><input type="checkbox" value="${esc(s.id)}">${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>'}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Add</button></div>`);
+    const m = modal(`<h2>${esc(title)}</h2><div class="pick">${songs.map(s => `<label><input type="checkbox" value="${esc(s.id)}">${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>'}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>${esc(button)}</button></div>`);
+    const ok = m.querySelector('[data-ok]');
+    if(needOne){ ok.disabled = true; m.addEventListener('change', () => { ok.disabled = !m.querySelector('input:checked'); }); }     // the button waits for a tick
     m.querySelector('[data-x]').onclick = () => { m.remove(); res([]); };
     m.querySelector('[data-ok]').onclick = () => { const ids = [...m.querySelectorAll('input:checked')].map(c => c.value); m.remove(); res(ids); };
   });

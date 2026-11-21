@@ -1494,6 +1494,46 @@ async function stepSplitBook(t){
   assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
 }
 
+/* Share: chosen songs from the Library, then a setlist from its screen. The downloaded zips are read back. */
+async function stepShare(t){
+  const {page} = t, errs = t.errors.length;
+  const closeDone = async () => {
+    await page.locator('.modal [role=dialog]', {hasText: 'Package saved'}).waitFor();
+    await page.click('.modal [data-x]');
+    await page.waitForFunction(() => !document.querySelector('.modal'));
+  };
+  const read = async dl => {
+    const zip = await JSZip.loadAsync(await fsp.readFile(dl.file)), names = Object.keys(zip.files).sort();
+    return {names, share: JSON.parse(await zip.file('share.json').async('string'))};
+  };
+  await toLibrary(page);
+  await page.click('#view [data-sharesongs]');
+  const boxes = page.locator('.modal .pick input[type=checkbox]');
+  await boxes.first().waitFor();
+  await boxes.nth(0).check(); await boxes.nth(1).check();
+  const a = await download(page, () => page.click('.modal [data-ok]'));
+  assert(/Setlist Stand share\.zip$/.test(a.name), 'package name ' + a.name);
+  const pa = await read(a);
+  assert(pa.names.join() === 'files/s1.pdf,files/s2.pdf,share.json', 'songs package entries: ' + pa.names);
+  assert(pa.share.kind === 'share' && pa.share.songs.length === 2 && pa.share.setlist === null, 'songs package: ' + JSON.stringify(pa.share).slice(0, 200));
+  assert(!('ink' in pa.share) && !/"strokes"|"t":"(pen|hl|text)"/.test(JSON.stringify(pa.share)), 'the package holds annotation data');
+  await closeDone();
+
+  await newSet(page, 'Share check');
+  await page.click('#view [data-addto]');
+  const picks = page.locator('.modal .pick input[type=checkbox]');
+  await picks.first().waitFor();
+  await picks.nth(0).check(); await picks.nth(1).check();
+  await page.click('.modal [data-ok]');
+  await page.waitForFunction(() => document.querySelectorAll('#view [data-playat]').length === 2);
+  const b = await download(page, () => page.click('#view [data-shareset]'));
+  const pb = await read(b);
+  assert(pb.names.join() === 'files/s1.pdf,files/s2.pdf,share.json', 'setlist package entries: ' + pb.names);
+  assert(pb.share.setlist && pb.share.setlist.name === 'Share check' && pb.share.setlist.items.length === 2, 'setlist package: ' + JSON.stringify(pb.share.setlist));
+  await closeDone();
+  assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -1525,7 +1565,8 @@ const STEPS = [
   ['26 two-page view: the cropper steps to page 2 and crops only that page', stepCropSpread],
   ['27 cropper buttons pressed before the page renders do nothing and throw nothing', stepCropEarly],
   ['28 split a songbook: bookmarks give the songs, each is added as its own PDF', stepSplitBook],
-  ['29 no request left localhost during the run', stepNoExternal],
+  ['29 share: songs from the Library and a setlist each download as a package with the PDFs, no annotations', stepShare],
+  ['30 no request left localhost during the run', stepNoExternal],
 ];
 
 /* ---------- runner ---------- */
