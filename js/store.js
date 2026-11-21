@@ -185,6 +185,28 @@ export async function getInk(songId, pn){
   if(changed) await put('ink', key, record);
   return record.strokes;
 }
+/* The strokes of pages 1..n of a song in ONE read transaction (not n awaited reads one after another): Map page -> strokes,
+   each page upgraded and saved back exactly as getInk() would. */
+export async function getInkPages(songId, n){
+  const keys = Array.from({length:n}, (_, i) => songId + ':' + (i + 1));
+  let recs;
+  if(MEM) recs = keys.map(k => MEM.ink.get(k));
+  else {
+    const d = await db();
+    recs = await new Promise((res, rej) => {
+      const t = d.transaction('ink', 'readonly'), st = t.objectStore('ink'), reqs = keys.map(k => st.get(k));
+      t.oncomplete = () => res(reqs.map(r => r.result)); t.onerror = e => rej(txErr(t, e));
+      t.onabort = () => rej(t.error || new Error('aborted'));
+    });
+  }
+  const out = new Map();
+  for(let i = 0; i < n; i++){
+    const {record, changed} = upgradeInk(recs[i]);
+    if(changed) await put('ink', keys[i], record);
+    out.set(i + 1, record.strokes);
+  }
+  return out;
+}
 /* Removes every ink page record of a song, whatever its page count was. */
 export async function delInkFor(songId){
   const [lo, hi] = inkRange(songId);

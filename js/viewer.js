@@ -1,18 +1,21 @@
 import {$, toast, hooks} from './util.js';
-import {get, getInk, songById, cropOf} from './store.js';
+import {get, getInkPages, songById, cropOf} from './store.js';
 import {openCropper} from './crop.js';
 import {awakeOpen, awakeClose, initAwake} from './awake.js';
+import {PageCache, release} from './pagecache.js';
 import {paint, setAnnot, inkBusy, inkReset, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
+/* cache: rendered pages (js/pagecache.js). prep: queue index -> {id, p: Promise of an open pdf.js document} for the songs
+   next to the one showing, kept open so a turn into them has nothing to open (see "Songs next to this one" below). */
 export const V = {queue:[], qi:0, brk:null, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
-  tool:'pen', color:'#1a1a1a', tok:0, dt:0, busy:false, cache:new Map(), ink:new Map(), hist:[]};
+  tool:'pen', color:'#1a1a1a', tok:0, dt:0, busy:false, cache:new PageCache(), prep:new Map(), ink:new Map(), hist:[]};
 try{ V.two = localStorage.getItem('ss-two') !== '0'; }catch(e){}
 
 /* entries: [{type:'song', id} | {type:'break', id, name}] */
 export async function openViewer(entries, qi, page = 1){
   if(!entries.some(e => e.type === 'song')) return;
-  V.queue = entries; V.hist = [];
+  prune([]); V.queue = entries; V.hist = [];
   viewer.classList.add('on'); viewer.classList.remove('hide');
   document.body.style.overflow = 'hidden';
   document.body.classList.add('playing');      // hides the "Updated. Tap to reload" banner: a stray tap mid-song must not reload the app
@@ -29,7 +32,8 @@ export function closeViewer(){
   viewer.classList.remove('on');
   V.tok++; V.dt++; V.brk = null; gest = null;
   if(V.doc){ V.doc.destroy(); V.doc = null; }
-  V.cache.clear(); stage.innerHTML = '';
+  prune([]);                                  // songs prepared for a turn that never came: closed, their pages released
+  V.cache.clear(); setStage();
   document.body.style.overflow = '';
   document.body.classList.remove('playing');
   awakeClose();
@@ -39,54 +43,116 @@ export function closeViewer(){
 const show = (qi, page) => V.queue[qi].type === 'break' ? showBreak(qi) : loadSong(qi, page);
 async function showBreak(qi){
   V.tok++; setAnnot(false);
-  if(V.doc){ V.doc.destroy(); V.doc = null; }
-  V.cache.clear(); V.brk = V.queue[qi]; V.qi = qi; V.song = null; V.id = null; V.page = 1; V.n = 1;
+  retire(qi);                                 // the song just left stays open: Back from the break is instant
+  V.brk = V.queue[qi]; V.qi = qi; V.song = null; V.id = null; V.page = 1; V.n = 1;
+  prune(around(qi));
+  prepare(nextSong(qi), 'first'); prepare(prevSong(qi), 'last');    // a break page is the time to ready the songs on both sides
   await draw();
+}
+/* The PDF of queue entry qi opened: the one prepared for it (taken out of the prepared set), or a new one. Resolves to
+   null when the file is missing. */
+function takeDoc(qi, id){
+  const e = V.prep.get(qi);
+  if(e){ V.prep.delete(qi); if(e.id === id) return e.p; dropDoc(e); }
+  return openDoc(id);
+}
+async function openDoc(id){
+  const blob = await get('files', id);
+  if(!blob) return null;
+  return pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer())}).promise;
 }
 async function loadSong(qi, page){
   const tok = ++V.tok; const id = V.queue[qi].id;
   try{
-    const blob = await get('files', id);
-    if(!blob){ toast('That file is missing'); return; }
-    const doc = await pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer())}).promise;
-    const ink = new Map();
-    for(let p = 1; p <= doc.numPages; p++) ink.set(p, await getInk(id, p));
-    if(tok !== V.tok){ doc.destroy(); return; }
-    if(V.doc) V.doc.destroy();
+    const doc = await takeDoc(qi, id);
+    if(!doc){ toast('That file is missing'); return; }
+    const ink = await getInkPages(id, doc.numPages);     // one read for every page, not one awaited read per page
+    if(tok !== V.tok){ dropDoc({p:Promise.resolve(doc)}); return; }
+    retire(qi);
     Object.assign(V, {doc, id, qi, n:doc.numPages, song:songById(id), ink, brk:null});
-    V.cache.clear(); V.page = 1; calcPer();
+    V.page = 1; calcPer();
     V.page = page === 'last' ? lastStart() : Math.min(Math.max(1, +page || 1), V.n);
     if(V.per === 2 && V.page % 2 === 0) V.page--;
+    prune(around(qi));
     await draw();
   }catch(err){ toast('Could not open this PDF'); }
 }
+const perFor = n => (V.two && innerWidth > innerHeight * 1.1 && n > 1) ? 2 : 1;
 function calcPer(){
-  V.per = (V.two && innerWidth > innerHeight * 1.1 && V.n > 1) ? 2 : 1;
+  V.per = perFor(V.n);
   if(V.per === 2 && V.page % 2 === 0) V.page--;
 }
-const lastStart = () => V.per === 2 ? (V.n % 2 ? V.n : V.n - 1) : V.n;
+const lastStartFor = (n, per) => per === 2 ? (n % 2 ? n : n - 1) : n;
+const lastStart = () => lastStartFor(V.n, V.per);
 
-/* Draws one page into a canvas that just fits W x H. With a crop, only the kept part is drawn, scaled up to fill. */
-export function renderPage(pn, W, H, crop){
-  const cr = crop || {x:0, y:0, w:1, h:1};
-  const key = V.id + ':' + pn + ':' + W + 'x' + H + ':' + [cr.x, cr.y, cr.w, cr.h].join(',');
-  if(V.cache.has(key)) return V.cache.get(key);
-  const doc = V.doc;
+/* ---------- Songs next to this one ----------
+   Opening a song is what makes a turn into it slow (pdf.js opens the PDF: most of the time on a tablet), so the songs on
+   either side of the one showing (skipping breaks) are opened ahead and kept in V.prep, and the spread a turn would
+   land on is drawn into the cache: the first spread of the next song, the last of the previous one. This starts when
+   the spread it matters for shows (the last, the first) and when a break page shows. The song just left is kept open
+   too, for the turn back. Whatever is not next to the song showing is closed, its pages dropped from the cache. */
+const nextSong = qi => { for(let i = qi + 1; i < V.queue.length; i++) if(V.queue[i].type === 'song') return i; return -1; };
+const prevSong = qi => { for(let i = qi - 1; i >= 0; i--) if(V.queue[i].type === 'song') return i; return -1; };
+const around = qi => [prevSong(qi), nextSong(qi)];
+const dropDoc = e => e.p.then(d => { if(d){ V.cache.dropPrefix(tagOf(d) + ':'); d.destroy(); } }, () => {});
+function prune(keep){
+  for(const [qi, e] of [...V.prep]) if(!keep.includes(qi)){ V.prep.delete(qi); dropDoc(e); }
+}
+/* The song on screen is about to be replaced (by qi): its document goes to the prepared set, and prune() decides whether it stays. */
+function retire(toQi){
+  const doc = V.doc; if(!doc) return;
+  V.doc = null;
+  const old = V.prep.get(V.qi); if(old) dropDoc(old);
+  if(V.id && V.queue[V.qi] && V.qi !== toQi) V.prep.set(V.qi, {id:V.id, p:Promise.resolve(doc)}); else dropDoc({p:Promise.resolve(doc)});
+}
+/* Gets queue entry qi ready: its PDF open and the spread a turn lands on ('first' going forward, 'last' going back) drawn. */
+function prepare(qi, which){
+  const e = V.queue[qi]; if(qi < 0 || !e || e.type !== 'song' || qi === V.qi) return;
+  let ent = V.prep.get(qi);
+  if(!ent){ ent = {id:e.id, p:openDoc(e.id).catch(() => null)}; V.prep.set(qi, ent); }
+  ent.p.then(doc => {
+    if(!doc || V.prep.get(qi) !== ent) return;           // missing, or taken or closed meanwhile
+    const n = doc.numPages, per = perFor(n), start = which === 'last' ? lastStartFor(n, per) : 1, {W, H} = stageSize(per), song = songById(e.id);
+    for(let i = 0; i < per && start + i <= n; i++) renderPage(start + i, W, H, cropOf(song, start + i), {doc, id:e.id}).catch(() => {});
+  });
+}
+const stageSize = per => ({W:Math.floor((stage.clientWidth - 16 - (per - 1) * 6) / per), H:stage.clientHeight - 16});
+/* Replaces what the stage shows; the canvases that leave it are emptied unless the cache still keeps them. */
+function setStage(...nodes){
+  const old = [...stage.querySelectorAll('canvas')];
+  stage.replaceChildren(...nodes);
+  for(const cv of old) V.cache.unused(cv);
+}
+
+/* Draws one page into a canvas that just fits W x H. With a crop, only the kept part is drawn, scaled up to fill.
+   src: whose PDF ({doc, id}); the song on screen unless a song being prepared is given. Pages are cached (js/pagecache.js:
+   limited by pixels, the oldest first; the canvases of a page that leaves the cache are emptied, which is how iPad
+   Safari gets its memory back). */
+/* Pages are keyed by the OPEN DOCUMENT, not the song: a song twice in a set, or a PDF replaced, has two documents, and
+   closing one must never take pages (or a render still running) from the other. */
+const tags = new WeakMap();
+let tagN = 0;
+const tagOf = doc => { if(!tags.has(doc)) tags.set(doc, 'd' + ++tagN); return tags.get(doc); };
+const pageKey = (src, pn, W, H, cr) => tagOf(src.doc) + ':' + pn + ':' + W + 'x' + H + ':' + [cr.x, cr.y, cr.w, cr.h].join(',');
+const FULL_CROP = {x:0, y:0, w:1, h:1};
+export function renderPage(pn, W, H, crop, src = V){
+  const cr = crop || FULL_CROP, key = pageKey(src, pn, W, H, cr);
+  const hit = V.cache.hit(key);
+  if(hit) return hit;
+  const doc = src.doc, dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const pr = (async () => {
     const pg = await doc.getPage(pn);
     const v1 = pg.getViewport({scale:1});
     const sc = Math.min(W / (v1.width * cr.w), H / (v1.height * cr.h));
     const cw = Math.floor(v1.width * cr.w * sc), ch = Math.floor(v1.height * cr.h * sc);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
     const cv = document.createElement('canvas');
     cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
     const vp = pg.getViewport({scale:sc * dpr});
-    await pg.render({canvasContext:cv.getContext('2d'), viewport:vp, transform:[1, 0, 0, 1, -cr.x * vp.width, -cr.y * vp.height]}).promise;
+    try{ await pg.render({canvasContext:cv.getContext('2d'), viewport:vp, transform:[1, 0, 0, 1, -cr.x * vp.width, -cr.y * vp.height]}).promise; }
+    catch(err){ release(cv); throw err; }
     return {cv, cw, ch, crop};
   })();
-  V.cache.set(key, pr);
-  pr.catch(() => V.cache.delete(key));
-  while(V.cache.size > 10) V.cache.delete(V.cache.keys().next().value);
+  V.cache.put(key, pr, W * H * dpr * dpr);
   return pr;
 }
 function drawBreak(){
@@ -95,33 +161,39 @@ function drawBreak(){
   el.innerHTML = `<h1></h1><p></p>`;
   el.querySelector('h1').textContent = V.brk.name;
   el.querySelector('p').textContent = nx ? 'Next: ' + (songById(nx.id)?.title || '') : 'End of set';
-  stage.replaceChildren(el);
+  setStage(el);
   updateChrome();
 }
 export async function draw(){
   if(V.brk) return drawBreak();
   if(!V.doc) return;
   const dt = ++V.dt; calcPer();
-  const pad = 8;
-  const W = Math.floor((stage.clientWidth - pad * 2 - (V.per - 1) * 6) / V.per);
-  const H = stage.clientHeight - pad * 2;
+  const {W, H} = stageSize(V.per);
   const pns = [];
   for(let i = 0; i < V.per; i++){ const p = V.page + i; if(p <= V.n) pns.push(p); }
+  const keys = pns.map(p => pageKey(V, p, W, H, cropOf(V.song, p) || FULL_CROP));
+  const free = V.cache.hold(keys);                  // these pages must not be evicted before they are on the stage
   let res;
-  try{ res = await Promise.all(pns.map(p => renderPage(p, W, H, cropOf(V.song, p)))); }catch(e){ return; }
-  if(dt !== V.dt) return;
-  stage.replaceChildren(...res.map((r, i) => {
-    const sh = document.createElement('div'); sh.className = 'sheet';
-    sh.style.width = r.cw + 'px'; sh.style.height = r.ch + 'px';
-    const ink = document.createElement('canvas'); ink.className = 'ink'; ink.dataset.pn = pns[i];
-    ink.width = r.cv.width; ink.height = r.cv.height; ink._crop = r.crop;
-    sh.append(r.cv, ink);
-    paint(ink, V.ink.get(pns[i]) || []);
-    return sh;
-  }));
+  try{
+    try{ res = await Promise.all(pns.map(p => renderPage(p, W, H, cropOf(V.song, p)))); }catch(e){ return; }
+    if(dt !== V.dt) return;
+    setStage(...res.map((r, i) => {
+      const sh = document.createElement('div'); sh.className = 'sheet';
+      sh.style.width = r.cw + 'px'; sh.style.height = r.ch + 'px';
+      const ink = document.createElement('canvas'); ink.className = 'ink'; ink.dataset.pn = pns[i];
+      ink.width = r.cv.width; ink.height = r.cv.height; ink._crop = r.crop;
+      sh.append(r.cv, ink);
+      paint(ink, V.ink.get(pns[i]) || []);
+      return sh;
+    }));
+  } finally { free(); }
   updateChrome();
-  const nx = V.page + V.per;
-  for(let i = 0; i < V.per; i++){ const p = nx + i; if(p <= V.n) renderPage(p, W, H, cropOf(V.song, p)).catch(() => {}); }
+  /* Ready the spreads either side, so a turn either way needs no wait; then the songs either side at the ends. */
+  const ahead = (start) => { for(let i = 0; i < V.per; i++){ const p = start + i; if(p >= 1 && p <= V.n) renderPage(p, W, H, cropOf(V.song, p)).catch(() => {}); } };
+  ahead(V.page + V.per);
+  if(V.page > 1) ahead(Math.max(1, V.page - V.per));
+  if(V.page + V.per > V.n) prepare(nextSong(V.qi), 'first');
+  if(V.page === 1) prepare(prevSong(V.qi), 'last');
 }
 const entryLabel = e => e.type === 'break' ? e.name : (songById(e.id)?.title || '');
 function updateChrome(){

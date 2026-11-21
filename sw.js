@@ -22,6 +22,7 @@ const PRECACHE = [
   'js/library.js',
   'js/setlists.js',
   'js/viewer.js',
+  'js/pagecache.js',
   'js/awake.js',
   'js/ink.js',
   'js/print.js',
