@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-21: Restore and Back up show what they are doing, and can be stopped before anything changes
+- **Restore from backup** now opens a box right away: "Opening the backup…", then "Checking song 12 of 74…", then "Saving to this tablet…". It no longer looks as if the app has hung.
+- **Stop** works while Restore is only reading and checking. It leaves everything as it was and says "Restore stopped. Nothing was changed." Once the library starts to be saved, the Stop button goes away, because that last step is all or nothing.
+- **Back up everything** shows "Packing song 12 of 74…" and then "Making the backup file… 45%". **Stop** works at any point: nothing is downloaded, and the "last backup" reminder is not changed.
+- A long message (say, why a backup could not be restored) now stays on screen long enough to read.
+- The "Updated. Tap to reload" button is out of reach while one of these boxes is open, so a stray tap cannot throw away a restore.
+
 ## 2026-11-21: Pages turn faster, and the next song in a setlist is ready before you get to it
 - **Page turns:** turning forward or back a page now shows the next page straight away. The page on either side is drawn ahead.
 - **Next song in a setlist:** while the last page of a song is showing (or a break page), the next song is opened and its first page drawn, so the turn into it takes no waiting. Going back into the previous song works the same way, and so does the song after a break.
