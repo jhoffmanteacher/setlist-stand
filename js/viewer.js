@@ -194,7 +194,11 @@ export function initViewer(){
   $('#v2up').onclick = () => { V.two = !V.two; try{ localStorage.setItem('ss-two', V.two ? '1' : '0'); }catch(e){} V.cache.clear(); draw(); };
   $('#vFull').onclick = () => {
     if(document.fullscreenElement){ document.exitFullscreen().catch(() => {}); return; }
-    const p = viewer.requestFullscreen ? viewer.requestFullscreen() : null;
+    /* The WHOLE page goes full screen, not #viewer: in full screen the browser shows only the full-screen element and
+       what is inside it, so with #viewer alone every dialog (appended to body), toast and the crop screen (siblings
+       of #viewer) opened out of sight while the viewer behind them was made inert: a freeze. The viewer is
+       position:fixed over everything, so the picture is the same. */
+    const root = document.documentElement, p = root.requestFullscreen ? root.requestFullscreen() : null;
     if(p && p.catch) p.catch(() => toast('Full screen is not available here')); else if(!p) toast('Full screen is not available here');
   };
   viewer.addEventListener('click', e => { const b = e.target.closest('button'); if(b) b.blur(); });

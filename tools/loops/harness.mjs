@@ -178,3 +178,31 @@ export const wipe = async page => {
     const r = indexedDB.deleteDatabase('setlist-stand'); r.onsuccess = r.onerror = r.onblocked = () => res();
   }));
 };
+
+/* Is the element really DRAWN on the screen the person sees? Not "is it in the page" or "does it have size": in full
+   screen the browser draws only the full-screen element and what is inside it, so a dialog outside it is in the page,
+   has a size, takes focus, and cannot be seen. The element's area is photographed as it is, with the element switched to
+   visibility:hidden, and as it is again; if the browser draws it, the hidden photograph differs from both of the others.
+   The two "as it is" photographs must agree (something else repainting in that area, a redraw after a resize, would
+   otherwise look like the element): if they do not, the whole check is tried again, and after three tries it throws.
+   Nothing is assumed about colours. */
+export async function onScreen(page, sel){
+  for(let attempt = 1; attempt <= 3; attempt++){
+    const r = await page.evaluate(sel => {
+      const e = document.querySelector(sel); if(!e) return null;
+      const b = e.getBoundingClientRect(), x = Math.max(0, Math.floor(b.x)), y = Math.max(0, Math.floor(b.y));
+      return {x, y, width: Math.min(innerWidth, Math.ceil(b.right)) - x, height: Math.min(innerHeight, Math.ceil(b.bottom)) - y};
+    }, sel);
+    if(!r || r.width < 1 || r.height < 1) return false;
+    const shot = () => page.screenshot({clip: r, animations: 'disabled', caret: 'hide'});
+    const a = await shot();
+    const was = await page.evaluate(sel => { const e = document.querySelector(sel), v = e.style.visibility; e.style.visibility = 'hidden'; return v; }, sel);
+    let b, c;
+    try{ b = await shot(); }
+    finally{ await page.evaluate(([sel, v]) => { const e = document.querySelector(sel); if(e) e.style.visibility = v; }, [sel, was]); }
+    c = await shot();
+    if(a.equals(c)) return !a.equals(b);
+    await sleep(250);
+  }
+  throw new Error('the screen kept changing under ' + sel + ' while it was being checked (three tries)');
+}

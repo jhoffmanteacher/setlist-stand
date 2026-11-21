@@ -6,7 +6,7 @@
  * Gestures and selectors are the ones tools/smoke.mjs and tools/loops/model.loop.mjs use.
  */
 import path from 'node:path';
-import {FIX, assert, sleep, idbAll} from './harness.mjs';
+import {FIX, assert, sleep, idbAll, onScreen} from './harness.mjs';
 
 const BLACK = '#1a1a1a', TEXT = 'Coda ♯ hold';
 const fmt = o => JSON.stringify(o, (k, v) => typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v);
@@ -143,6 +143,73 @@ async function loopEraserNotes(ctx){
   } finally { await s.close(); }
 }
 
+/* Full screen shows only the full-screen element and what is inside it. A note dialog, the crop screen or a toast that
+   is outside it is open, has focus, makes the viewer behind it inert, and cannot be seen: the app looks frozen. Each is
+   checked against the pixels the browser draws (onScreen), in full screen, in the engine under test. */
+async function loopFullScreen(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await page.waitForSelector('#libList [data-open]', {timeout: 20000});
+    const id = Object.values(await idbAll(page, 'songs')).find(x => !x.deleted)?.id;
+    assert(id, 'imported song not found');
+    await page.click(`#libList [data-open="${id}"]`);
+    await page.waitForSelector('#viewer.on #stage .sheet canvas');
+    const isFs = () => page.evaluate(() => !!document.fullscreenElement);
+    const enterFs = async () => { await page.click('#vFull'); await waitFor(isFs, 'Full screen did not start', 4000); await sleep(300); };
+    await enterFs();
+    if(await page.locator('#viewer.hide').count()){ await page.evaluate(() => document.querySelector('#viewer').classList.remove('hide')); }
+    await page.click('#vAnn');
+    await page.waitForSelector('#tools:not([hidden])');
+
+    /* a toast */
+    await page.click('#tFinger');
+    await waitFor(() => page.evaluate(() => document.querySelector('#toast').classList.contains('on') && getComputedStyle(document.querySelector('#toast')).opacity === '1'), 'no toast after the Finger button', 3000);
+    assert(await onScreen(page, '#toast'), 'full screen: the toast is shown but not drawn on the screen');
+    await page.click('#tFinger');
+
+    /* Text: tap the page, type, save */
+    await pickTool(page, '#tools [data-tool=text]');
+    const cv = await page.locator('#stage .ink[data-pn="1"]').boundingBox();
+    await page.mouse.click(cv.x + cv.width * .5, cv.y + cv.height * .4);
+    await page.locator('.modal textarea').waitFor({timeout: 5000});
+    assert(await isFs(), 'setup: not in full screen when the note dialog opened');
+    assert(await onScreen(page, '.modal .box'), 'full screen: the note dialog is open (the viewer behind it is inert) but not drawn on the screen');
+    await page.locator('.modal textarea').fill('Full screen note');
+    await page.locator('.modal [data-ok]').click();
+    await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 5000});
+    await waitFor(async () => (await inkRec(page, id + ':1')).strokes.find(x => x.t === 'text' && x.text === 'Full screen note'), 'the note typed in full screen was not stored');
+    assert(await page.evaluate(() => !document.querySelector('#viewer').inert), 'the viewer is still inert after the dialog closed');
+    assert(await isFs(), 'saving the note left full screen');
+
+    /* leaving full screen with a dialog open: it stays drawn and works, and Cancel gives the viewer back */
+    await page.mouse.click(cv.x + cv.width * .3, cv.y + cv.height * .7);
+    await page.locator('.modal textarea').waitFor({timeout: 5000});
+    await page.evaluate(() => document.exitFullscreen());
+    await waitFor(async () => !(await isFs()), 'full screen did not end', 4000);
+    await sleep(300);
+    assert(await onScreen(page, '.modal .box'), 'after leaving full screen the open dialog is not drawn');
+    await page.locator('.modal [data-x]').click();
+    await page.waitForFunction(() => !document.querySelector('.modal') && !document.querySelector('#viewer').inert, null, {timeout: 5000});
+    assert((await inkRec(page, id + ':1')).strokes.filter(x => x.t === 'text' && !x.deleted).length === 1, 'a cancelled note was stored, or the saved one is gone');
+
+    /* the crop screen */
+    await page.click('#tDone');
+    await enterFs();
+    await page.click('#vCrop');
+    await page.waitForSelector('#cropper:not([hidden]) #cropCv', {timeout: 5000});
+    await waitFor(() => page.evaluate(() => document.querySelector('#cropBox').style.width), 'the crop box was not placed', 3000);
+    assert(await isFs(), 'setup: not in full screen when the crop screen opened');
+    assert(await onScreen(page, '#cropper'), 'full screen: the crop screen is open but not drawn on the screen');
+    await page.click('#cropCancel');
+    await page.waitForSelector('#cropper', {state: 'hidden', timeout: 3000});
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'ink: the eraser removes strokes but never a text note, and undo/clear treat notes as documented', run: loopEraserNotes},
+  {name: 'ink: in full screen the note dialog, the crop screen and a toast are drawn on the screen and work', run: loopFullScreen},
 ];

@@ -36,7 +36,12 @@ export function toast(m){
 
 /* Every dialog goes through modal(): it is a real dialog for screen readers and keyboards. Focus moves in and Tab
    stays inside; Escape presses Cancel ([data-x]) or closes it; the page behind is inert while it is open; and
-   m.remove() (however the caller closes it) gives focus back to whatever had it before. */
+   m.remove() (however the caller closes it) gives focus back to whatever had it before.
+   Where it is mounted: a dialog goes to the end of <body>, the toast and the crop screen sit beside #viewer. That only
+   works because FULL SCREEN is asked of the whole page (document.documentElement, see #vFull in viewer.js): a browser
+   in full screen draws just the full-screen element and what is inside it, so with #viewer alone a dialog opened out of
+   sight while the viewer behind it was inert, which looked like a freeze. Keep every dialog, toast and screen inside the
+   full-screen element; never make a part of the page the full-screen element. */
 const BEHIND = ['.app', '#viewer', '#cropper', '#splitter'];
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]):not([type=hidden]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 const focusables = m => [...m.querySelectorAll(FOCUSABLE)].filter(el => el.getClientRects().length);

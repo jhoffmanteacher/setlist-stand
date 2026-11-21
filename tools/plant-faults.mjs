@@ -27,6 +27,8 @@ import {fileURLToPath} from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const FAULTS = [
+  {id: 'fullscreen-viewer-only', file: 'js/viewer.js', find: 'const root = document.documentElement, p = root.requestFullscreen', replace: 'const root = viewer, p = root.requestFullscreen',
+    loop: 'ink: in full screen', why: 'only #viewer goes full screen, so the note dialog, the crop screen and every toast open out of sight while the viewer behind is inert: the app looks frozen'},
   {id: 'awake-ignores-preference', file: 'js/awake.js', find: "const wanted = () => { if(chosen !== null) return chosen; try{ return localStorage.getItem(KEY) !== '0'; }catch(e){ return true; } };", replace: 'const wanted = () => true;',
     loop: 'wakelock: the lock follows', why: 'the "Screen can dim" setting is saved but ignored: the screen is kept on anyway, and a song opened with it off still asks for the lock'},
   {id: 'awake-release-not-shown', file: 'js/awake.js', find: "got.addEventListener('release', () => { if(sentinel === got){ sentinel = null; render(); } });", replace: '',
