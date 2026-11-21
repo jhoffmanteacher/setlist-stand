@@ -221,7 +221,9 @@ async function loopHostile(ctx){
     /* JSZip finds the end record anywhere in the file, past padding too: a guard that looked only at the last 64 KB would let this open (and all 40000 records are valid) */
     ['a huge list of files with 70 KB of padding after the end record', async () => Buffer.concat([await hugeList(), Buffer.alloc(70000)]), /not a Setlist Stand share package/],
     /* a zip64 marker makes JSZip read the 64-bit fields, not the 32-bit ones the guard measures */
-    ['a zip64 marker in the end record', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}); const at = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); assert(at > 0, 'test setup'); buf.writeUInt16LE(0xFFFF, at + 10); return buf; }, /too many files/],
+    ['a zip64 marker in the end record (entry count)', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}); const at = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); assert(at > 0, 'test setup'); buf.writeUInt16LE(0xFFFF, at + 10); return buf; }, /too many files/],
+    ['a zip64 marker in the end record (directory size)', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}); const at = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); assert(at > 0, 'test setup'); buf.writeUInt32LE(0xFFFFFFFF, at + 12); return buf; }, /too many files/],
+    ['a zip64 marker in the end record (directory offset)', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}); const at = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); assert(at > 0, 'test setup'); buf.writeUInt32LE(0xFFFFFFFF, at + 16); return buf; }, /too many files/],
     ['a package file bigger than the limits allow', async () => zipOf(base(), {'files/s1.pdf': PDF, 'junk.bin': randomBytes(7e6)}, 'STORE'), /too big/],
     ['two PDFs that fit the cap one by one but not together', async () => {
       const a = await bigPdf('First big'), b = await bigPdf('Second big'), d = base();
@@ -407,6 +409,21 @@ async function loopOneAtATime(ctx){
     await page.click('.modal [data-ok]');
     await waitToast(page, /Added 1 song, the setlist Hostile\./);
     assert((await songsOf(page)).length === 1, 'the import after a Cancel did not add the song');
+    /* Cancel on the reading box: the Cancel button exists as soon as the import starts, so it is tapped before anything is read.
+       The import stops quietly (no notice, no question), adds nothing, and the next one is not turned away. */
+    const quiet = await page.evaluate(async bytes => {
+      const {importPackage} = await import('./js/shareimport.js');
+      const p = importPackage(new File([new Uint8Array(bytes)], 'package.zip'));
+      document.querySelector('.modal [data-x]').click();
+      await p;
+      return {dialogs: document.querySelectorAll('.modal').length, toast: document.querySelector('#toast').textContent};
+    }, [...pkg]);
+    assert(quiet.dialogs === 0, 'Cancel on the reading box left a dialog (a notice or a question) open');
+    assert(!/still running/.test(quiet.toast), 'an import after the cancelled one was turned away');
+    assert((await songsOf(page)).length === 1, 'a cancelled import added songs');
+    await sendFile(page, named(pkg));
+    await confirmText(page);
+    await page.click('.modal [data-x]');
     /* the question names the setlist as it will be saved */
     await sendFile(page, named(pkg));
     const again = await confirmText(page);

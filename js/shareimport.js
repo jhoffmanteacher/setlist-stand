@@ -30,8 +30,8 @@ const NOT_PACKAGE = 'That file is not a Setlist Stand share package.', TOO_MANY 
 
 /* Why the zip's list of files (its "central directory") cannot be opened safely, as a plain sentence, or null when it is fine.
    JSZip builds heap for every record just to open a zip and has no limit of its own: a small file with a million records costs
-   about a gigabyte. So the end-of-directory record must be the last thing in the file (JSZip searches the whole file backwards
-   and would otherwise believe one further back, past any padding), it must not be zip64 (JSZip then reads the 64-bit fields,
+   about a gigabyte. So the end-of-directory record must be the last thing in the file (padding after it is never in a real package;
+   JSZip searches the whole file backwards, so a guard that only looked at the last 64 KB would miss it), it must not be zip64 (JSZip then reads the 64-bit fields,
    not the 32-bit ones measured here), and the span from where the list starts to where that record sits must be small. A real
    package has none of the first two problems and a list of a few hundred KB. */
 async function directoryProblem(file){
@@ -233,7 +233,8 @@ async function runImport(file){
   if(plan.error){ notice("Can't import that package", plan.error); return; }
   if(!plan.fresh.length && !plan.setlist){ toast(`Nothing new: ${plural(plan.matched, 'song')} ${plan.matched == 1 ? 'is' : 'are'} already in your library.`); return; }
   if(!(await confirmDialog(plan))) return;
-  const w = modal('<h2>Adding songs</h2><p class="hint" role="status">Saving the package…</p>');       // the screen behind stays inert until it is written
+  /* the hidden [data-x] is what Escape clicks (modal() would otherwise close the box mid-write and the screen behind would come alive) */
+  const w = modal('<h2>Adding songs</h2><p class="hint" role="status">Saving the package…</p><button data-x hidden></button>');       // the screen behind stays inert until it is written
   let r;
   try{ r = await commit(plan); }
   catch(err){ w.remove(); notice('Nothing was added', explainError(err, 'Something went wrong while adding the package. Nothing was changed.')); return; }
