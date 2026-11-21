@@ -335,6 +335,10 @@ const FAULTS = [
     loop: 'new version 2', why: 'a PDF already in the library becomes a new version without the duplicate question'},
   {id: 'new-version-long-version', file: 'js/library.js', find: '.slice(0, 200 - tag.length - 2)', replace: '',
     loop: 'new version 2', why: 'a long version makes the old copy\'s version longer than 200 characters, which share import refuses'},
+  {id: 'new-version-unreadable-as-missing', file: 'js/library.js', find: "  catch(err){ toast('Could not read the current chart, so it cannot be kept. Nothing was changed.'); return; }", replace: '  catch(err){}',
+    loop: 'new version 4', why: 'a stored PDF that only failed to read this once is treated as missing: the new chart goes in and the old chart and its marks are lost'},
+  {id: 'new-version-no-changed-check', file: 'js/library.js', find: "    if(songById(id) !== s){ toast('That song changed in the meantime. Nothing was changed.'); return; }\n", replace: '',
+    loop: 'new version 5', why: 'a song edited or deleted while the question is open is written back as it was (an edit undone, a deleted song brought back)'},
 ];
 
 const args = process.argv.slice(2);

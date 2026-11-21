@@ -31,11 +31,18 @@ const inStore = (page, fn, arg) => page.evaluate(`(async () => {
 })()`);
 
 /* A session that counts every readwrite transaction and can make one chosen put throw "disk full" (window.__fail:
-   {store, key} fails that record; {store, notPrefix} fails the first put into `store` whose key does not start with it). */
+   {store, key} fails that record; {store, notPrefix} fails the first put into `store` whose key does not start with it).
+   window.__failRead = true makes the next read of a stored PDF (a Blob that is not a picked File) fail once, as a storage
+   hiccup or too little memory would. */
 async function session(ctx){
   const s = await ctx.session();
   await s.context.addInitScript(() => {
     window.__tx = [];
+    const ab = Blob.prototype.arrayBuffer;
+    Blob.prototype.arrayBuffer = function(){
+      if(window.__failRead && !(this instanceof File)){ window.__failRead = false; return Promise.reject(new DOMException('The file could not be read (test)', 'NotReadableError')); }
+      return ab.call(this);
+    };
     const tx = IDBDatabase.prototype.transaction, put = IDBObjectStore.prototype.put;
     IDBDatabase.prototype.transaction = function(names, mode, ...rest){
       const t = tx.call(this, names, mode, ...rest);
@@ -379,6 +386,79 @@ export const loops = [
     assert(after.files[C] === H['two-page.pdf'], 'the song\'s PDF');
     assert(JSON.stringify(after.ink[C + ':1'].strokes) === JSON.stringify([{id: 'p1', deleted: true, updated: after.ink[C + ':1'].strokes[0].updated}]), 'the song\'s ink: ' + JSON.stringify(after.ink));
     assert(!(await archivedRows(page)).length, 'something is in Archived');
+  } finally { await s.close(); }
+}},
+
+/* a stored PDF that is there but cannot be read (a storage hiccup, too little memory) stops New version before any question:
+   it must never be written over as if it were missing */
+{name: 'new version 4: a stored PDF that cannot be read stops it, nothing changed', async run(ctx){
+  const s = await session(ctx), page = s.page;
+  try{
+    const [A, B] = await addPdfs(page, ['two-page.pdf', 'one-page.pdf']);
+    await inStore(page, async (S, [A, B, CROP, p1]) => {
+      const a = await S.get('songs', A); a.crop = CROP; await S.saveSong(a);
+      await S.putInk(A, 1, [p1]);
+      await S.saveSet({id: 'gig', name: 'Gig', items: [{type: 'song', id: A}, {type: 'song', id: B}], created: 1});
+    }, [A, B, CROP, pen('p1', .2)]);
+    await s.goto();
+    const before = await snapshot(page);
+    await page.click('#tLib');
+    await clearToast(page); await resetWrites(page);
+    await page.evaluate(() => { window.__failRead = true; });
+    await page.click(`#libList [data-newversion="${A}"]`);
+    await page.setInputFiles('#newVersionFile', path.join(FIX, 'three-page.pdf'));
+    await page.waitForFunction(() => !!document.querySelector('.modal') || /Could not read/.test(document.querySelector('#toast').textContent), null, {timeout: 15000})
+      .catch(async () => { throw new Error('neither a refusal nor a question; toast "' + await page.locator('#toast').textContent() + '"'); });
+    if(await page.locator('.modal').count()) throw new Error('a question showed instead of a refusal: "' + (await page.locator('.modal').textContent()).replace(/\s+/g, ' ').trim().slice(0, 140) + '"');
+    assert(await page.evaluate(() => window.__failRead) === false, 'the stored PDF was never read');
+    const msg = await page.locator('#toast').textContent();
+    assert(msg === 'Could not read the current chart, so it cannot be kept. Nothing was changed.', 'toast: ' + msg);
+    await sleep(300);
+    assert(!(await writes(page)).length, 'it wrote ' + JSON.stringify(await writes(page)));
+    expectSame(before, await snapshot(page), 'the library after a stored PDF could not be read');
+    await s.goto();
+    expectSame(before, await snapshot(page), 'the library after a stored PDF could not be read, and a reload');
+    assert(!(await archivedRows(page)).length, 'something is in Archived');
+  } finally { await s.close(); }
+}},
+
+/* the song is edited, then deleted, while the question is open (another screen or tab): nothing is written, an edit is not
+   undone, a deleted song is not brought back */
+{name: 'new version 5: a song edited or deleted while the question is open is not written', async run(ctx){
+  const s = await session(ctx), page = s.page;
+  try{
+    const [A, B] = await addPdfs(page, ['two-page.pdf', 'one-page.pdf']);
+    await inStore(page, async (S, [A, B, p1]) => {
+      await S.putInk(A, 1, [p1]);
+      await S.saveSet({id: 'gig', name: 'Gig', items: [{type: 'song', id: A}, {type: 'song', id: B}], created: 1});
+    }, [A, B, pen('p1', .2)]);
+    await s.goto();
+    const meanwhile = {
+      edited: async S_A => inStore(page, async (S, A) => { const a = await S.get('songs', A); a.song = 'Edited Meanwhile'; await S.saveSong(a); await S.load(); }, S_A),
+      deleted: async S_A => inStore(page, async (S, A) => {
+        const t = Date.now(), st = await S.get('sets', 'gig');
+        await S.putAll([{store: 'files', key: A, delete: true}, {deleteInkFor: A}, {store: 'songs', key: A, value: {id: A, deleted: true, updated: t}},
+          {store: 'sets', key: 'gig', value: {...st, items: st.items.filter(it => it.id !== A), updated: t}}]);
+        await S.load();
+      }, S_A),
+    };
+    for(const how of ['edited', 'deleted']){
+      await s.goto();
+      await pickNewVersion(page, A, 'three-page.pdf');
+      await meanwhile[how](A);
+      const then = await snapshot(page);
+      await clearToast(page); await resetWrites(page);
+      await page.click('.modal.nvask [data-ok]');
+      const msg = await waitToast(page, /in the meantime|New version in place/);
+      assert(msg === 'That song changed in the meantime. Nothing was changed.', `${how} while the question was open: toast "${msg}"`);
+      await sleep(300);
+      assert(!(await writes(page)).length, `${how}: it wrote ` + JSON.stringify(await writes(page)));
+      expectSame(then, await snapshot(page), `the library after New version on a song ${how} while the question was open`);
+      if(how === 'edited') assert(then.songs[A].song === 'Edited Meanwhile' && then.files[A] === H['two-page.pdf'], 'the edit was not in place: ' + JSON.stringify(then.songs[A]));
+      else assert(then.songs[A].deleted === true && !then.files[A] && Object.keys(then.songs).length === 2, 'the song was brought back or a copy added: ' + JSON.stringify(then.songs).slice(0, 200));
+    }
+    await s.goto();
+    assert(!(await page.locator(`#libList [data-open="${A}"]`).count()) && !(await archivedRows(page)).length, 'the deleted song or an old copy shows after a reload');
   } finally { await s.close(); }
 }},
 
