@@ -225,7 +225,7 @@ const FAULTS = [
     loop: 'share 2', why: 'songs the library already has are added a second time'},
   {id: 'import-same-pdf-twice', file: 'js/shareimport.js', find: 'if(byHash.has(hash)){ target.set(ps.id, {fresh:byHash.get(hash)}); continue; }', replace: 'if(false){ continue; }',
     loop: 'share 3', why: 'the same PDF twice in one package becomes two songs'},
-  {id: 'import-set-name-collides', file: 'js/shareimport.js', find: 'for(let n = 2; names.has(setName); n++) setName = `${base} (${n})`;', replace: '',
+  {id: 'import-set-name-collides', file: 'js/shareimport.js', find: 'for(let n = 2; names.has(name); n++) name = `${base} (${n})`;', replace: '',
     loop: 'share 2', why: 'an imported setlist gets the name of one already there'},
   {id: 'import-record-by-record', file: 'js/shareimport.js', find: '  await putAll(ops);\n  return {added:plan.fresh.length, setName};', replace: '  for(const o of ops) await putAll([o]);\n  return {added:plan.fresh.length, setName};',
     loop: 'share 2', why: 'the package is written one record at a time: a reload part-way leaves half of it'},
@@ -251,10 +251,18 @@ const FAULTS = [
     loop: 'share 3', why: 'a share.json with a changed byte (a crop, a title, the setlist order) is accepted: nothing in the zip is checked any more'},
   {id: 'import-json-cap-ignored', file: 'js/shareimport.js', find: 'const raw = await readCapped(entry, limits.maxJson);', replace: 'const raw = await readCapped(entry, Infinity);',
     loop: 'share 3', why: 'a share.json of any inflated size is read into memory'},
-  {id: 'import-directory-unchecked', file: 'js/shareimport.js', find: 'if(await directoryTooBig(file))', replace: 'if(false)',
+  {id: 'import-directory-unchecked', file: 'js/shareimport.js', find: 'const dir = await directoryProblem(file);', replace: 'const dir = null;',
     loop: 'share 3', why: 'a small zip with a huge list of files costs gigabytes of memory just to open'},
   {id: 'import-set-id-not-unique', file: 'js/shareimport.js', find: '    const id = unique(taken);\n    ops.push({store:\'sets\'', replace: '    const id = uid();\n    ops.push({store:\'sets\'',
     loop: 'share 4', why: 'an imported setlist can take the id of one already there and silently replace it'},
+  {id: 'import-directory-padding', file: 'js/shareimport.js', find: 'return NOT_PACKAGE;                             // no such record at the end of the file: not a zip', replace: 'return null;',
+    loop: 'share 3', why: 'padding after a zip\'s end record hides a huge list of files from the guard, and JSZip (which searches the whole file) opens it'},
+  {id: 'import-directory-zip64', file: 'js/shareimport.js', find: '[4, 6, 8, 10].some(o => tail.getUint16(i + o, true) === 0xFFFF) || ', replace: '',
+    loop: 'share 3', why: 'a zip64 marker makes JSZip read other size fields than the ones the guard measured'},
+  {id: 'import-no-single-flight', file: 'js/shareimport.js', find: "if(running){ toast('An import is still running. Try again when it has finished.'); return; }", replace: '',
+    loop: 'share 5', why: 'a second import started while the first is open or writing adds every song twice'},
+  {id: 'import-question-wrong-name', file: 'js/shareimport.js', find: '<b>${esc(freeSetName(plan.setlist))}</b>', replace: "<b>${esc(plan.setlist.name.trim() || 'Shared setlist')}</b>",
+    loop: 'share 5', why: 'the question says the setlist will be called "Gig" when it will be saved as "Gig (2)"'},
 ];
 
 const args = process.argv.slice(2);

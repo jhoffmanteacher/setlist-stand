@@ -8,6 +8,8 @@
  * share 3  hostile packages, built in Node (the file is made by somebody else): every refusal gives a plain message and leaves
  *          the library exactly as it was; bad crops are dropped without refusing the package; a title with HTML is shown as text.
  * share 4  all or nothing: a full tablet, and a reload in the middle of the write, never leave half a package.
+ * share 5  one import at a time: a second pick while the first is open is turned away and the first carries on; Cancel adds
+ *          nothing and frees the next import; the question names the setlist as it will be saved ("Gig (2)").
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -183,6 +185,8 @@ async function bigPdf(tag){
   p.node.addContentStream(d.context.register(d.context.stream('% padding\n'.repeat(300000))));
   return Buffer.from(await d.save({updateMetadata: false}));
 }
+/* a 4 MB file whose list of files is 2.2 MB */
+async function hugeList(){ const z = new JSZip(); z.file('share.json', JSON.stringify(base())); for(let i = 0; i < 40000; i++) z.file(String(i).padStart(10, '0'), ''); return Buffer.from(await z.generateAsync({type: 'nodebuffer', compression: 'STORE'})); }
 const withSong = (over, extra = {}) => { const d = base(); Object.assign(d.songs[0], over); Object.assign(d, extra); return d; };
 const named = buf => ({name: 'package.zip', mimeType: 'application/zip', buffer: buf});
 
@@ -213,8 +217,11 @@ async function loopHostile(ctx){
     /* everything the import would read is small and valid; only an entry it never reads makes the FILE big, so only the early size check can refuse it */
     ['share.json with one byte changed (CRC)', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}, 'STORE'); const at = buf.indexOf('Hostile Test'); assert(at > 0, 'test setup'); buf[at + 8] = 'X'.charCodeAt(0); return buf; }, /damaged/],
     ['share.json bigger than the cap', async () => zipOf(' '.repeat(2e6) + JSON.stringify({...base(), app: 'other'})), /too big to read/],
-    /* a 4 MB file whose list of files is 2.2 MB */
-    ['a zip with a huge list of files', async () => { const z = new JSZip(); z.file('share.json', JSON.stringify(base())); for(let i = 0; i < 40000; i++) z.file(String(i).padStart(10, '0'), ''); return Buffer.from(await z.generateAsync({type: 'nodebuffer', compression: 'STORE'})); }, /too many files/],
+    ['a zip with a huge list of files', hugeList, /too many files/],
+    /* JSZip finds the end record anywhere in the file, past padding too: a guard that looked only at the last 64 KB would let this open (and all 40000 records are valid) */
+    ['a huge list of files with 70 KB of padding after the end record', async () => Buffer.concat([await hugeList(), Buffer.alloc(70000)]), /not a Setlist Stand share package/],
+    /* a zip64 marker makes JSZip read the 64-bit fields, not the 32-bit ones the guard measures */
+    ['a zip64 marker in the end record', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}); const at = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); assert(at > 0, 'test setup'); buf.writeUInt16LE(0xFFFF, at + 10); return buf; }, /too many files/],
     ['a package file bigger than the limits allow', async () => zipOf(base(), {'files/s1.pdf': PDF, 'junk.bin': randomBytes(7e6)}, 'STORE'), /too big/],
     ['two PDFs that fit the cap one by one but not together', async () => {
       const a = await bigPdf('First big'), b = await bigPdf('Second big'), d = base();
@@ -371,8 +378,47 @@ async function loopAtomic(ctx){
   if(ctx.opts.verbose) console.log('  interrupted imports: ' + outcomes.join('; '));
 }
 
+/* ---------- share 5: one import at a time ---------- */
+async function loopOneAtATime(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    const pkg = await zipOf(base());
+    /* a second pick while the first is open is turned away at once; the first carries on to its question */
+    /* not awaited outright: an import that was NOT turned away waits for somebody to answer its question, so the test would hang */
+    const {second, toast} = await page.evaluate(async bytes => {
+      const {importPackage} = await import('./js/shareimport.js');
+      const f = new File([new Uint8Array(bytes)], 'package.zip');
+      window.__first = importPackage(f);
+      const second = await Promise.race([importPackage(f).then(() => 'turned away'), new Promise(r => setTimeout(() => r('went on'), 1500))]);
+      return {second, toast: document.querySelector('#toast').textContent};
+    }, [...pkg]);
+    assert(second === 'turned away' && /An import is still running/.test(toast), `a second import while one is open: ${second}, toast "${toast}"`);
+    const text = await confirmText(page);
+    assert(/1 new song will be added/.test(text) && /setlist Hostile, as a new setlist/.test(text), 'the first import lost its question: ' + text);
+    assert(await page.locator('.modal').count() === 1, 'the second import opened a dialog of its own');
+    /* Cancel adds nothing and frees the next import */
+    await page.click('.modal [data-x]');
+    await page.evaluate(() => window.__first);
+    assert((await songsOf(page)).length === 0, 'Cancel added songs');
+    await sendFile(page, named(pkg));
+    await confirmText(page);
+    await page.click('.modal [data-ok]');
+    await waitToast(page, /Added 1 song, the setlist Hostile\./);
+    assert((await songsOf(page)).length === 1, 'the import after a Cancel did not add the song');
+    /* the question names the setlist as it will be saved */
+    await sendFile(page, named(pkg));
+    const again = await confirmText(page);
+    assert(/setlist Hostile \(2\), as a new setlist/.test(again), 'the question does not show the new name: ' + again);
+    await page.click('.modal [data-x]');
+    assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'share 2: a package imported into another library gives the same songs, details, crops, setlist and PDF bytes; nothing already there changes; one write', run: loopRoundTrip},
   {name: 'share 3: hostile packages are refused with a plain message and change nothing; bad crops are dropped; HTML stays text', run: loopHostile},
   {name: 'share 4: a full tablet or a reload in the middle of an import never leaves half a package', run: loopAtomic},
+  {name: 'share 5: one import at a time; Cancel adds nothing and frees the next; the question names the setlist as it will be saved', run: loopOneAtATime},
 ];

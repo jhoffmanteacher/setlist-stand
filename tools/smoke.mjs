@@ -1506,11 +1506,13 @@ async function stepShare(t){
     const zip = await JSZip.loadAsync(await fsp.readFile(dl.file)), names = Object.keys(zip.files).sort();
     return {names, share: JSON.parse(await zip.file('share.json').async('string'))};
   };
+  /* Two songs with different PDFs: "One-page" and "Old Song" (the first two in the list) are the same bytes, and a package holds
+     one copy of a PDF, so the next step would rightly count them as one song. */
+  const tick = async (...names) => { for(const n of names) await page.locator('.modal .pick label', {hasText: new RegExp('^' + n)}).locator('input').check(); };
   await toLibrary(page);
   await page.click('#view [data-sharesongs]');
-  const boxes = page.locator('.modal .pick input[type=checkbox]');
-  await boxes.first().waitFor();
-  await boxes.nth(0).check(); await boxes.nth(1).check();
+  await page.locator('.modal .pick input[type=checkbox]').first().waitFor();
+  await tick('Three-page', 'Two-page');
   const a = await download(page, () => page.click('.modal [data-ok]'));
   assert(/Setlist Stand share\.zip$/.test(a.name), 'package name ' + a.name);
   const pa = await read(a);
@@ -1522,9 +1524,8 @@ async function stepShare(t){
 
   await newSet(page, 'Share check');
   await page.click('#view [data-addto]');
-  const picks = page.locator('.modal .pick input[type=checkbox]');
-  await picks.first().waitFor();
-  await picks.nth(0).check(); await picks.nth(1).check();
+  await page.locator('.modal .pick input[type=checkbox]').first().waitFor();
+  await tick('Three-page', 'Two-page');
   await page.click('.modal [data-ok]');
   await page.waitForFunction(() => document.querySelectorAll('#view [data-playat]').length === 2);
   const b = await download(page, () => page.click('#view [data-shareset]'));
@@ -1539,8 +1540,10 @@ async function stepShare(t){
 /* Import a share package: the setlist package made in the step before comes back into the same library. Its songs are all
    there already, so nothing is added but the setlist, under a new name; the songs-only package has nothing new. */
 async function stepShareImport(t){
-  const {page} = t, errs = t.errors.length, songs0 = await songCount(page);
+  const {page} = t, errs = t.errors.length;
   await toLibrary(page);
+  const songs0 = await songCount(page);              // counted on the Library screen: #libList does not exist on the setlist screen the step before ends on
+  assert(songs0 > 0, 'no songs counted in the library');
   await page.setInputFiles('#shareFile', t.data.shareSet);
   const dlg = page.locator('.modal [role=dialog]', {hasText: 'Import share package'});
   await dlg.waitFor({timeout: 15000});
