@@ -14,6 +14,13 @@ if(window.pdfjsLib && !window.pdfjsLib.noEval){
   });
 }
 
+/* The number of pages pdf.js finds in PDF bytes (an ArrayBuffer or a Uint8Array). Throws if it cannot open them. */
+export async function pdfPageCount(bytes){
+  const task = pdfjsLib.getDocument({data:new Uint8Array(bytes.slice(0))});
+  try{ return (await task.promise).numPages; }
+  finally{ task.destroy(); }              // also when the file cannot be opened: no worker is left holding its bytes
+}
+
 export const $ = s => document.querySelector(s);
 export const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);

@@ -214,3 +214,31 @@ export function reconcile(prev, next){
 /* Crop: a song has `crop: {all: rect|null, pages: {"2": rect}}` where rect = {x, y, w, h} as fractions of the full page
    (x, y = the top-left corner of the part that is kept). A page's own crop wins over the song-wide one. */
 export const cropOf = (song, pn) => (song && song.crop && ((song.crop.pages && song.crop.pages[pn]) || song.crop.all)) || null;
+
+/* The smallest part of a page a crop may keep: the editor in js/crop.js cannot make a box smaller than this. */
+export const CROP_MIN = .08;
+/* A crop that came from outside (a share package) made safe to use: {crop, dropped}. A rectangle is kept only if x, y, w and h
+   are finite numbers inside the page (x and y from 0 to 1, w and h from CROP_MIN, the box ending no later than the page edge,
+   give or take rounding); a page key is kept only if it is a page of the song (1 to `pages`). Anything else is dropped and
+   counted, and the song keeps its other crops (a bad margin must not cost a whole package). crop is null if nothing is left. */
+export function cleanCrop(c, pages){
+  let dropped = 0;
+  const rect = r => {
+    const ok = isObj(r) && [r.x, r.y, r.w, r.h].every(Number.isFinite) && r.x >= 0 && r.y >= 0 && r.x <= 1 && r.y <= 1
+      && r.w >= CROP_MIN && r.h >= CROP_MIN && r.x + r.w <= 1.001 && r.y + r.h <= 1.001;
+    return ok ? {x:r.x, y:r.y, w:r.w, h:r.h} : null;
+  };
+  if(c == null) return {crop:null, dropped:0};
+  if(!isObj(c)) return {crop:null, dropped:1};
+  const all = c.all == null ? null : rect(c.all);
+  if(c.all != null && !all) dropped++;
+  const out = {};
+  if(c.pages != null){
+    if(!isObj(c.pages)) dropped++;
+    else for(const [k, r] of Object.entries(c.pages)){
+      const q = /^[1-9]\d*$/.test(k) && +k <= pages ? rect(r) : null;
+      if(q) out[k] = q; else dropped++;
+    }
+  }
+  return {crop: all || Object.keys(out).length ? {all, pages:out} : null, dropped};
+}

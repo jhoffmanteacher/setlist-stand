@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-20: Import a share package
+- **Import a share package** (Library, after Share songs): pick the file someone sent you. A box lists the new songs and the setlist it will add, and asks before it adds anything.
+- **Songs you already have are not added twice**, and they stay exactly as you have them (your own title, artist, version and crop). New songs arrive with the sender's titles, artists, versions and crops, and without any pen marks. A setlist always comes in as a new setlist (if you already have one with that name, it is called "<name> (2)"); nothing is ever replaced.
+- **All or nothing:** a damaged file, a PDF that does not match, something the app cannot read, or a full tablet adds nothing and says why in plain words. A bad crop in someone's package is left out and the rest is kept.
+- A file with far more entries in it than any package has is refused before it is opened ("That package has too many files in it."), and a package whose description part is damaged is caught even though the zip's own check is off.
+- Restore from backup and Import now tell you if you picked the wrong kind of file.
+
 ## 2026-11-20: Share songs or a setlist as one file
 - **Share songs** (Library, next to Split a songbook): tick songs and it makes one file, `Songs - Setlist Stand share.zip`, with their PDFs, titles, artists, versions and crops. Songs marked archived are listed and can be shared too.
 - **Share** on a setlist: one file with every song the setlist uses (each once, archived ones included), the order, and the breaks.

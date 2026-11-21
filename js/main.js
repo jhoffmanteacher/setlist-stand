@@ -8,6 +8,7 @@ import {initViewer, openViewer, resumeState} from './viewer.js';
 import {initInk} from './ink.js';
 import {initCrop} from './crop.js';
 import {startSplit, initSplit} from './split.js';
+import {importPackage} from './shareimport.js';
 
 initErrors();      // first: the private problem log (Library → Problem log) catches anything that goes wrong after this
 
@@ -25,6 +26,7 @@ $('#tSets').onclick = () => { tab = 'sets'; closeSet(); render(); };
 $('#file').onchange = async e => { const fs = [...e.target.files]; e.target.value = ''; await addFiles(fs); };
 $('#replaceFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await replacePdf(f); };
 $('#splitFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await startSplit(f); };
+$('#shareFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await importPackage(f); };
 $('#restoreFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
 
 $('#view').addEventListener('click', async e => {

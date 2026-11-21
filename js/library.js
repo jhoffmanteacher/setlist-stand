@@ -1,4 +1,4 @@
-import {$, esc, toast, form, armed, hooks, modal} from './util.js';
+import {$, esc, toast, form, armed, hooks, modal, pdfPageCount} from './util.js';
 import {putAll, get, load, state, songById, saveSong, newSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
 import {displayName} from './names.js';
@@ -9,7 +9,7 @@ import {shareSongs} from './share.js';
 let q = '', showArchived = false, replaceTarget = null;
 
 export function renderLibrary(v){
-  v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button><button data-sharesongs>Share songs</button></div><div id="libNudge"></div><div id="libList"></div>
+  v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button><button data-sharesongs>Share songs</button><button data-shareimport>Import a share package</button></div><div id="libNudge"></div><div id="libList"></div>
     <label class="sw-row"><input type="checkbox" id="showArch" ${showArchived ? 'checked' : ''}>Show archived</label>
     <div class="bar" style="margin-top:12px"><button data-backup>Back up everything</button><button data-restore>Restore from backup</button></div>
     <p class="hint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
@@ -38,8 +38,7 @@ function renderLib(){
 /* Reads one PDF: page count and hash. Throws if pdf.js cannot open it. */
 async function inspect(file){
   const buf = await file.arrayBuffer();
-  const doc = await pdfjsLib.getDocument({data:new Uint8Array(buf.slice(0))}).promise;
-  const n = doc.numPages; doc.destroy();
+  const n = await pdfPageCount(buf);
   return {buf, pages:n, hash:await sha256(buf)};
 }
 
@@ -130,6 +129,7 @@ export async function onClick(b, d){
   if('add' in d){ $('#file').click(); return true; }
   if('split' in d){ $('#splitFile').click(); return true; }
   if('sharesongs' in d){ await shareSongs(); return true; }
+  if('shareimport' in d){ $('#shareFile').click(); return true; }
   if('persist' in d){ await askPersist(b); return true; }
   if('problems' in d){ showProblemLog(); return true; }
   if(d.open){ openViewer([{type:'song', id:d.open}], 0); return true; }

@@ -1,9 +1,9 @@
 /* The crop editor: the whole current page with a draggable box. The box is stored as fractions of the full page. */
 import {$, toast} from './util.js';
-import {saveSong, cropOf} from './store.js';
+import {saveSong, cropOf, CROP_MIN} from './store.js';
 import {V, renderPage, draw} from './viewer.js';
 
-const MIN = .08;                     // the box can't get smaller than 8% of the page
+const MIN = CROP_MIN;                // the box can't get smaller than 8% of the page
 let loadTok = 0;
 let st = null;                       // {pn, rect, sw, sh} while the editor is open
 

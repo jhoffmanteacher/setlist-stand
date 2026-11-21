@@ -1518,6 +1518,7 @@ async function stepShare(t){
   assert(pa.share.kind === 'share' && pa.share.songs.length === 2 && pa.share.setlist === null, 'songs package: ' + JSON.stringify(pa.share).slice(0, 200));
   assert(!('ink' in pa.share) && !/"strokes"|"t":"(pen|hl|text)"/.test(JSON.stringify(pa.share)), 'the package holds annotation data');
   await closeDone();
+  t.data.shareSongs = a.file;
 
   await newSet(page, 'Share check');
   await page.click('#view [data-addto]');
@@ -1531,6 +1532,29 @@ async function stepShare(t){
   assert(pb.names.join() === 'files/s1.pdf,files/s2.pdf,share.json', 'setlist package entries: ' + pb.names);
   assert(pb.share.setlist && pb.share.setlist.name === 'Share check' && pb.share.setlist.items.length === 2, 'setlist package: ' + JSON.stringify(pb.share.setlist));
   await closeDone();
+  t.data.shareSet = b.file;
+  assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
+}
+
+/* Import a share package: the setlist package made in the step before comes back into the same library. Its songs are all
+   there already, so nothing is added but the setlist, under a new name; the songs-only package has nothing new. */
+async function stepShareImport(t){
+  const {page} = t, errs = t.errors.length, songs0 = await songCount(page);
+  await toLibrary(page);
+  await page.setInputFiles('#shareFile', t.data.shareSet);
+  const dlg = page.locator('.modal [role=dialog]', {hasText: 'Import share package'});
+  await dlg.waitFor({timeout: 15000});
+  const text = await dlg.textContent();
+  assert(/No new songs/.test(text) && /2 songs already in your library/.test(text) && /Share check/.test(text), 'import dialog: ' + text);
+  await page.click('.modal [data-ok]');
+  await page.waitForFunction(() => /the setlist Share check \(2\)/.test(document.querySelector('#toast').textContent), null, {timeout: 15000});
+  assert(await songCount(page) === songs0, 'importing a package of songs already here added songs');
+  await page.click('#tSets');
+  assert(await page.locator('#view [data-set]', {hasText: 'Share check (2)'}).count() === 1, 'the imported setlist is not in the list');
+  await toLibrary(page);
+  await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
+  await page.setInputFiles('#shareFile', t.data.shareSongs);
+  await page.waitForFunction(() => /Nothing new: 2 songs are already in your library/.test(document.querySelector('#toast').textContent), null, {timeout: 15000});
   assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
 }
 
@@ -1566,7 +1590,8 @@ const STEPS = [
   ['27 cropper buttons pressed before the page renders do nothing and throw nothing', stepCropEarly],
   ['28 split a songbook: bookmarks give the songs, each is added as its own PDF', stepSplitBook],
   ['29 share: songs from the Library and a setlist each download as a package with the PDFs, no annotations', stepShare],
-  ['30 no request left localhost during the run', stepNoExternal],
+  ['30 import a share package: the setlist comes back under a new name, songs already here are not added again', stepShareImport],
+  ['31 no request left localhost during the run', stepNoExternal],
 ];
 
 /* ---------- runner ---------- */

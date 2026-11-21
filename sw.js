@@ -9,7 +9,7 @@
  *   fall back to the cached index.html so the app opens offline.
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-20-3';
+const VERSION = '2026-11-20-4';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -33,6 +33,7 @@ const PRECACHE = [
   'js/split.js',
   'js/sharepack.js',
   'js/share.js',
+  'js/shareimport.js',
   'js/backup.js',
   'js/errors.js',
   'js/main.js',

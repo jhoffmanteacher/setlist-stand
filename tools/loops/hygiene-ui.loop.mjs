@@ -4,7 +4,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, assert, sleep, idbAll, download, backupNow, wipe, restoreZip, PDFDocument} from './harness.mjs';
+import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, download, backupNow, wipe, restoreZip, PDFDocument} from './harness.mjs';
 
 const FIXTURES = ['one-page.pdf', 'two-page.pdf', 'three-page.pdf'];
 const ALLOWED_SOURCES = new Set(["'self'", "'none'", "'unsafe-inline'", 'data:', 'blob:']);
@@ -210,6 +210,25 @@ async function dialogLoop(ctx){
     await page.locator('.modal [role=dialog]', {hasText: 'Package saved'}).waitFor();
     await checkDialog(page, 'Package saved dialog');
     await escapeBack(page, sh, 'Package saved dialog');
+
+    /* import: the confirm dialog (a package with one song this library does not have), then the refusal notice for a file
+       that is not a package */
+    const doc = await PDFDocument.create(); doc.addPage([300, 300]).drawText('Hygiene import', {x: 20, y: 150, size: 18});
+    const bytes = Buffer.from(await doc.save({updateMetadata: false})), z = new JSZip();
+    z.file('files/s1.pdf', bytes, {createFolders: false});
+    z.file('share.json', JSON.stringify({app: 'setlist-stand', kind: 'share', version: 1, saved: 'x', songs: [{id: 's1', song: 'Hygiene import', artist: '', version: '', pages: 1, hash: sha256(bytes)}], setlist: null}));
+    const goodPkg = path.join(TMP, 'hygiene-package.zip');
+    await fsp.writeFile(goodPkg, Buffer.from(await z.generateAsync({type: 'nodebuffer'})));
+    await page.setInputFiles('#shareFile', goodPkg);
+    await page.locator('.modal [role=dialog]', {hasText: 'Import share package'}).waitFor();
+    await checkDialog(page, 'Import confirm dialog');
+    await escapeBack(page, sh, 'Import confirm dialog');
+    const junk = path.join(TMP, 'not-a-package.zip');
+    await fsp.writeFile(junk, 'this is not a share package');
+    await page.setInputFiles('#shareFile', junk);
+    await page.locator('.modal [role=dialog]', {hasText: "Can't import that package"}).waitFor();
+    await checkDialog(page, 'Import refusal notice');
+    await escapeBack(page, sh, 'Import refusal notice');
 
     /* new-setlist ask */
     await page.click('#tSets');

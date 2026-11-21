@@ -59,6 +59,7 @@ export async function restoreFrom(f, render){
     data = JSON.parse(await zip.file('library.json').async('string'));
     if(data.app !== 'setlist-stand' || !Array.isArray(data.songs) || !Array.isArray(data.sets)) throw new Error('not a backup');
   }catch(err){
+    if(zip && zip.file('share.json')) return stop('That is a share package, not a backup. Use Import a share package. Nothing was changed.');
     return stop(/crc/i.test(String(err && err.message)) ? 'That backup is damaged. Nothing was changed.' : 'That file is not a Setlist Stand backup');
   }
   if(Number(data.version) > BACKUP_VERSION) return stop('That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.');
@@ -107,7 +108,7 @@ const marker = r => ({id:r.id, deleted:true, updated:Number(r.updated) || 0});
    Checked before anything is written. Returns null when the backup is fine, else a short reason (shown to the user).
    Ids end up in the page's HTML and in storage keys, so they are held to a plain set of characters. */
 export const ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
-const LIMITS = {songs:100000, sets:100000, items:20000, text:2000, pages:5000, strokes:50000, points:200000};
+export const LIMITS = {songs:100000, sets:100000, items:20000, text:2000, pages:5000, strokes:50000, points:200000};
 const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 const okId = id => typeof id === 'string' && ID_RE.test(id);
 const okText = v => v === undefined || v === null || (typeof v === 'string' && v.length <= LIMITS.text);

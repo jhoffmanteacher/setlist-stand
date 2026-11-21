@@ -7,6 +7,7 @@ paths:
   - "js/split.js"
   - "js/songpdf.js"
   - "js/sharepack.js"
+  - "js/shareimport.js"
   - "tools/msb_convert.py"
 ---
 
