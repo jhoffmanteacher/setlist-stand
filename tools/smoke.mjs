@@ -552,7 +552,7 @@ async function stepNewVersion(t){
   assert(await orow.count() === 1, 'the old copy is not listed under Archived');
   await orow.locator('[data-open]').click();
   await page.waitForFunction(t => document.querySelector('#vTitle').textContent === t && !!document.querySelector('#stage .ink'), old.title, {timeout: 8000});
-  await waitSub(page, /^Page 1 of 2$/, 'old copy');
+  await waitSub(page, /^Page 1(–2)? of 2$/, 'old copy');           // two pages side by side is still on from the start of this step
   await waitFor(() => canvasHasMarks(page, '#stage .ink', 'ink'), 'the old copy opens without its marks');
   await page.click('#vBack');
   await toLibrary(page);
