@@ -33,7 +33,8 @@ const inStore = (page, fn, arg) => page.evaluate(`(async () => {
 /* A session that counts every readwrite transaction and can make one chosen put throw "disk full" (window.__fail:
    {store, key} fails that record; {store, notPrefix} fails the first put into `store` whose key does not start with it).
    window.__failRead = true makes the next read of a stored PDF (a Blob that is not a picked File) fail once, as a storage
-   hiccup or too little memory would. */
+   hiccup or too little memory would; window.__slowPick = ms makes every read of a picked File take that long (a big PDF).
+   The script runs in every page of the context (a second tab too); each page has its own flags and counter. */
 async function session(ctx){
   const s = await ctx.session();
   await s.context.addInitScript(() => {
@@ -41,6 +42,7 @@ async function session(ctx){
     const ab = Blob.prototype.arrayBuffer;
     Blob.prototype.arrayBuffer = function(){
       if(window.__failRead && !(this instanceof File)){ window.__failRead = false; return Promise.reject(new DOMException('The file could not be read (test)', 'NotReadableError')); }
+      if(window.__slowPick && this instanceof File){ const ms = window.__slowPick; return new Promise(r => setTimeout(r, ms)).then(() => ab.call(this)); }
       return ab.call(this);
     };
     const tx = IDBDatabase.prototype.transaction, put = IDBObjectStore.prototype.put;
@@ -407,9 +409,10 @@ export const loops = [
     await page.evaluate(() => { window.__failRead = true; });
     await page.click(`#libList [data-newversion="${A}"]`);
     await page.setInputFiles('#newVersionFile', path.join(FIX, 'three-page.pdf'));
-    await page.waitForFunction(() => !!document.querySelector('.modal') || /Could not read/.test(document.querySelector('#toast').textContent), null, {timeout: 15000})
+    await page.waitForFunction(() => !!document.querySelector('.modal.nvask, .modal.dupask') || /Could not read/.test(document.querySelector('#toast').textContent), null, {timeout: 15000})
       .catch(async () => { throw new Error('neither a refusal nor a question; toast "' + await page.locator('#toast').textContent() + '"'); });
-    if(await page.locator('.modal').count()) throw new Error('a question showed instead of a refusal: "' + (await page.locator('.modal').textContent()).replace(/\s+/g, ' ').trim().slice(0, 140) + '"');
+    if(await page.locator('.modal.nvask, .modal.dupask').count()) throw new Error('a question showed instead of a refusal: "' + (await page.locator('.modal.nvask, .modal.dupask').first().textContent()).replace(/\s+/g, ' ').trim().slice(0, 140) + '"');
+    await noModal(page);                                      // the Reading box is gone too
     assert(await page.evaluate(() => window.__failRead) === false, 'the stored PDF was never read');
     const msg = await page.locator('#toast').textContent();
     assert(msg === 'Could not read the current chart, so it cannot be kept. Nothing was changed.', 'toast: ' + msg);
@@ -422,31 +425,50 @@ export const loops = [
   } finally { await s.close(); }
 }},
 
-/* the song is edited, then deleted, while the question is open (another screen or tab): nothing is written, an edit is not
-   undone, a deleted song is not brought back */
-{name: 'new version 5: a song edited or deleted while the question is open is not written', async run(ctx){
+/* the song is edited, then deleted, while the question is open: first in this tab (this tab's own list changes), then in a
+   SECOND tab of the same browser, through its own screens (this tab's list never hears of it). Nothing is written, an edit is
+   not undone, a deleted song is not brought back, no old copy is made */
+{name: 'new version 5: a song edited or deleted while the question is open (this tab or another) is not written', async run(ctx){
   const s = await session(ctx), page = s.page;
   try{
     const [A, B] = await addPdfs(page, ['two-page.pdf', 'one-page.pdf']);
-    await inStore(page, async (S, [A, B, p1]) => {
-      await S.putInk(A, 1, [p1]);
+    await inStore(page, async (S, [A, B, p1, p2]) => {
+      await S.putInk(A, 1, [p1]); await S.putInk(B, 1, [p2]);
       await S.saveSet({id: 'gig', name: 'Gig', items: [{type: 'song', id: A}, {type: 'song', id: B}], created: 1});
-    }, [A, B, pen('p1', .2)]);
+    }, [A, B, pen('p1', .2), pen('p2', .3)]);
     await s.goto();
+    /* the other tab: its own page in the same browser, its own app and list, driven through its own screens */
+    const inOtherTab = async fn => {
+      const p2 = await s.context.newPage();
+      try{ await p2.goto(s.base + 'index.html'); await p2.waitForSelector('#libList [data-open]'); await fn(p2); }
+      finally{ await p2.close(); }
+    };
     const meanwhile = {
-      edited: async S_A => inStore(page, async (S, A) => { const a = await S.get('songs', A); a.song = 'Edited Meanwhile'; await S.saveSong(a); await S.load(); }, S_A),
-      deleted: async S_A => inStore(page, async (S, A) => {
+      'edited in this tab': id => inStore(page, async (S, A) => { const a = await S.get('songs', A); a.song = 'Edited Meanwhile'; await S.saveSong(a); await S.load(); }, id),
+      'deleted in this tab': id => inStore(page, async (S, A) => {
         const t = Date.now(), st = await S.get('sets', 'gig');
         await S.putAll([{store: 'files', key: A, delete: true}, {deleteInkFor: A}, {store: 'songs', key: A, value: {id: A, deleted: true, updated: t}},
           {store: 'sets', key: 'gig', value: {...st, items: st.items.filter(it => it.id !== A), updated: t}}]);
         await S.load();
-      }, S_A),
+      }, id),
+      'edited in another tab': id => inOtherTab(async p2 => {
+        await p2.click(`#libList [data-edit="${id}"]`);
+        await p2.locator('.modal input[data-k=song]').fill('Edited Elsewhere');
+        await p2.click('.modal [data-ok]');
+        await p2.waitForFunction(id => document.querySelector(`#libList [data-open="${id}"] .t`)?.textContent.startsWith('Edited Elsewhere'), id, {timeout: 5000});
+      }),
+      'deleted in another tab': id => inOtherTab(async p2 => {
+        await p2.click(`#libList [data-del="${id}"]`); await p2.click(`#libList [data-del="${id}"]`);
+        await p2.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), id, {timeout: 5000});
+      }),
     };
-    for(const how of ['edited', 'deleted']){
+    for(const [how, id, edit] of [['edited in this tab', A, 'Edited Meanwhile'], ['deleted in this tab', A], ['edited in another tab', B, 'Edited Elsewhere'], ['deleted in another tab', B]]){
       await s.goto();
-      await pickNewVersion(page, A, 'three-page.pdf');
-      await meanwhile[how](A);
+      await pickNewVersion(page, id, 'three-page.pdf');
+      await meanwhile[how](id);
       const then = await snapshot(page);
+      if(edit) assert(then.songs[id].song === edit && !then.songs[id].deleted, `${how}: the edit is not stored: ` + JSON.stringify(then.songs[id]));
+      else assert(then.songs[id].deleted === true && !then.files[id], `${how}: the song is not deleted: ` + JSON.stringify(then.songs[id]));
       await clearToast(page); await resetWrites(page);
       await page.click('.modal.nvask [data-ok]');
       const msg = await waitToast(page, /in the meantime|New version in place/);
@@ -454,11 +476,54 @@ export const loops = [
       await sleep(300);
       assert(!(await writes(page)).length, `${how}: it wrote ` + JSON.stringify(await writes(page)));
       expectSame(then, await snapshot(page), `the library after New version on a song ${how} while the question was open`);
-      if(how === 'edited') assert(then.songs[A].song === 'Edited Meanwhile' && then.files[A] === H['two-page.pdf'], 'the edit was not in place: ' + JSON.stringify(then.songs[A]));
-      else assert(then.songs[A].deleted === true && !then.files[A] && Object.keys(then.songs).length === 2, 'the song was brought back or a copy added: ' + JSON.stringify(then.songs).slice(0, 200));
     }
     await s.goto();
-    assert(!(await page.locator(`#libList [data-open="${A}"]`).count()) && !(await archivedRows(page)).length, 'the deleted song or an old copy shows after a reload');
+    assert(!(await page.locator('#libList [data-open]').count()) && !(await archivedRows(page)).length, 'a deleted song or an old copy shows after a reload');
+  } finally { await s.close(); }
+}},
+
+/* the new PDF is read under a "Reading <name>…" box: the page behind is out of reach (a song cannot be opened), a second
+   New version started meanwhile is turned away, and the box is gone when the question shows */
+{name: 'new version 6: a Reading box while the PDF is read; a second one is turned away', async run(ctx){
+  const s = await session(ctx), page = s.page;
+  try{
+    const [A, B] = await addPdfs(page, ['two-page.pdf', 'one-page.pdf']);
+    await s.goto();
+    const before = await snapshot(page);
+    await page.click('#tLib');
+    await clearToast(page); await resetWrites(page);
+    await page.evaluate(() => { window.__slowPick = 4000; });          // the picked file takes 4 s to read, like a big PDF
+    await page.click(`#libList [data-newversion="${A}"]`);
+    await page.setInputFiles('#newVersionFile', path.join(FIX, 'three-page.pdf'));
+    await page.waitForFunction(() => [...document.querySelectorAll('.modal [role=status]')].some(p => p.textContent === 'Reading three-page.pdf…'), null, {timeout: 2000})
+      .catch(async () => { throw new Error('no "Reading three-page.pdf…" box while the new PDF is read; dialogs: ' + JSON.stringify(await page.locator('.modal').allTextContents())); });
+    assert(await page.locator('.modal h2').first().textContent() === 'New version' && await page.evaluate(() => document.querySelector('.app').inert), 'the Reading box is not a New version dialog over an inert page');
+    /* the page behind is out of reach: a tap on the song does not open it */
+    await page.click(`#libList [data-open="${A}"]`, {force: true});
+    await sleep(200);
+    assert(!(await page.locator('#viewer.on').count()), 'a song opened behind the Reading box');
+    /* a second New version while the first is reading (as a tap on another song's button would start it) is turned away */
+    await page.evaluate(`(async () => { const L = await import(new URL('js/library.js', location.href).href); await L.onClick(document.createElement('button'), {newversion: ${JSON.stringify(B)}}); })()`);
+    await page.setInputFiles('#newVersionFile', path.join(FIX, 'three-page.pdf'));
+    assert(await waitToast(page, /already in progress/, 3000) === 'A New version is already in progress.', 'second New version: toast');
+    assert(await page.locator('.modal').count() === 1, 'a second box or question opened: ' + JSON.stringify(await page.locator('.modal').allTextContents()));
+    /* the first one goes on: its question replaces the box */
+    await page.locator('.modal.nvask').waitFor({timeout: 15000});
+    assert(await page.locator('.modal').count() === 1 && !(await page.evaluate(() => document.body.classList.contains('busy'))), 'the Reading box is still up under the question');
+    assert((await question(page)).startsWith('Use three-page.pdf as the new version of Two-page?'), 'the question is not the first New version\'s: ' + await question(page));
+    await page.evaluate(() => { window.__slowPick = 0; });
+    await page.click('.modal.nvask [data-x]');
+    await noModal(page); await sleep(300);
+    assert(!(await writes(page)).length, 'it wrote ' + JSON.stringify(await writes(page)));
+    expectSame(before, await snapshot(page), 'the library after Cancel');
+    /* the first has finished, so the next one runs */
+    const days = [today()];
+    await pickNewVersion(page, B, 'three-page.pdf');
+    await page.click('.modal.nvask [data-ok]');
+    await waitToast(page, /^New version in place/);
+    days.push(today());
+    checkNewVersion(before, await snapshot(page), B, 'three-page.pdf', days, 'the next New version');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 }},
 

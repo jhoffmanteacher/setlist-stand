@@ -331,14 +331,18 @@ const FAULTS = [
     loop: 'new version 1', why: 'New version writes as soon as a file is picked: there is no question and no Cancel'},
   {id: 'new-version-two-writes', file: 'js/library.js', find: '    await putAll(ops);\n    await load(); hooks.render();\n    toast((copy', replace: '    for(const o of ops) await putAll([o]);\n    await load(); hooks.render();\n    toast((copy',
     loop: 'new version 2', why: 'a full tablet part-way through New version leaves half of it saved (an old copy without its marks, or a song without its PDF)'},
-  {id: 'new-version-no-duplicate-question', file: 'js/library.js', find: 'if(state.songs.some(x => x.hash === r.hash) && !(await askDuplicates([file.name]))){', replace: 'if(false){',
+  {id: 'new-version-no-duplicate-question', file: 'js/library.js', find: 'if(dup && !(await askDuplicates([file.name]))){', replace: 'if(false){',
     loop: 'new version 2', why: 'a PDF already in the library becomes a new version without the duplicate question'},
   {id: 'new-version-long-version', file: 'js/library.js', find: '.slice(0, 200 - tag.length - 2)', replace: '',
     loop: 'new version 2', why: 'a long version makes the old copy\'s version longer than 200 characters, which share import refuses'},
   {id: 'new-version-unreadable-as-missing', file: 'js/library.js', find: "  catch(err){ toast('Could not read the current chart, so it cannot be kept. Nothing was changed.'); return; }", replace: '  catch(err){}',
     loop: 'new version 4', why: 'a stored PDF that only failed to read this once is treated as missing: the new chart goes in and the old chart and its marks are lost'},
-  {id: 'new-version-no-changed-check', file: 'js/library.js', find: "    if(songById(id) !== s){ toast('That song changed in the meantime. Nothing was changed.'); return; }\n", replace: '',
+  {id: 'new-version-no-changed-check', file: 'js/library.js', find: "    if(songById(id) !== s || !cur || cur.deleted || cur.updated !== s.updated || cur.hash !== s.hash){ toast('That song changed in the meantime. Nothing was changed.'); return; }\n", replace: '',
     loop: 'new version 5', why: 'a song edited or deleted while the question is open is written back as it was (an edit undone, a deleted song brought back)'},
+  {id: 'new-version-other-tab-unseen', file: 'js/library.js', find: 'if(songById(id) !== s || !cur || cur.deleted || cur.updated !== s.updated || cur.hash !== s.hash){', replace: 'if(songById(id) !== s){',
+    loop: 'new version 5', why: 'a song edited or deleted in ANOTHER tab while the question is open is written back as it was: only this tab\'s own list is checked'},
+  {id: 'new-version-not-one-at-a-time', file: 'js/library.js', find: "  if(nvRunning){ toast('A New version is already in progress.'); return; }\n", replace: '',
+    loop: 'new version 6', why: 'a second New version started while the first is still reading runs alongside it'},
 ];
 
 const args = process.argv.slice(2);
