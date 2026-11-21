@@ -35,7 +35,8 @@ export function requireUmd(f){
   fn.call(module.exports, module.exports, require, module, f, path.dirname(f));
   return module.exports;
 }
-export const {PDFDocument} = requireUmd(path.join(ROOT, 'vendor', 'pdf-lib.min.js'));
+export const PDFLib = requireUmd(path.join(ROOT, 'vendor', 'pdf-lib.min.js'));
+export const {PDFDocument, PDFDict, PDFName} = PDFLib;
 export const JSZip = requireUmd(path.join(ROOT, 'vendor', 'jszip.min.js'));
 
 /* Private files (the MobileSheets backup and its converted zip) live in the main checkout's untracked "Claude outputs/".

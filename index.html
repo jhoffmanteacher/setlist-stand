@@ -39,6 +39,7 @@
 <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
 <input type="file" id="replaceFile" accept="application/pdf,.pdf" hidden>
 <input type="file" id="restoreFile" accept=".zip,application/zip" hidden>
+<input type="file" id="splitFile" accept="application/pdf,.pdf" hidden>
 
 <section id="viewer" aria-label="Music viewer">
   <div id="stage"></div>
@@ -81,6 +82,28 @@
     <button id="cropSong">Crop whole song</button>
     <button id="cropReset">Reset</button>
     <button id="cropCancel">Cancel</button>
+  </div>
+</section>
+<section id="splitter" aria-label="Split a songbook" hidden>
+  <div id="splitBar">
+    <div class="ttl"><b id="splitTitle" tabindex="-1"></b><span id="splitSub"></span></div>
+    <button id="splitCancel">Cancel</button>
+    <button id="splitGo" class="pri">Add songs</button>
+  </div>
+  <div id="splitBody">
+    <div id="splitSide">
+      <p class="hint" id="splitHint"></p>
+      <div class="splitopts">
+        <input type="text" id="splitArtist" maxlength="200" placeholder="Artist for every song (optional)" aria-label="Artist for every song (optional)">
+        <button id="splitAll">Tick all</button><button id="splitNone">Tick none</button>
+      </div>
+      <ul id="splitRows" class="list"></ul>
+      <label class="sw-row"><input type="checkbox" id="splitAgain">Add a song again even if it is already in my library</label>
+    </div>
+    <div id="splitMain">
+      <div class="splitopts"><span class="hint" id="splitPagesHint">Tap the first page of a song to add it to the list.</span><button id="splitBig" aria-pressed="false">Bigger pages</button></div>
+      <div id="splitPages"></div>
+    </div>
   </div>
 </section>
 <div id="toast" role="status"></div>

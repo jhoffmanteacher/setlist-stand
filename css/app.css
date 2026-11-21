@@ -143,7 +143,7 @@ textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 #nextup{right:calc(12px + env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom))}
 #toast{bottom:calc(24px + env(safe-area-inset-bottom))}
 #update{top:calc(12px + env(safe-area-inset-top))}
-body.playing #update{display:none}   /* never offered while a song is on screen; it shows when you go Back */
+body.playing #update,body.splitting #update{display:none}   /* never offered while a song or the songbook splitter is on screen; it shows when you go Back */
 
 /* data safety */
 .nudge{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin:0 0 12px;padding:8px 8px 8px 14px;border:1px solid var(--acc);border-left-width:6px;border-radius:10px;background:var(--card);font-weight:600}
@@ -155,3 +155,42 @@ body.playing #update{display:none}   /* never offered while a song is on screen;
 .plog{width:100%;min-height:180px;font:13px/1.4 ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);padding:8px;resize:vertical;white-space:pre}
 .box ul.locked{margin:0;padding-left:20px;overflow-wrap:anywhere}
 .duplist{margin:0;padding-left:20px;max-height:40vh;overflow:auto;overflow-wrap:anywhere}
+
+/* songbook splitter: the list of songs on the left, the book's pages on the right (stacked in portrait) */
+#splitter{position:fixed;inset:0;z-index:20;background:var(--bg);color:var(--ink);display:flex;flex-direction:column;overscroll-behavior:none}
+#splitter[hidden]{display:none}
+#splitBar{display:flex;align-items:center;gap:8px;padding:8px max(12px,env(safe-area-inset-right)) 8px max(12px,env(safe-area-inset-left));padding-top:calc(8px + env(safe-area-inset-top));border-bottom:1px solid var(--line);background:var(--card)}
+#splitBar .ttl b:focus{outline:none}
+#splitBar .ttl span{color:var(--mute)}
+#splitBody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(340px,44%) 1fr}
+#splitSide,#splitMain{min-height:0;display:flex;flex-direction:column;gap:8px;padding:12px}
+#splitSide{overflow:auto;overscroll-behavior:contain;padding-left:max(12px,env(safe-area-inset-left))}
+#splitMain{padding-right:max(12px,env(safe-area-inset-right));padding-bottom:calc(12px + env(safe-area-inset-bottom));border-left:1px solid var(--line)}
+.splitopts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.splitopts .hint{flex:1 1 200px}
+.splitopts input[type=text]{flex:1 1 200px}
+#splitter input[type=text],#splitter input[type=number]{min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--card);padding:0 10px;font-size:16px}
+.srow{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:8px 0;border-bottom:1px solid var(--line)}
+.srow:focus{outline:3px solid var(--acc);outline-offset:-3px;border-radius:8px}
+.srow .chk{display:grid;place-items:center;width:44px;min-height:44px;cursor:pointer}
+.srow .chk input{width:24px;height:24px}
+.srow input[type=text]{flex:1 1 160px}
+.srow.off input[type=text]{color:var(--mute)}
+.srow .pgs{display:flex;align-items:center;gap:6px;color:var(--mute);font-size:14px;font-weight:600}
+.srow input[type=number]{width:76px;color:var(--ink)}
+.srow input.auto{color:var(--mute);font-style:italic}
+#splitPages{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));grid-auto-rows:max-content;gap:8px;align-content:start;padding:2px}
+#splitPages.big{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+.pg{display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px;min-height:44px;border:2px solid var(--line);border-radius:8px;background:var(--card);white-space:normal}
+.pg .th{display:block;flex:none;width:100%;aspect-ratio:var(--ar,.77);background:#fff;overflow:hidden}
+.pg img{display:block;width:100%;height:100%;object-fit:contain}
+.pg .pn{font-size:13px;font-weight:600;color:var(--mute)}
+.pg .nm{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600;color:var(--acc);min-height:1.3em}
+.pg.in{border-color:var(--mute)}
+.pg.start{border-color:var(--acc);box-shadow:inset 0 0 0 2px var(--acc)}
+.pg.start .pn::before{content:"\25CF  ";color:var(--acc)}
+@media(max-width:760px),(orientation:portrait){
+  #splitBody{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
+  #splitMain{border-left:0;border-top:1px solid var(--line);padding-left:max(12px,env(safe-area-inset-left))}
+}
+#splitter,#splitter .pg{-webkit-touch-callout:none}

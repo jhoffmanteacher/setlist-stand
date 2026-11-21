@@ -7,6 +7,7 @@ import {backupNow, restoreFrom} from './backup.js';
 import {initViewer, openViewer, resumeState} from './viewer.js';
 import {initInk} from './ink.js';
 import {initCrop} from './crop.js';
+import {startSplit, initSplit} from './split.js';
 
 initErrors();      // first: the private problem log (Library → Problem log) catches anything that goes wrong after this
 
@@ -23,6 +24,7 @@ $('#tLib').onclick = () => { tab = 'lib'; render(); };
 $('#tSets').onclick = () => { tab = 'sets'; closeSet(); render(); };
 $('#file').onchange = async e => { const fs = [...e.target.files]; e.target.value = ''; await addFiles(fs); };
 $('#replaceFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await replacePdf(f); };
+$('#splitFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await startSplit(f); };
 $('#restoreFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
 
 $('#view').addEventListener('click', async e => {
@@ -62,9 +64,9 @@ function watchUpdates(reg){
   if(reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
   track(reg.installing);
   reg.addEventListener('updatefound', () => track(reg.installing));
-  /* Never mid-song: a controllerchange while a song is open (another tab's tap) waits; this tab's own tap only
-     happens on the home screen, where the banner shows. */
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked && !document.body.classList.contains('playing')) reloadNow(); });
+  /* Never mid-song (or mid-split): a controllerchange while a song or the songbook splitter is open (another tab's tap)
+     waits; this tab's own tap only happens on the home screen, where the banner shows. */
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked && !document.body.classList.contains('playing') && !document.body.classList.contains('splitting')) reloadNow(); });
 }
 if('serviceWorker' in navigator){
   /* The kill switch (tools/kill-switch/kill-sw.js, BREAK-GLASS.md) emptied the cache and took over: reload this tab once
@@ -94,7 +96,7 @@ async function applyResume(){
   try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
   if(!window.pdfjsLib) $('#warn').innerHTML += '<p class="warn">The PDF reader did not load. Reload the page.</p>';
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
-  initViewer(); initInk(); initCrop(); initSetlists();
+  initViewer(); initInk(); initCrop(); initSetlists(); initSplit();
   await load(); render();
   await applyResume();
   ensureHashes().catch(() => {});

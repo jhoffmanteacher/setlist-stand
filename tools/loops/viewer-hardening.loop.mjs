@@ -616,7 +616,7 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
   } finally { await s.close(); }
 }},
 
-{name: 'viewer-hardening 12: a controllerchange while a song is open never reloads, even after an earlier banner tap', async run(ctx){
+{name: 'viewer-hardening 12: a controllerchange while a song or the songbook splitter is open never reloads, even after an earlier banner tap', async run(ctx){
   const v2 = makeSiteCopy(ctx.root, {marker: 'v2-playing'});
   const s = await ctx.session(), page = s.page;
   try{
@@ -643,6 +643,17 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     const stayed = await page.evaluate(() => window.__ssStay).catch(() => null);
     assert(navs === 0 && stayed === 1, `the tab reloaded mid-song on a controllerchange (navigations ${navs})`);
     assert(await page.locator('#viewer.on').count() === 1, 'the song is no longer open');
+    /* and the same while the songbook splitter is open: marking a book takes minutes and must not be lost to a reload */
+    await page.click('#vBack'); await page.waitForSelector('#libList');
+    await page.setInputFiles('#splitFile', path.join(FIX, 'songbook.pdf'));
+    await page.waitForSelector('#splitter:not([hidden])', {timeout: 15000});
+    assert(await page.evaluate(() => document.body.classList.contains('splitting')), 'test setup: body.splitting not set');
+    assert(await page.evaluate(() => getComputedStyle(document.querySelector('#update')).display) === 'none', 'the "Tap to reload" banner shows over the songbook splitter');
+    await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new Event('controllerchange')));
+    await sleep(2000);
+    const stayed2 = await page.evaluate(() => window.__ssStay).catch(() => null);
+    assert(navs === 0 && stayed2 === 1, `the tab reloaded in the middle of splitting a songbook on a controllerchange (navigations ${navs})`);
+    assert(await page.locator('#splitter:not([hidden])').count() === 1, 'the splitter is no longer open');
     noErrors(s);
   } finally { ctx.server.root = ctx.root; await s.close(); removeCopy(v2); }
 }},

@@ -1475,6 +1475,25 @@ async function stepCropEarly(t){
   await page.click('#vBack');
 }
 
+/* Split a songbook through the real button's file input: the bookmarks give the songs, each is added as its own PDF. */
+async function stepSplitBook(t){
+  const {page} = t, before = await songCount(page), errs = t.errors.length;
+  await page.click('#tLib');
+  await page.setInputFiles('#splitFile', path.join(FIX, 'songbook.pdf'));
+  await page.waitForSelector('#splitter:not([hidden])', {timeout: 20000});
+  await page.waitForFunction(() => document.querySelectorAll('#splitPages .pg').length === 12);
+  assert(await page.locator('#splitRows .srow').count() === 7, 'the bookmarks did not give 7 rows');
+  assert(await page.locator('#splitGo').textContent() === 'Add 6 songs', 'Add button: ' + await page.locator('#splitGo').textContent());
+  await page.click('#splitGo');
+  await page.waitForFunction(() => document.querySelector('#splitter').hidden, null, {timeout: 20000});
+  await page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, before + 6, {timeout: 10000})
+    .catch(async () => { throw new Error(`expected ${before + 6} songs, library shows ${await songCount(page)}`); });
+  const text = await page.locator('#libList').innerText();
+  assert(/Song Three \(in G\)/.test(text) && /Song Two - Fixture Artist/.test(text), 'split songs missing in library: ' + text.replace(/\s+/g, ' '));
+  assert(/Song Five\s+3 pages/.test(text) && /Song Four\s+1 page\b/.test(text), 'page counts of the split songs: ' + text.replace(/\s+/g, ' '));
+  assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -1505,7 +1524,8 @@ const STEPS = [
   ['25 a note with ♯ and ♭ prints as "C# to Bb"', stepPrintSharps],
   ['26 two-page view: the cropper steps to page 2 and crops only that page', stepCropSpread],
   ['27 cropper buttons pressed before the page renders do nothing and throw nothing', stepCropEarly],
-  ['28 no request left localhost during the run', stepNoExternal],
+  ['28 split a songbook: bookmarks give the songs, each is added as its own PDF', stepSplitBook],
+  ['29 no request left localhost during the run', stepNoExternal],
 ];
 
 /* ---------- runner ---------- */

@@ -132,6 +132,12 @@ export async function load(){
 }
 export const songById = id => state.songs.find(s => s.id === id);
 export const saveSong = s => { s.title = displayName(s); s.updated = now(); return put('songs', s.id, s); };
+/* The record for a new song whose PDF (pages, hash) is about to be saved under its id. name: {song, artist, version}. */
+export function newSong(name, pages, hash){
+  const t = now(), s = {id:uid(), ...name, archived:false, pages, hash, added:t, updated:t};
+  s.title = displayName(s);
+  return s;
+}
 export const saveSet = st => { st.updated = now(); return put('sets', st.id, st); };
 export const markDeleted = (store, id) => put(store, id, {id, deleted:true, updated:now()});
 

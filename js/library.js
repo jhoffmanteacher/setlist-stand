@@ -1,5 +1,5 @@
-import {$, esc, uid, toast, form, armed, hooks, modal} from './util.js';
-import {putAll, get, load, state, songById, saveSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes} from './store.js';
+import {$, esc, toast, form, armed, hooks, modal} from './util.js';
+import {putAll, get, load, state, songById, saveSong, newSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
 import {displayName} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
@@ -8,7 +8,7 @@ import {openViewer} from './viewer.js';
 let q = '', showArchived = false, replaceTarget = null;
 
 export function renderLibrary(v){
-  v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button></div><div id="libNudge"></div><div id="libList"></div>
+  v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button></div><div id="libNudge"></div><div id="libList"></div>
     <label class="sw-row"><input type="checkbox" id="showArch" ${showArchived ? 'checked' : ''}>Show archived</label>
     <div class="bar" style="margin-top:12px"><button data-backup>Back up everything</button><button data-restore>Restore from backup</button></div>
     <p class="hint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
@@ -68,9 +68,7 @@ export async function addFiles(fileList){
     if(dup && skipped) continue;
     let r;
     try{ r = await inspect(f); }catch(err){ unread.push(f.name); continue; }
-    const id = uid(), t = Date.now();
-    const s = {id, ...parseFileName(f.name), archived:false, pages:r.pages, hash:r.hash, added:t, updated:t};
-    s.title = displayName(s);
+    const s = newSong(parseFileName(f.name), r.pages, r.hash), id = s.id;
     try{ await putAll([{store:'files', key:id, value:new Blob([r.buf], {type:'application/pdf'})}, {store:'songs', key:id, value:s}]); ok++; }
     catch(err){
       failed = items.filter(x => !(x.dup && skipped)).length - ok - unread.length;
@@ -129,6 +127,7 @@ export async function replacePdf(file){
 /* Returns true when the click was for the library. */
 export async function onClick(b, d){
   if('add' in d){ $('#file').click(); return true; }
+  if('split' in d){ $('#splitFile').click(); return true; }
   if('persist' in d){ await askPersist(b); return true; }
   if('problems' in d){ showProblemLog(); return true; }
   if(d.open){ openViewer([{type:'song', id:d.open}], 0); return true; }

@@ -30,10 +30,14 @@ export function toast(m){
 /* Every dialog goes through modal(): it is a real dialog for screen readers and keyboards. Focus moves in and Tab
    stays inside; Escape presses Cancel ([data-x]) or closes it; the page behind is inert while it is open; and
    m.remove() (however the caller closes it) gives focus back to whatever had it before. */
-const BEHIND = ['.app', '#viewer', '#cropper'];
+const BEHIND = ['.app', '#viewer', '#cropper', '#splitter'];
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]):not([type=hidden]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 const focusables = m => [...m.querySelectorAll(FOCUSABLE)].filter(el => el.getClientRects().length);
-function setBehind(on){ for(const s of BEHIND){ const el = $(s); if(el) el.inert = on; } }
+/* The songbook splitter covers the whole page, so the app under it stays inert even after a dialog above it closes. */
+function setBehind(on){
+  const sp = $('#splitter'), splitting = !!sp && !sp.hidden;
+  for(const s of BEHIND){ const el = $(s); if(el) el.inert = on || (s === '.app' && splitting); }
+}
 export function modal(html){
   const opener = document.activeElement;
   const m = document.createElement('div'); m.className = 'modal';
