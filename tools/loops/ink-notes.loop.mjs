@@ -6,7 +6,8 @@
  * Gestures and selectors are the ones tools/smoke.mjs and tools/loops/model.loop.mjs use.
  */
 import path from 'node:path';
-import {FIX, assert, sleep, idbAll, onScreen} from './harness.mjs';
+import fsp from 'node:fs/promises';
+import {FIX, assert, sleep, idbAll, onScreen, download} from './harness.mjs';
 
 const BLACK = '#1a1a1a', TEXT = 'Coda ♯ hold';
 const fmt = o => JSON.stringify(o, (k, v) => typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v);
@@ -209,7 +210,128 @@ async function loopFullScreen(ctx){
   } finally { await s.close(); }
 }
 
+/* Pen thickness: three buttons beside the pen colours (thin .002, medium .003, thick .005 of the page width). A stroke
+   keeps the width it was drawn with, the highlighter stays .02, the choice survives a reload, and the PRINTED PDF
+   (read back with pdf.js, an independent path from pdf-lib which wrote it) has lines of those thicknesses. */
+const PEN_WIDTHS = {thin: .002, medium: .003, thick: .005};
+async function loopPenWidths(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await page.waitForSelector('#libList [data-open]', {timeout: 20000});
+    const id = Object.values(await idbAll(page, 'songs')).find(x => !x.deleted)?.id;
+    assert(id, 'imported song not found');
+    const key = id + ':1';
+    const openAnnot = async () => {
+      await page.click(`#libList [data-open="${id}"]`);
+      await page.waitForSelector('#viewer.on #stage .sheet canvas');
+      await page.evaluate(() => document.querySelector('#viewer').classList.remove('hide'));
+      if(await page.getAttribute('#v2up', 'aria-pressed') === 'true') await page.click('#v2up');
+      await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 1 && document.querySelector('#stage .ink[data-pn="1"]'), null, {timeout: 5000});
+      if(await page.locator('#tools').isHidden()) await page.click('#vAnn');
+      await page.waitForSelector('#tools:not([hidden])');
+    };
+    const pressed = async w => page.getAttribute(`#tools [data-width=${w}]`, 'aria-pressed');
+    const live = async () => (await inkRec(page, key)).strokes.filter(x => !x.deleted);
+    await openAnnot();
+    const cvBox = await page.locator('#stage .ink[data-pn="1"]').boundingBox();
+    const at = (fx, fy) => ({x: cvBox.x + cvBox.width * fx, y: cvBox.y + cvBox.height * fy});
+
+    /* the buttons: three, named, medium pressed to begin with (nothing chosen yet) */
+    await pickTool(page, `#tools [data-tool=pen][data-color="${BLACK}"]`);
+    for(const [w, label] of [['thin', 'Thin line'], ['medium', 'Medium line'], ['thick', 'Thick line']])
+      assert(await page.getAttribute(`#tools [data-width=${w}]`, 'aria-label') === label, `the ${w} button is not named "${label}"`);
+    assert(await pressed('medium') === 'true' && await pressed('thin') === 'false' && await pressed('thick') === 'false', 'medium is not the first choice');
+
+    /* one stroke with each; rows kept clear of the fixture's title text (about y .48) */
+    const rows = {thin: .2, medium: .3, thick: .7};
+    for(const [w, fy] of Object.entries(rows)){
+      await page.click(`#tools [data-width=${w}]`);
+      assert(await pressed(w) === 'true' && (await Promise.all(Object.keys(rows).filter(o => o !== w).map(pressed))).every(v => v === 'false'), `after tapping ${w} it is not the only one pressed`);
+      await mouseLine(page, at(.2, fy), at(.8, fy), 20);
+      await waitFor(async () => (await live()).length === Object.keys(rows).indexOf(w) + 1, `the ${w} stroke was not saved`);
+    }
+    const stored = await live();
+    const wOf = fy => stored.find(x => Math.abs(x.p[0][1] - fy) < .02)?.w;
+    for(const [w, fy] of Object.entries(rows)) assert(wOf(fy) === PEN_WIDTHS[w], `the ${w} stroke is stored with w = ${wOf(fy)}, expected ${PEN_WIDTHS[w]}`);
+
+    /* the highlighter keeps .02 and the thickness buttons are only for the pens */
+    const widthBtns = ['thin', 'medium', 'thick'];
+    const hiddenNow = async () => (await Promise.all(widthBtns.map(w => page.locator(`#tools [data-width=${w}]`).isHidden())));
+    assert((await hiddenNow()).every(h => !h), 'the thickness buttons are not shown with a pen');
+    await pickTool(page, '#tools [data-tool=hl][data-color="#ffd400"]');
+    assert((await hiddenNow()).every(h => h), 'the thickness buttons are still shown with the highlighter');
+    await mouseLine(page, at(.2, .85), at(.8, .85), 20);
+    const hl = await waitFor(async () => (await live()).find(x => x.t === 'hl'), 'the highlighter stroke was not saved');
+    assert(hl.w === .02, 'the highlighter stroke has w = ' + hl.w);
+    await pickTool(page, '#tools [data-tool=erase]');
+    assert((await hiddenNow()).every(h => h), 'the thickness buttons are shown with the eraser');
+    await pickTool(page, '#tools [data-tool=text]');
+    assert((await hiddenNow()).every(h => h), 'the thickness buttons are shown with Text');
+    await page.click('#tools [data-tool=text]');                    // Text off: back to the eraser
+    await pickTool(page, `#tools [data-tool=pen][data-color="${BLACK}"]`);
+    assert((await hiddenNow()).every(h => !h) && await pressed('thick') === 'true', 'back on a pen the buttons are not back, or thick is not still chosen');
+    assert(await page.evaluate(() => localStorage.getItem('ss-pen-w')) === 'thick', 'the choice is not kept in ss-pen-w');
+    const before = JSON.stringify((await live()).map(x => [x.id, x.w]));
+
+    /* a reload: the last choice is still pressed, and no stored stroke changed */
+    await s.goto();
+    await openAnnot();
+    assert(await pressed('thick') === 'true' && await pressed('thin') === 'false' && await pressed('medium') === 'false', 'after a reload the last choice (thick) is not the one pressed');
+    assert(JSON.stringify((await live()).map(x => [x.id, x.w])) === before, 'a stored stroke changed its width');
+
+    /* print: a setlist of this song, with the marks */
+    await page.click('#vBack'); await page.click('#tLib'); await page.waitForSelector('#libList');
+    await page.click('#tSets'); await page.click('#view [data-newset]');
+    await page.locator('.modal input[type=text]').fill('Widths');
+    await page.click('.modal [data-ok]');
+    await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Widths');
+    await page.click('#view [data-addto]');
+    await page.locator('.modal .pick input').first().check();
+    await page.click('.modal [data-ok]');
+    await page.waitForFunction(() => document.querySelectorAll('#items > li.row').length === 1, null, {timeout: 5000});
+    await page.click('#view [data-print]');
+    const m = page.locator('.modal'); await m.waitFor();
+    await m.locator('#pInk').setChecked(true);
+    const dl = await download(page, () => m.locator('[data-ok]').click());
+    if(await page.locator('.modal').count()){ const x = page.locator('.modal [data-x]'); await x.waitFor({timeout: 5000}); await x.click(); }
+    const b64 = (await fsp.readFile(dl.file)).toString('base64');
+    /* effective thickness of each line in pixels: the darkness added up down a column through the middle of the page, around its row */
+    const th = await page.evaluate(async ([b64, rows]) => {
+      if(!pdfjsLib.GlobalWorkerOptions.workerSrc) pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+      const bin = atob(b64), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      const doc = await pdfjsLib.getDocument({data: u}).promise, pg = await doc.getPage(1), vp = pg.getViewport({scale: 4});
+      const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+      const c = cv.getContext('2d'); c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
+      await pg.render({canvasContext: c, viewport: vp}).promise;
+      const d = c.getImageData(0, 0, cv.width, cv.height).data, out = {W: cv.width, pages: doc.numPages};
+      const x0 = Math.floor(cv.width * .45), x1 = Math.floor(cv.width * .55);
+      for(const [name, fy] of Object.entries(rows)){
+        let sum = 0, n = 0;
+        for(let x = x0; x < x1; x++){
+          let col = 0;
+          for(let y = Math.floor(cv.height * (fy - .03)); y < Math.ceil(cv.height * (fy + .03)); y++){ const o = (y * cv.width + x) * 4; col += (255 - (d[o] + d[o + 1] + d[o + 2]) / 3) / (255 - 26); }
+          sum += col; n++;
+        }
+        out[name] = sum / n;
+      }
+      await doc.destroy();
+      return out;
+    }, [b64, rows]);
+    assert(th.pages === 1, 'the printed PDF has ' + th.pages + ' pages');
+    for(const [w, fy] of Object.entries(rows)){
+      const want = PEN_WIDTHS[w] * th.W;
+      assert(Math.abs(th[w] - want) <= want * .2, `the printed ${w} line is ${th[w].toFixed(1)} px thick, expected about ${want.toFixed(1)} px (w ${PEN_WIDTHS[w]} of a ${th.W} px page)`);
+    }
+    assert(th.thin < th.medium && th.medium < th.thick, 'printed thickness is not thin < medium < thick: ' + fmt(th));
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'ink: the eraser removes strokes but never a text note, and undo/clear treat notes as documented', run: loopEraserNotes},
   {name: 'ink: in full screen the note dialog, the crop screen and a toast are drawn on the screen and work', run: loopFullScreen},
+  {name: 'ink: three pen thicknesses are stored, kept after a reload, hidden for other tools, and print in the same order', run: loopPenWidths},
 ];

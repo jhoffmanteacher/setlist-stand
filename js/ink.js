@@ -9,6 +9,13 @@ const FULL = {x:0, y:0, w:1, h:1};
 const cropOfCv = cv => cv._crop || FULL;
 export const SIZES = {small:.012, medium:.018, large:.028};
 const PEN_COLORS = ['#1a1a1a', '#d62828', '#1f5fd6'];
+/* Pen line widths, as fractions of the page width (what a stroke's `w` holds). Medium is what the pen always drew.
+   Strokes already saved keep whatever width they have. The highlighter is fixed at HL_W. The choice is kept in
+   localStorage `ss-pen-w` ('thin' | 'medium' | 'thick'). */
+export const PEN_W = {thin:.002, medium:.003, thick:.005};
+const HL_W = .02;
+let penW = 'medium';
+try{ const k = localStorage.getItem('ss-pen-w'); if(k && Object.hasOwn(PEN_W, k)) penW = k; }catch(e){}
 const FONT = '600 {px}px Barlow, system-ui, sans-serif';
 
 export function paint(cv, strokes){
@@ -165,7 +172,7 @@ export function inkPointerDown(e){
       Object.assign(cur, {kind:'note', note, pos:pt, x0:e.clientX, y0:e.clientY, moved:false});
     }
     else if(cur.tool === 'erase') eraseAt(e);
-    else { cur.s = {id:uid(), updated:Date.now(), t:cur.tool, c:V.color, w:cur.tool === 'hl' ? .02 : .003, p:[pt]}; live(); }
+    else { cur.s = {id:uid(), updated:Date.now(), t:cur.tool, c:V.color, w:cur.tool === 'hl' ? HL_W : PEN_W[penW], p:[pt]}; live(); }
     return true;
   }
   return false;
@@ -228,6 +235,11 @@ export function setAnnot(on){
 function markTool(){
   for(const b of document.querySelectorAll('#tools [data-tool]'))
     b.setAttribute('aria-pressed', b.dataset.tool === V.tool && (V.tool === 'erase' || V.tool === 'text' || b.dataset.color === V.color));
+  /* the thickness buttons belong to the pens: hidden for the highlighter, the eraser and Text */
+  for(const b of document.querySelectorAll('#tools [data-width]')){
+    b.hidden = V.tool !== 'pen';
+    b.setAttribute('aria-pressed', b.dataset.width === penW);
+  }
 }
 export function initInk(){
   /* Backstop: a pointerup or pointercancel that never reached the stage (it bubbles here after the stage's own
@@ -235,6 +247,12 @@ export function initInk(){
   addEventListener('pointerup', e => { if(cur && e.pointerId === cur.pid) inkPointerUp(e); });
   addEventListener('pointercancel', e => { if(cur && e.pointerId === cur.pid) inkPointerCancel(e); });
   $('#tools').addEventListener('click', e => {
+    const w = e.target.closest('[data-width]');
+    if(w){
+      if(!Object.hasOwn(PEN_W, w.dataset.width)) return;
+      penW = w.dataset.width; try{ localStorage.setItem('ss-pen-w', penW); }catch(err){}
+      markTool(); return;
+    }
     const b = e.target.closest('[data-tool]'); if(!b) return;
     if(b.dataset.tool === 'text'){
       if(V.tool === 'text') V.tool = V.prevTool || 'pen'; else { V.prevTool = V.tool; V.tool = 'text'; if(!PEN_COLORS.includes(V.color)) V.color = PEN_COLORS[0]; }
