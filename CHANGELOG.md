@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-21: New version keeps the old chart
+- **Replace PDF is now New version.** Pick the new PDF and the song takes it: it keeps its place in every setlist and its crop, and starts with fresh marks. Nothing is thrown away any more: the chart it had, with its pen marks and text notes, is kept in **Archived** as "Song (old 2026-11-21) - Artist".
+- One question comes first ("Use ... as the new version of ...? The current chart and its marks move to Archived.") and then everything is saved in one step, or not at all. Cancel changes nothing.
+- If the current chart cannot be read, nothing is changed. If the song was edited or deleted on the other screen while the question was open, nothing is changed either.
+- While a big PDF is read, a "Reading..." box is up so the song cannot be opened half-way.
+
 ## 2026-11-21: The library is in A to Z order by song name
 - **A to Z by song name:** the Library, the Archived list, your search results, and the lists you pick songs from ("Add songs" on a setlist, "Share songs") are all in A to Z order by the song's name. Upper and lower case and accents do not matter, and numbers count as numbers ("2 Fast" comes before "10 Years Gone").
 - **Every word counts:** "The Weight" is under T and "A Hard Day's Night" is under A. Before, a leading "The", "A" or "An" was ignored.
