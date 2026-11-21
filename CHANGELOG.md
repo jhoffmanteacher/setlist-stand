@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-21: Text notes, Crop and messages now work in full screen
+- **Fixed: tapping Text in full screen froze the app.** The note box was opening where it could not be seen, with the music behind it locked, so nothing seemed to respond. The note box, the Crop screen and the little messages ("Fingers draw...", "Saved", and so on) now all show on top of the music in full screen and work as they do outside it.
+- Leaving full screen while a box is open leaves the box on the screen and working.
+
 ## 2026-11-21: A privacy page
 - **Privacy policy** at `privacy.html` (https://jhoffmanteacher.github.io/setlist-stand/privacy.html): says in plain words that your music and marks stay on your tablet, that the app has no accounts, ads or tracking, and what the optional Google Drive connection will and will not touch. It is a separate page; the app itself is unchanged and no update banner appears.
 
