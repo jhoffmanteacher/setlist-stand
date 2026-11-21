@@ -258,6 +258,9 @@ stage.addEventListener('pointerup', e => {
   if(Math.hypot(dx, dy) < 12){
     const f = e.clientX / innerWidth;
     if(f < .3) prev(); else if(f > .7) next(); else if(!V.annot) viewer.classList.toggle('hide');
+    /* A finger is ignored while annotating unless "Finger draws" is on (the stylus only, so a resting palm marks nothing):
+       with Text chosen, a tap in the middle of the page would otherwise seem to do nothing. Tell the player what to press. */
+    else if(V.tool === 'text' && !V.finger && e.pointerType === 'touch') toast('To add a note with your finger, tap "Finger draws" first');
   }
 });
 stage.addEventListener('pointercancel', e => {
@@ -272,6 +275,9 @@ export function initViewer(){
   $('#vPrev').onclick = prev;
   $('#vNext').onclick = next;
   $('#v2up').onclick = () => { V.two = !V.two; try{ localStorage.setItem('ss-two', V.two ? '1' : '0'); }catch(e){} V.cache.clear(); draw(); };
+  /* An iPad app opened from the Home Screen icon (navigator.standalone, an iOS-only flag) already fills the screen and the
+     browser refuses the Full screen call there, so the button would only say "not available": leave it out. */
+  if(navigator.standalone === true) $('#vFull').hidden = true;
   $('#vFull').onclick = () => {
     if(document.fullscreenElement){ document.exitFullscreen().catch(() => {}); return; }
     /* The WHOLE page goes full screen, not #viewer: in full screen the browser shows only the full-screen element and

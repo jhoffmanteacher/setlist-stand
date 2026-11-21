@@ -210,6 +210,126 @@ async function loopFullScreen(ctx){
   } finally { await s.close(); }
 }
 
+/* The stylus draws with Annotate OFF (a finger only turns pages). It draws with the pen, or the highlighter if that was
+   chosen last, or the pen if the last tool was the eraser or Text; a hint says where Undo and the colours are, once.
+   Stylus events are sent as real PointerEvents with pointerType "pen" (works in Chromium and WebKit). */
+async function loopStylusNoAnnotate(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await page.waitForSelector('#libList [data-open]', {timeout: 20000});
+    const id = Object.values(await idbAll(page, 'songs')).find(x => !x.deleted)?.id;
+    assert(id, 'imported song not found');
+    const key = id + ':1';
+    await page.click(`#libList [data-open="${id}"]`);
+    await page.waitForSelector('#viewer.on #stage .sheet canvas');
+    if(await page.getAttribute('#v2up', 'aria-pressed') === 'true') await page.click('#v2up');
+    await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 1 && document.querySelector('#stage .ink[data-pn="1"]'), null, {timeout: 5000});
+    const live = async () => (await inkRec(page, key)).strokes.filter(x => !x.deleted);
+    const toastNow = () => page.evaluate(() => { const t = document.querySelector('#toast'); return t.classList.contains('on') && getComputedStyle(t).opacity === '1' ? t.textContent : ''; });
+    const cvBox = await page.locator('#stage .ink[data-pn="1"]').boundingBox();
+    const at = (fx, fy) => ({x: cvBox.x + cvBox.width * fx, y: cvBox.y + cvBox.height * fy});
+    const drag = (type, a, b) => page.evaluate(([type, a, b]) => {
+      const st = document.querySelector('#stage'), mk = (t, p) => new PointerEvent(t, {pointerId: type === 'pen' ? 7 : 8, pointerType: type, isPrimary: true, bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, buttons: t === 'pointerup' ? 0 : 1});
+      const el = document.elementFromPoint(a.x, a.y);
+      el.dispatchEvent(mk('pointerdown', a));
+      for(let i = 1; i <= 12; i++) st.dispatchEvent(mk('pointermove', {x: a.x + (b.x - a.x) * i / 12, y: a.y + (b.y - a.y) * i / 12}));
+      st.dispatchEvent(mk('pointerup', b));
+    }, [type, a, b]);
+    assert(await page.evaluate(() => document.querySelector('#viewer').classList.contains('annot')) === false, 'setup: Annotate is on');
+
+    /* a finger does nothing to the marks with Annotate off */
+    await drag('touch', at(.4, .2), at(.6, .2)); await sleep(400);
+    assert((await live()).length === 0, 'a finger drew with Annotate off');
+
+    /* a stylus draws a pen stroke, black, medium, and says so once */
+    await drag('pen', at(.2, .2), at(.8, .2));
+    const first = await waitFor(async () => (await live())[0], 'the stylus drew nothing with Annotate off');
+    assert(first.t === 'pen' && first.c === BLACK && first.w === .003, `the stylus stroke is ${JSON.stringify([first.t, first.c, first.w])}, expected a black medium pen`);
+    assert(/stylus draws/i.test(await toastNow()), 'no hint after the first stylus stroke: ' + JSON.stringify(await toastNow()));
+    await waitFor(async () => !(await toastNow()), 'the hint stayed', 9000);
+    await drag('pen', at(.2, .3), at(.8, .3));
+    await waitFor(async () => (await live()).length === 2, 'the second stylus stroke was not saved');
+    await sleep(300);
+    assert(!/stylus draws/i.test(await toastNow()), 'the stylus hint showed a second time');
+
+    /* the highlighter, chosen last, is what the stylus uses; the eraser last means the pen (it never erases with Annotate off) */
+    await page.click('#vAnn'); await page.waitForSelector('#tools:not([hidden])');
+    await pickTool(page, '#tools [data-tool=hl][data-color="#ffd400"]');
+    await page.click('#tDone'); await page.waitForSelector('#tools', {state: 'hidden'});
+    await drag('pen', at(.2, .7), at(.8, .7));
+    const hl = await waitFor(async () => (await live()).find(x => x.t === 'hl'), 'the stylus did not use the highlighter');
+    assert(hl.w === .02 && hl.c === '#ffd400', 'the highlighter stroke is ' + JSON.stringify([hl.c, hl.w]));
+    await page.click('#vAnn'); await page.waitForSelector('#tools:not([hidden])');
+    await pickTool(page, '#tools [data-tool=erase]');
+    await page.click('#tDone'); await page.waitForSelector('#tools', {state: 'hidden'});
+    const n0 = (await live()).length;
+    await drag('pen', at(.2, .85), at(.8, .85));
+    await waitFor(async () => (await live()).length === n0 + 1, 'after the eraser, the stylus drew nothing');
+    const last = (await live()).find(x => Math.abs(x.p[0][1] - .85) < .02);
+    assert(last && last.t === 'pen', 'with the eraser chosen last the stylus did not draw a pen stroke');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
+/* A finger is ignored while annotating unless "Finger draws" is on. With Text chosen, a finger tap in the middle of the
+   page used to do nothing at all (a player on an iPad and an Android tablet saw "the note does not show up"): now a toast
+   says to tap "Finger draws". The toast must not show for the stylus/mouse, for another tool, or once Finger draws is on
+   (then the tap opens the note box). A real touch is sent (hasTouch), so the page sees pointerType "touch". */
+async function loopFingerHint(ctx){
+  const s = await ctx.session({hasTouch: true});
+  try{
+    const {page} = s;
+    await s.goto();
+    await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await page.waitForSelector('#libList [data-open]', {timeout: 20000});
+    const id = Object.values(await idbAll(page, 'songs')).find(x => !x.deleted)?.id;
+    assert(id, 'imported song not found');
+    await page.click(`#libList [data-open="${id}"]`);
+    await page.waitForSelector('#viewer.on #stage .sheet canvas');
+    await page.click('#vAnn');
+    await page.waitForSelector('#tools:not([hidden])');
+    const toastNow = () => page.evaluate(() => { const t = document.querySelector('#toast'); return t.classList.contains('on') && getComputedStyle(t).opacity === '1' ? t.textContent : ''; });
+    const quiet = async () => { await waitFor(async () => !(await toastNow()), 'a toast stayed on screen', 8000); };
+    const cv = await page.locator('#stage .ink[data-pn="1"]').boundingBox();
+    const mid = {x: cv.x + cv.width * .5, y: cv.y + cv.height * .4};
+    const hint = /Finger draws/;
+    assert(await page.getAttribute('#tFinger', 'aria-pressed') === 'false', 'setup: Finger draws is already on');
+
+    /* not for a mouse (the stylus), not for the pen, not for the eraser */
+    await pickTool(page, '#tools [data-tool=text]');
+    await page.mouse.click(mid.x, mid.y);
+    await page.locator('.modal textarea').waitFor({timeout: 5000});
+    await page.locator('.modal [data-x]').click();
+    await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 5000});
+    await sleep(500);
+    assert(!hint.test(await toastNow()), 'a mouse click with Text chosen showed the Finger draws hint');
+    await pickTool(page, '#tools [data-tool=pen]');
+    await page.touchscreen.tap(mid.x, mid.y); await sleep(500);
+    assert(!hint.test(await toastNow()), 'a finger tap with the PEN chosen showed the Text hint');
+
+    /* Text chosen, Finger draws off: a finger tap in the middle shows the hint, opens no note box, stores nothing */
+    await pickTool(page, '#tools [data-tool=text]');
+    await quiet();
+    await page.touchscreen.tap(mid.x, mid.y);
+    const said = await waitFor(async () => { const t = await toastNow(); return hint.test(t) ? t : ''; }, async () => 'no hint after a finger tap with Text chosen; the toast says: ' + JSON.stringify(await toastNow()), 3000);
+    assert(!(await page.locator('.modal').count()), 'a finger tap with Finger draws off opened a note box: ' + said);
+    assert(!Object.values(await idbAll(page, 'ink')).some(r => r.strokes?.length), 'a finger tap with Finger draws off stored something');
+
+    /* Finger draws on: the same tap opens the note box, and no hint */
+    await page.click('#tFinger');
+    await quiet();
+    await page.touchscreen.tap(mid.x, mid.y);
+    await page.locator('.modal textarea').waitFor({timeout: 5000});
+    assert(!hint.test(await toastNow()), 'the Finger draws hint showed although Finger draws is on');
+    await page.locator('.modal [data-x]').click();
+    await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 5000});
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 /* Pen thickness: three buttons beside the pen colours (thin .002, medium .003, thick .005 of the page width). A stroke
    keeps the width it was drawn with, the highlighter stays .02, the choice survives a reload, and the PRINTED PDF
    (read back with pdf.js, an independent path from pdf-lib which wrote it) has lines of those thicknesses. */
@@ -234,6 +354,15 @@ async function loopPenWidths(ctx){
       await page.waitForSelector('#tools:not([hidden])');
     };
     const pressed = async w => page.getAttribute(`#tools [data-width=${w}]`, 'aria-pressed');
+    /* ONE button in the bar opens the row of three; choosing one closes it again and the bar's button shows the choice */
+    const menuOpen = () => page.locator('#wdMenu').evaluate(e => !e.hidden && e.getClientRects().length > 0);
+    const chooseWidth = async w => {
+      await page.click('#tWidth');
+      await waitFor(menuOpen, 'the thickness row did not open', 3000);
+      await page.click(`#wdMenu [data-width=${w}]`);
+      await waitFor(async () => !(await menuOpen()), 'the thickness row did not close after a choice', 3000);
+      assert(await page.getAttribute('#tWidth', 'data-cur') === w, `the thickness button does not show ${w}`);
+    };
     const live = async () => (await inkRec(page, key)).strokes.filter(x => !x.deleted);
     await openAnnot();
     const cvBox = await page.locator('#stage .ink[data-pn="1"]').boundingBox();
@@ -248,7 +377,7 @@ async function loopPenWidths(ctx){
     /* one stroke with each; rows kept clear of the fixture's title text (about y .48) */
     const rows = {thin: .2, medium: .3, thick: .7};
     for(const [w, fy] of Object.entries(rows)){
-      await page.click(`#tools [data-width=${w}]`);
+      await chooseWidth(w);
       assert(await pressed(w) === 'true' && (await Promise.all(Object.keys(rows).filter(o => o !== w).map(pressed))).every(v => v === 'false'), `after tapping ${w} it is not the only one pressed`);
       await mouseLine(page, at(.2, fy), at(.8, fy), 20);
       await waitFor(async () => (await live()).length === Object.keys(rows).indexOf(w) + 1, `the ${w} stroke was not saved`);
@@ -257,22 +386,37 @@ async function loopPenWidths(ctx){
     const wOf = fy => stored.find(x => Math.abs(x.p[0][1] - fy) < .02)?.w;
     for(const [w, fy] of Object.entries(rows)) assert(wOf(fy) === PEN_WIDTHS[w], `the ${w} stroke is stored with w = ${wOf(fy)}, expected ${PEN_WIDTHS[w]}`);
 
-    /* the highlighter keeps .02 and the thickness buttons are only for the pens */
-    const widthBtns = ['thin', 'medium', 'thick'];
-    const hiddenNow = async () => (await Promise.all(widthBtns.map(w => page.locator(`#tools [data-width=${w}]`).isHidden())));
-    assert((await hiddenNow()).every(h => !h), 'the thickness buttons are not shown with a pen');
+    /* a tap elsewhere closes the row without choosing */
+    await page.click('#tWidth'); await waitFor(menuOpen, 'the thickness row did not open', 3000);
+    await page.click('#vtop .ttl b');
+    await waitFor(async () => !(await menuOpen()), 'a tap elsewhere did not close the thickness row', 3000);
+    assert(await page.getAttribute('#tWidth', 'data-cur') === 'thick', 'closing the row without a choice changed the thickness');
+
+    /* the highlighter keeps .02. The thickness buttons are only for the pens, but they STAY where they are (dimmed and not
+       pressable for the other tools) so that no other button moves when a tool is picked (Jonathan, 2026-11-21) */
+    const state = async () => [await page.locator('#tWidth').evaluate(e => ({shown: e.getClientRects().length > 0, off: e.disabled}))];
+    const layout = () => page.$$eval('#tools button, #tools .gap', els => JSON.stringify(els.map(e => { const r = e.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })));
+    assert((await state()).every(b => b.shown && !b.off), 'the thickness button is not shown and usable with a pen');
+    const penLayout = await layout();
+    const notPens = async (what) => {
+      assert((await state()).every(b => b.shown && b.off), `the thickness button is not kept in place, dimmed, with ${what}`);
+      assert(await layout() === penLayout, `a toolbar button moved when ${what} was chosen`);
+      await page.locator('#tWidth').evaluate(e => e.click());
+      assert(!(await menuOpen()), `the thickness row opened with ${what} chosen`);
+    };
     await pickTool(page, '#tools [data-tool=hl][data-color="#ffd400"]');
-    assert((await hiddenNow()).every(h => h), 'the thickness buttons are still shown with the highlighter');
+    await notPens('the highlighter');
     await mouseLine(page, at(.2, .85), at(.8, .85), 20);
     const hl = await waitFor(async () => (await live()).find(x => x.t === 'hl'), 'the highlighter stroke was not saved');
     assert(hl.w === .02, 'the highlighter stroke has w = ' + hl.w);
     await pickTool(page, '#tools [data-tool=erase]');
-    assert((await hiddenNow()).every(h => h), 'the thickness buttons are shown with the eraser');
+    await notPens('the eraser');
     await pickTool(page, '#tools [data-tool=text]');
-    assert((await hiddenNow()).every(h => h), 'the thickness buttons are shown with Text');
+    await notPens('Text');
     await page.click('#tools [data-tool=text]');                    // Text off: back to the eraser
     await pickTool(page, `#tools [data-tool=pen][data-color="${BLACK}"]`);
-    assert((await hiddenNow()).every(h => !h) && await pressed('thick') === 'true', 'back on a pen the buttons are not back, or thick is not still chosen');
+    assert((await state()).every(b => b.shown && !b.off) && await pressed('thick') === 'true', 'back on a pen the thickness button is not usable again, or thick is not still chosen');
+    assert(await layout() === penLayout, 'a toolbar button moved after going back to a pen');
     assert(await page.evaluate(() => localStorage.getItem('ss-pen-w')) === 'thick', 'the choice is not kept in ss-pen-w');
     const before = JSON.stringify((await live()).map(x => [x.id, x.w]));
 
@@ -333,5 +477,7 @@ async function loopPenWidths(ctx){
 export const loops = [
   {name: 'ink: the eraser removes strokes but never a text note, and undo/clear treat notes as documented', run: loopEraserNotes},
   {name: 'ink: in full screen the note dialog, the crop screen and a toast are drawn on the screen and work', run: loopFullScreen},
-  {name: 'ink: three pen thicknesses are stored, kept after a reload, hidden for other tools, and print in the same order', run: loopPenWidths},
+  {name: 'ink: the stylus draws with Annotate off (pen, or the highlighter if chosen last), a finger does not, the hint shows once', run: loopStylusNoAnnotate},
+  {name: 'ink: a finger tap with Text chosen and Finger draws off says to tap Finger draws; mouse, pen and Finger draws on do not', run: loopFingerHint},
+  {name: 'ink: three pen thicknesses are stored, kept after a reload, one button that opens the choices, kept in place (dimmed) for other tools, and print in the same order', run: loopPenWidths},
 ];

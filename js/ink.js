@@ -156,17 +156,24 @@ async function noteTap(cv, pn, note, pos){
   }
 }
 
+let told = false;      // the stylus hint is shown once per page load
 /* Each handler returns true when the event belonged to drawing. */
 export function inkPointerDown(e){
   const cv = e.target.closest('.sheet')?.querySelector('.ink');
   if(cur && isStale(cur)) endCur(true);          // a stuck gesture: save it, then this pen-down starts a new one
-  if(V.annot && cv && !cur && (e.pointerType !== 'touch' || V.finger)){
+  /* With Annotate off, a STYLUS still draws (a finger only turns pages): with the pen or highlighter last chosen, or the pen
+     if the last tool was the eraser or Text. Annotate is for the toolbar: colours, thickness, eraser, Text, Undo. */
+  const stylus = !V.annot && e.pointerType === 'pen';
+  if((V.annot || stylus) && cv && !cur && (e.pointerType !== 'touch' || V.finger)){
     e.preventDefault();
     try{ stage.setPointerCapture(e.pointerId); }catch(err){}
     const pn = +cv.dataset.pn, pt = ptOn(cv, e);
     if(!pt) return true;
     const arr = (V.ink.get(pn) || []).slice();
-    cur = {pid:e.pointerId, t:Date.now(), cv, pn, id:V.id, tool:V.tool, arr, before:arr.slice(), changed:false, s:null};
+    const tool = stylus && V.tool !== 'hl' ? 'pen' : V.tool;
+    if(stylus && tool === 'pen' && !PEN_COLORS.includes(V.color)) V.color = PEN_COLORS[0];
+    if(stylus && !told){ told = true; toast('The stylus draws. Tap Annotate for Undo, colours and the eraser'); }
+    cur = {pid:e.pointerId, t:Date.now(), cv, pn, id:V.id, tool, arr, before:arr.slice(), changed:false, s:null};
     if(cur.tool === 'text'){
       const note = noteAt(cv, e);
       Object.assign(cur, {kind:'note', note, pos:pt, x0:e.clientX, y0:e.clientY, moved:false});
@@ -225,7 +232,7 @@ export function inkPointerCancel(e){
 }
 
 export function setAnnot(on){
-  if(!on) inkReset();
+  if(!on){ inkReset(); widthMenu(false); }
   V.annot = on;
   $('#tools').hidden = !on;
   $('#vAnn').setAttribute('aria-pressed', on);
@@ -235,23 +242,32 @@ export function setAnnot(on){
 function markTool(){
   for(const b of document.querySelectorAll('#tools [data-tool]'))
     b.setAttribute('aria-pressed', b.dataset.tool === V.tool && (V.tool === 'erase' || V.tool === 'text' || b.dataset.color === V.color));
-  /* the thickness buttons belong to the pens: hidden for the highlighter, the eraser and Text */
-  for(const b of document.querySelectorAll('#tools [data-width]')){
-    b.hidden = V.tool !== 'pen';
-    b.setAttribute('aria-pressed', b.dataset.width === penW);
-  }
+  /* ONE thickness button, always in the bar (no other button moves when a tool is picked), showing the chosen thickness;
+     it belongs to the pens, so it is dimmed and not pressable for the highlighter, the eraser and Text */
+  const tw = $('#tWidth');
+  tw.disabled = V.tool !== 'pen'; tw.dataset.cur = penW; tw.setAttribute('aria-label', 'Line thickness: ' + penW);
+  for(const b of document.querySelectorAll('#tools [data-width]')) b.setAttribute('aria-pressed', b.dataset.width === penW);
+  if(tw.disabled) widthMenu(false);
+}
+/* the small row of three thicknesses that opens above the thickness button */
+function widthMenu(open){
+  const m = $('#wdMenu'), tw = $('#tWidth');
+  m.hidden = !open; tw.setAttribute('aria-expanded', open);
 }
 export function initInk(){
   /* Backstop: a pointerup or pointercancel that never reached the stage (it bubbles here after the stage's own
      handler) still ends the gesture, so page turns, refused while inkBusy(), can never stay blocked. */
   addEventListener('pointerup', e => { if(cur && e.pointerId === cur.pid) inkPointerUp(e); });
   addEventListener('pointercancel', e => { if(cur && e.pointerId === cur.pid) inkPointerCancel(e); });
+  /* a tap anywhere else closes the thickness row */
+  addEventListener('pointerdown', e => { if(!$('#wdMenu').hidden && !e.target.closest('.wdwrap')) widthMenu(false); }, true);
   $('#tools').addEventListener('click', e => {
+    if(e.target.closest('#tWidth')){ widthMenu($('#wdMenu').hidden); return; }
     const w = e.target.closest('[data-width]');
     if(w){
       if(!Object.hasOwn(PEN_W, w.dataset.width)) return;
       penW = w.dataset.width; try{ localStorage.setItem('ss-pen-w', penW); }catch(err){}
-      markTool(); return;
+      markTool(); widthMenu(false); return;
     }
     const b = e.target.closest('[data-tool]'); if(!b) return;
     if(b.dataset.tool === 'text'){

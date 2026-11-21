@@ -60,9 +60,14 @@
     <button class="sw" data-tool="pen" data-color="#1a1a1a" aria-label="Black pen"><i style="background:#1a1a1a"></i></button>
     <button class="sw" data-tool="pen" data-color="#d62828" aria-label="Red pen"><i style="background:#d62828"></i></button>
     <button class="sw" data-tool="pen" data-color="#1f5fd6" aria-label="Blue pen"><i style="background:#1f5fd6"></i></button>
-    <button class="sw wd" data-width="thin" aria-label="Thin line"><i></i></button>
-    <button class="sw wd" data-width="medium" aria-label="Medium line"><i></i></button>
-    <button class="sw wd" data-width="thick" aria-label="Thick line"><i></i></button>
+    <span class="wdwrap">
+      <button class="sw wd" id="tWidth" data-cur="medium" aria-haspopup="true" aria-expanded="false" aria-label="Line thickness"><i></i></button>
+      <span class="wdmenu" id="wdMenu" role="group" aria-label="Line thickness" hidden>
+        <button class="sw wd" data-width="thin" aria-label="Thin line"><i></i></button>
+        <button class="sw wd" data-width="medium" aria-label="Medium line"><i></i></button>
+        <button class="sw wd" data-width="thick" aria-label="Thick line"><i></i></button>
+      </span>
+    </span>
     <button class="sw hl" data-tool="hl" data-color="#ffd400" aria-label="Yellow highlighter"><i style="background:#ffd400"></i></button>
     <button class="sw hl" data-tool="hl" data-color="#7be07b" aria-label="Green highlighter"><i style="background:#7be07b"></i></button>
     <button data-tool="erase">Eraser</button>

@@ -343,6 +343,18 @@ const FAULTS = [
     loop: 'new version 5', why: 'a song edited or deleted in ANOTHER tab while the question is open is written back as it was: only this tab\'s own list is checked'},
   {id: 'new-version-not-one-at-a-time', file: 'js/library.js', find: "  if(nvRunning){ toast('A New version is already in progress.'); return; }\n", replace: '',
     loop: 'new version 6', why: 'a second New version started while the first is still reading runs alongside it'},
+  {id: 'finger-hint-missing', file: 'js/viewer.js', find: "else if(V.tool === 'text' && !V.finger && e.pointerType === 'touch') toast(", replace: "else if(false) toast(",
+    loop: 'finger tap', why: 'a finger tap with Text chosen does nothing and says nothing: the player thinks notes are broken'},
+  {id: 'finger-hint-for-every-tool', file: 'js/viewer.js', find: "else if(V.tool === 'text' && !V.finger && e.pointerType === 'touch') toast(", replace: "else if(!V.finger && e.pointerType === 'touch') toast(",
+    loop: 'finger tap', why: 'the Text hint shows when the pen is chosen too'},
+  {id: 'width-button-hidden-for-other-tools', file: 'js/ink.js', find: "tw.disabled = V.tool !== 'pen';", replace: "tw.disabled = V.tool !== 'pen'; tw.hidden = V.tool !== 'pen';",
+    loop: 'pen thicknesses', why: 'the thickness button vanishes for the highlighter and every button after it jumps sideways'},
+  {id: 'width-button-live-for-other-tools', file: 'js/ink.js', find: "tw.disabled = V.tool !== 'pen';", replace: "tw.disabled = false;",
+    loop: 'pen thicknesses', why: 'the thickness button looks pressable with the highlighter, eraser or Text, where it does nothing'},
+  {id: 'width-menu-stays-open', file: 'js/ink.js', find: "markTool(); widthMenu(false); return;", replace: "markTool(); return;",
+    loop: 'pen thicknesses', why: 'the row of three thicknesses stays over the page after one is chosen'},
+  {id: 'width-menu-no-outside-close', file: 'js/ink.js', find: "if(!$('#wdMenu').hidden && !e.target.closest('.wdwrap')) widthMenu(false);", replace: "",
+    loop: 'pen thicknesses', why: 'the row of thicknesses stays open when the player taps the page instead'},
 ];
 
 const args = process.argv.slice(2);

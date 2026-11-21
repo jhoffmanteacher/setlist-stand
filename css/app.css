@@ -72,10 +72,15 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 .sw i{display:block;width:22px;height:22px;border-radius:50%;border:2px solid #555}
 .sw.hl i{border-radius:4px;height:14px;width:26px}
 /* the pen thickness buttons: a bar that gets thicker from thin to thick (the lines themselves are .002, .003 and .005 of the page width; the bars are drawn bigger so they can be told apart) */
-.sw.wd[hidden]{display:none}
+/* one thickness button that always sits in the bar (so no other button moves), showing the chosen thickness; it opens a small row of the three above it. It is dimmed and not pressable for the highlighter, the eraser and Text. */
+.wdwrap{position:relative;display:inline-flex}
+.wdmenu{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);display:flex;gap:8px;padding:8px;border-radius:12px;background:rgba(20,21,25,.97);border:1px solid #3a3d45;z-index:5}
+.wdmenu[hidden]{display:none}
+.sw.wd:disabled{opacity:.3}
 .sw.wd i{width:24px;height:2px;border:0;border-radius:2px;background:currentColor}
-.sw.wd[data-width=medium] i{height:4px}
-.sw.wd[data-width=thick] i{height:7px}
+.sw.wd[data-width=medium] i,#tWidth[data-cur=medium] i{height:4px}
+.sw.wd[data-width=thick] i,#tWidth[data-cur=thick] i{height:7px}
+#tWidth[aria-expanded=true]{background:var(--acc);border-color:var(--acc)}
 .gap{width:10px}
 #vAwake{position:relative;width:44px;padding:0;display:grid;place-items:center}
 #vAwake svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
