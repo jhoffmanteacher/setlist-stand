@@ -180,8 +180,8 @@ function notice(title, text){
 /* Writes the plan in ONE transaction: every new song's PDF and record (fresh ids) and the setlist (a fresh id, fresh break
    ids, a name that does not collide with a setlist already here). Resolves to {added, setName}. */
 /* An id nobody has used: uid() can repeat when it is called in a tight loop (a big package), and a repeated key would silently
-   overwrite the song written before it. */
-const unique = taken => { let id = uid(), n = 0; while(taken.has(id)) id = uid() + (++n > 3 ? n.toString(36) : ''); taken.add(id); return id; };
+   overwrite the song written before it. New version (js/library.js) makes the old chart's id with it too. */
+export const unique = taken => { let id = uid(), n = 0; while(taken.has(id)) id = uid() + (++n > 3 ? n.toString(36) : ''); taken.add(id); return id; };
 
 async function commit(plan){
   const t = Date.now(), ops = [], ids = [];

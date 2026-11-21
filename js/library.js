@@ -5,8 +5,9 @@ import {displayName, compareSongs} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
+import {unique} from './shareimport.js';
 
-let q = '', showArchived = false, replaceTarget = null;
+let q = '', showArchived = false, newVersionOf = null;
 
 export function renderLibrary(v){
   v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button><button data-sharesongs>Share songs</button><button data-shareimport>Import a share package</button></div><div id="libNudge"></div><div id="libList"></div>
@@ -26,7 +27,7 @@ function renderLib(){
   const live = sorted.filter(s => !s.archived), arch = sorted.filter(s => s.archived);
   const list = live.filter(matches), alist = arch.filter(matches);
   let html = live.length
-    ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button><div class="acts"><button data-edit="${id}">Edit</button><button data-archive="${id}">Archive</button><button data-replace="${id}">Replace PDF</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
+    ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button><div class="acts"><button data-edit="${id}">Edit</button><button data-archive="${id}">Archive</button><button data-newversion="${id}">New version</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
     : `<div class="empty"><h2>No music yet</h2><p>Add PDF charts from your tablet's files or Drive. They're saved on this device.</p></div>`;
   if(showArchived){
     html += `<h2 style="margin-top:28px;font-size:26px">Archived</h2>` + (alist.length
@@ -104,25 +105,71 @@ function askDuplicates(names){
   });
 }
 
-/* Swap in a corrected PDF. The song keeps its id, details and setlist places; its annotations start fresh. */
-export async function replacePdf(file){
-  const id = replaceTarget; replaceTarget = null;
+/* New version (it took the place of Replace PDF, which threw the old chart and its marks away): the file picked becomes the
+   song's chart, and the chart it had is kept as an archived song, so nothing is lost.
+   - The song keeps its id, details, crop and setlist places, so every setlist plays the new chart and no setlist is written.
+     Its PDF, page count and hash become the new file's; its marks start fresh (each becomes a deletion marker through
+     reconcile(), as if erased; the ink record of a page the new chart does not have is removed).
+   - The old chart becomes a NEW song with a fresh id (unique(), as share import makes them), archived and in no setlist: the
+     stored PDF bytes copied as they are (never re-saved, so its hash stays the same), its song and artist, its version with
+     "old YYYY-MM-DD" added ("War Pigs (old 2026-11-21) - Black Sabbath", "(in G, old 2026-11-21)"), its crop, and the live
+     marks and notes of every page, under the new id (ids, points and times as they were).
+   - A PDF already in the library (this song's own included) gets the usual duplicate question first; then one confirm; then
+     ONE putAll(): the new PDF, the song, its cleared marks and the old copy's PDF, record and marks are all saved, or none.
+   - A song whose stored PDF cannot be read here still takes the new chart, but then nothing can move to Archived: the
+     confirm says so before anything is written. */
+export async function newVersion(file){
+  const id = newVersionOf; newVersionOf = null;
   const s = songById(id); if(!s || !file) return;
   let r;
   try{ r = await inspect(file); }catch(err){ toast('Could not read ' + file.name); return; }
+  await ensureHashes().catch(() => {});
+  if(state.songs.some(x => x.hash === r.hash) && !(await askDuplicates([file.name]))){ toast('That PDF is already in your library. Nothing was changed.'); return; }
+  let old = null;                                   // the bytes of the chart the song has now, as they are stored
+  try{ const f = await get('files', id); if(f) old = await f.arrayBuffer(); }catch(err){}
+  if(!(await askNewVersion(file.name, s, !!old))) return;
+  /* load() makes new records: a different one here means the song was edited or deleted meanwhile (do not bring it back) */
+  if(songById(id) !== s){ toast('That song changed in the meantime. Nothing was changed.'); return; }
   try{
-    /* One transaction: the new PDF, the song's new page count and hash, and its cleared annotations are all saved, or none. */
-    const {buf, pages:n, hash} = r, ops = [{store:'files', key:id, value:new Blob([buf], {type:'application/pdf'})}];
+    const {buf, pages:n, hash} = r, ops = [];
+    let copy = null;
+    if(old){
+      copy = newSong({song:s.song, artist:s.artist, version:oldVersion(s.version)}, s.pages, await sha256(old));
+      copy.id = unique(new Set([...state.songs.map(x => x.id), ...state.sets.map(x => x.id)]));
+      copy.archived = true;
+      if(s.crop !== undefined) copy.crop = JSON.parse(JSON.stringify(s.crop));
+      ops.push({store:'files', key:copy.id, value:new Blob([old], {type:'application/pdf'})}, {store:'songs', key:copy.id, value:copy});
+    }
+    ops.push({store:'files', key:id, value:new Blob([buf], {type:'application/pdf'})});
     for(let p = 1; p <= s.pages; p++){
-      const key = id + ':' + p, cur = upgradeInk(await get('ink', key)).record.strokes;
+      const key = id + ':' + p, cur = upgradeInk(await get('ink', key)).record.strokes, marks = cur.filter(x => !x.deleted);
+      if(copy && marks.length) ops.push({store:'ink', key:copy.id + ':' + p, value:inkRecord(marks)});   // the old chart keeps its marks
       if(p > n) ops.push({store:'ink', key, delete:true});                                       // that page no longer exists
       else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []))});     // keep deletion markers for the pages that remain
     }
-    const song = {...s, pages:n, hash, title:displayName(s), updated:Date.now()};
-    ops.push({store:'songs', key:id, value:song});
+    ops.push({store:'songs', key:id, value:{...s, pages:n, hash, title:displayName(s), updated:Date.now()}});
     await putAll(ops);
-    await load(); hooks.render(); toast('Chart replaced. Annotations cleared.' + (s.crop ? ' Crop kept. Use Reset in the crop screen if the layout changed.' : ''));
+    await load(); hooks.render();
+    toast((copy ? 'New version in place. The old one is in Archived.' : 'New version in place. Its marks were cleared.') + (s.crop ? ' Crop kept. Use Reset in the crop screen if the layout changed.' : ''));
   }catch(err){ await load(); hooks.render(); toast(explainError(err)); }
+}
+/* The version an old copy gets: "old 2026-11-21", or "in G, old 2026-11-21" (the date here; the whole stays within the
+   200 characters a text field takes, so share import, which refuses longer text, still takes it). */
+function oldVersion(v){
+  const d = new Date(), tag = `old ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const keep = String(v || '').slice(0, 200 - tag.length - 2).trim();
+  return keep ? keep + ', ' + tag : tag;
+}
+/* The one question before New version writes anything. Resolves true for New version. */
+function askNewVersion(name, s, keeps){
+  return new Promise(res => {
+    const m = modal(`<h2>New version</h2><p>Use <b>${esc(name)}</b> as the new version of <b>${esc(s.title)}</b>? ${keeps ? 'The current chart and its marks move to Archived.'
+      : 'The current chart cannot be read on this tablet, so it cannot be kept: its marks are cleared.'}</p>
+      <div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>New version</button></div>`);
+    m.classList.add('nvask');
+    m.querySelector('[data-x]').onclick = () => { m.remove(); res(false); };
+    m.querySelector('[data-ok]').onclick = () => { m.remove(); res(true); };
+  });
 }
 
 /* Returns true when the click was for the library. */
@@ -144,10 +191,7 @@ export async function onClick(b, d){
     const s = songById(d.archive || d.restoresong); s.archived = !!d.archive;
     await saveSong(s); await load(); hooks.render(); return true;
   }
-  if(d.replace){
-    if(!armed(b, 'Clears notes. Tap again')) return true;
-    replaceTarget = d.replace; $('#replaceFile').click(); return true;
-  }
+  if(d.newversion){ newVersionOf = d.newversion; $('#newVersionFile').click(); return true; }    // nothing is lost: the confirm after the pick is the check
   if(d.del){
     if(!armed(b)) return true;
     const s = songById(d.del); if(!s) return true;

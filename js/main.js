@@ -1,7 +1,7 @@
 import {initErrors} from './errors.js';
 import {$, hooks} from './util.js';
 import {openStore, load, ensureHashes, songById} from './store.js';
-import {renderLibrary, onClick as libraryClick, addFiles, replacePdf} from './library.js';
+import {renderLibrary, onClick as libraryClick, addFiles, newVersion} from './library.js';
 import {renderSetlists, onClick as setlistClick, closeSet, initSetlists} from './setlists.js';
 import {backupNow, restoreFrom} from './backup.js';
 import {initViewer, openViewer, resumeState} from './viewer.js';
@@ -24,7 +24,7 @@ hooks.render = render;
 $('#tLib').onclick = () => { tab = 'lib'; render(); };
 $('#tSets').onclick = () => { tab = 'sets'; closeSet(); render(); };
 $('#file').onchange = async e => { const fs = [...e.target.files]; e.target.value = ''; await addFiles(fs); };
-$('#replaceFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await replacePdf(f); };
+$('#newVersionFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await newVersion(f); };
 $('#splitFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await startSplit(f); };
 $('#shareFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await importPackage(f); };
 $('#restoreFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
