@@ -1,4 +1,4 @@
-import {$, esc, toast, form, armed, hooks, modal, pdfPageCount} from './util.js';
+import {$, esc, toast, form, armed, hooks, modal, busy, pdfPageCount} from './util.js';
 import {putAll, get, load, state, songById, saveSong, newSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
 import {displayName, compareSongs} from './names.js';
@@ -7,7 +7,7 @@ import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
 import {unique} from './shareimport.js';
 
-let q = '', showArchived = false, newVersionOf = null;
+let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
 
 export function renderLibrary(v){
   v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button><button data-sharesongs>Share songs</button><button data-shareimport>Import a share package</button></div><div id="libNudge"></div><div id="libList"></div>
@@ -121,15 +121,28 @@ function askDuplicates(names){
 export async function newVersion(file){
   const id = newVersionOf; newVersionOf = null;
   const s = songById(id); if(!s || !file) return;
-  let r;
-  try{ r = await inspect(file); }catch(err){ toast('Could not read ' + file.name); return; }
-  await ensureHashes().catch(() => {});
-  if(state.songs.some(x => x.hash === r.hash) && !(await askDuplicates([file.name]))){ toast('That PDF is already in your library. Nothing was changed.'); return; }
-  let old = null;                                   // the bytes of the chart the song has now, as they are stored
-  /* No stored PDF at all (nothing to keep) is different from one that is there but cannot be read right now (too little
-     memory, a storage hiccup): the second must never be written over, so it stops here and nothing is changed. */
-  try{ const f = await get('files', id); if(f) old = await f.arrayBuffer(); }
-  catch(err){ toast('Could not read the current chart, so it cannot be kept. Nothing was changed.'); return; }
+  if(nvRunning){ toast('A New version is already in progress.'); return; }
+  nvRunning = true;
+  try{ await runNewVersion(file, id, s); } finally { nvRunning = false; }
+}
+async function runNewVersion(file, id, s){
+  let r, old = null;                                // old: the bytes of the chart the song has now, as they are stored
+  /* A waiting box from the pick to the first question: reading a big PDF takes seconds, and the song must not be opened (or
+     a second New version started) in that gap. It closes before any question is asked. */
+  const job = busy('New version', 'Reading ' + file.name + '…');
+  try{
+    try{ r = await inspect(file); }catch(err){ toast('Could not read ' + file.name); return; }
+    if(job.stopped) return;
+    await ensureHashes().catch(() => {});
+    const dup = state.songs.some(x => x.hash === r.hash);
+    /* No stored PDF at all (nothing to keep) is different from one that is there but cannot be read right now (too little
+       memory, a storage hiccup): the second must never be written over, so it stops here and nothing is changed. */
+    try{ const f = await get('files', id); if(f) old = await f.arrayBuffer(); }
+    catch(err){ toast('Could not read the current chart, so it cannot be kept. Nothing was changed.'); return; }
+    if(job.stopped) return;
+    job.close();
+    if(dup && !(await askDuplicates([file.name]))){ toast('That PDF is already in your library. Nothing was changed.'); return; }
+  } finally { job.close(); }
   if(!(await askNewVersion(file.name, s, !!old))) return;
   try{
     const {buf, pages:n, hash} = r, ops = [];
@@ -151,7 +164,8 @@ export async function newVersion(file){
     ops.push({store:'songs', key:id, value:{...s, pages:n, hash, title:displayName(s), updated:Date.now()}});
     /* load() makes new records: a different one here means the song was edited or deleted while the dialogs were open
        (do not bring it back). Checked last, with no wait between it and putAll, because the reads above take time. */
-    if(songById(id) !== s){ toast('That song changed in the meantime. Nothing was changed.'); return; }
+    const cur = await get('songs', id);          // the stored record too: another tab's edit or delete never reaches this tab's list
+    if(songById(id) !== s || !cur || cur.deleted || cur.updated !== s.updated || cur.hash !== s.hash){ toast('That song changed in the meantime. Nothing was changed.'); return; }
     await putAll(ops);
     await load(); hooks.render();
     toast((copy ? 'New version in place. The old one is in Archived.' : 'New version in place. Its marks were cleared.') + (s.crop ? ' Crop kept. Use Reset in the crop screen if the layout changed.' : ''));
