@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-21: Three line thicknesses for the pens
+- **Pen thickness:** when a pen is chosen, three small buttons next to the colours let you pick a thin, medium or thick line. Medium is the line the pen always drew. The app remembers your choice.
+- The highlighter stays as it was, and so do all the marks you already made. Thin, medium and thick lines print as drawn.
+
 ## 2026-11-21: Text notes, Crop and messages now work in full screen
 - **Fixed: tapping Text in full screen froze the app.** The note box was opening where it could not be seen, with the music behind it locked, so nothing seemed to respond. The note box, the Crop screen and the little messages ("Fingers draw...", "Saved", and so on) now all show on top of the music in full screen and work as they do outside it.
 - Leaving full screen while a box is open leaves the box on the screen and working.
