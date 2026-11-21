@@ -114,9 +114,10 @@ const INSTALL = () => {
     const up = () => {
       t0 = performance.now(); old = stage.querySelector('.sheet canvas:not(.ink)');
       obs = new MutationObserver(check); obs.observe(stage, {childList: true, subtree: true}); obs.observe(sub, {childList: true, characterData: true, subtree: true});
-      timer = setTimeout(() => finish(reject, new Error('timeout: expected ' + JSON.stringify(expect) + ', sub "' + sub.textContent + '"')), 15000);
       check();
     };
+    /* the timeout starts when the turn is armed, not at the tap: a tap that never comes must not hang the run */
+    timer = setTimeout(() => finish(reject, new Error('timeout: expected ' + JSON.stringify(expect) + ', sub "' + sub.textContent + '"')), 30000);
     stage.addEventListener('pointerup', up, true);
   });
   /* the same wait for the page to be there after an untimed open */
@@ -128,8 +129,12 @@ const INSTALL = () => {
     };
     poll();
   });
-  window.__open = async (qi, page) => { const m = await import('./js/viewer.js'); await m.openViewer(m.V.queue, qi, page); };
-  window.__settled = async () => { const m = await import('./js/viewer.js'); await Promise.allSettled([...m.V.cache.values()]); };
+  /* A fresh open: the viewer is CLOSED first (Back), so nothing from the last turn is left open or drawn (openViewer alone
+     keeps the song that was on screen open for a turn back, which would let a later turn "go back" to a song that is
+     already there instead of one that was prepared). */
+  window.__open = async (qi, page) => { const m = await import('./js/viewer.js'); m.closeViewer(); await m.openViewer(m.V.queue, qi, page); };
+  /* everything the viewer is drawing or opening ahead has finished: the cache AND the prepared songs */
+  window.__settled = async () => { const m = await import('./js/viewer.js'); await Promise.allSettled([...m.V.cache.values(), ...[...(m.V.prep || new Map()).values()].map(e => e.p)]); };
 };
 
 /* ---------- main ---------- */

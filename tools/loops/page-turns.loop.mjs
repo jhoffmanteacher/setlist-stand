@@ -25,10 +25,11 @@ async function waitFor(fn, what, ms = 8000){
   throw new Error(typeof what === 'function' ? await what() : what);
 }
 
-async function loopTurns(ctx){
-  const s = await ctx.session();
-  try{
-    const {page} = s;
+/* The four songs and the setlist Alpha, Bravo, (break), Charlie, Delta, played from its start. twoUp: leave "Two pages"
+   on (the default on a landscape tablet); otherwise turn it off so one tap is one page. */
+async function playSet(s, twoUp){
+  const {page} = s;
+  {
     await s.goto();
     const files = await makePdfs();
     for(const [i, f] of files.entries()){
@@ -56,10 +57,13 @@ async function loopTurns(ctx){
     await page.click('#view [data-play]');
     await page.waitForSelector('#viewer.on #stage .sheet canvas');
     await page.evaluate(() => document.querySelector('#viewer').classList.remove('hide'));
-    if(await page.getAttribute('#v2up', 'aria-pressed') === 'true') await page.click('#v2up');
-    await waitFor(() => page.evaluate(() => document.querySelectorAll('#stage .sheet').length === 1 && /Page 1 of 3/.test(document.querySelector('#vSub').textContent)), 'Alpha did not show one page');
-
-    /* in the page: look at the viewer's own state */
+    if(!twoUp && await page.getAttribute('#v2up', 'aria-pressed') === 'true') await page.click('#v2up');
+    await waitFor(() => page.evaluate(n => document.querySelectorAll('#stage .sheet').length === n && /Page 1[–-]?2? ?of 3|Page 1 of 3/.test(document.querySelector('#vSub').textContent), twoUp ? 2 : 1), 'Alpha did not show ' + (twoUp ? 'a spread' : 'one page'));
+  }
+}
+/* In the page: ways to look at the viewer's own state (the cache, the prepared songs, every canvas and document ever seen). */
+async function installKit(page){
+  {
     await page.evaluate(() => {
       window.__v = import('./js/viewer.js');
       window.__pc = import('./js/pagecache.js');
@@ -72,6 +76,31 @@ async function loopTurns(ctx){
     });
     const state = () => page.evaluate(async () => { const {V} = await window.__v; return {qi: V.qi, brk: !!V.brk, page: V.page, prep: [...V.prep.keys()].sort(), title: document.querySelector('#vTitle').textContent, size: V.cache.size}; });
     const settle = async () => { await page.evaluate(() => window.__settle()); await page.evaluate(() => window.__note()); };
+    /* everything drawn and opened ahead has finished; remember it as "before the tap" */
+    const before = async () => { await settle(); await page.evaluate(async () => { window.__before = await window.__snap(); }); };
+    /* after a turn: the canvases on the stage and the document in use were all there before the tap, and they are the right
+       song's (its own text, "<Name> page <n>", on each page shown: a turn that landed on the wrong song's page fails here) */
+    const landed = async (name, pages, what) => {
+      const r = await page.evaluate(async ([name, pages]) => {
+        const {V} = await window.__v, cvs = [...document.querySelectorAll('#stage .sheet canvas:not(.ink)')], shown = [...document.querySelectorAll('#stage .ink')].map(i => +i.dataset.pn);
+        const text = async pn => (await (await V.doc.getPage(pn)).getTextContent()).items.map(i => i.str).join(' ');
+        const right = []; for(const pn of pages) right.push((await text(pn)).includes(name + ' page ' + pn));
+        return {docWas: window.__before.docs.includes(V.doc), cvWas: cvs.length === pages.length && cvs.every(c => window.__before.cvs.includes(c) && c.width > 0), shown, right};
+      }, [name, pages]);
+      assert(JSON.stringify(r.shown) === JSON.stringify(pages) && r.right.every(Boolean), `${what}: the stage shows pages ${JSON.stringify(r.shown)}, expected ${name} ${JSON.stringify(pages)} (text check ${JSON.stringify(r.right)})`);
+      assert(r.docWas, `${what}: the document was opened after the tap (it was not the prepared or kept one)`);
+      assert(r.cvWas, `${what}: a page was drawn after the tap (it was not readied)`);
+    };
+    return {state, settle, before, landed};
+  }
+}
+
+async function loopTurns(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await playSet(s, false);
+    const {state, settle, before, landed} = await installKit(page);
     const pixelsOk = async what => {
       const r = await page.evaluate(async () => { const {MAX_PIXELS, MAX_ENTRIES} = await window.__pc; const {cvs} = await window.__snap(); return {px: cvs.reduce((a, c) => a + c.width * c.height, 0), n: cvs.length, MAX_PIXELS, MAX_ENTRIES}; });
       assert(r.px <= r.MAX_PIXELS && r.n <= r.MAX_ENTRIES, `${what}: the cache holds ${r.n} pages, ${r.px} pixels (limits ${r.MAX_ENTRIES}, ${r.MAX_PIXELS})`);
@@ -95,22 +124,19 @@ async function loopTurns(ctx){
     await pixelsOk('on Alpha page 3');
 
     /* into Bravo: its first page was drawn and its document opened before the tap */
-    await page.evaluate(async () => { window.__before = await window.__snap(); });
+    await before();
     await page.click('#vNext');
     await waitFor(async () => (await state()).title.includes('Bravo'), 'the turn into Bravo did not happen');
-    let r = await page.evaluate(async () => { const {V} = await window.__v, cv = document.querySelector('#stage .sheet canvas:not(.ink)'); return {docWas: window.__before.docs.includes(V.doc), cvWas: window.__before.cvs.includes(cv) && cv.width > 0}; });
-    assert(r.docWas, 'turning into Bravo opened its PDF again: the document was not the prepared one');
-    assert(r.cvWas, 'turning into Bravo drew its first page again: the canvas was not the prepared one');
+    await landed('Bravo', [1], 'turning into Bravo');
     await settle();
     st = await state();
     assert(JSON.stringify(st.prep) === '[0]', 'in Bravo the song just left (Alpha, entry 0) should be the one kept: ' + JSON.stringify(st));
 
     /* back into Alpha: its last page is the one it was left on, ready (document and canvas) */
-    await page.evaluate(async () => { window.__before = await window.__snap(); });
+    await before();
     await page.click('#vPrev');
     await waitFor(async () => { const t = await state(); return t.title.includes('Alpha') && t.page === 3; }, async () => 'going back did not land on Alpha page 3: ' + JSON.stringify(await state()));
-    r = await page.evaluate(async () => { const {V} = await window.__v, cv = document.querySelector('#stage .sheet canvas:not(.ink)'); return {docWas: window.__before.docs.includes(V.doc), cvWas: window.__before.cvs.includes(cv) && cv.width > 0}; });
-    assert(r.docWas && r.cvWas, 'going back into Alpha opened or drew it again: ' + JSON.stringify(r));
+    await landed('Alpha', [3], 'going back into Alpha');
     await settle();
 
     /* forward through the break to Charlie; Alpha is no longer next to anything: closed, its pages emptied */
@@ -128,11 +154,10 @@ async function loopTurns(ctx){
     await pixelsOk('on the break');
 
     /* the break -> Charlie: opened and drawn before the tap */
-    await page.evaluate(async () => { window.__before = await window.__snap(); });
+    await before();
     await page.click('#vNext');
     await waitFor(async () => (await state()).title.includes('Charlie'), 'the turn out of the break did not happen');
-    r = await page.evaluate(async () => { const {V} = await window.__v, cv = document.querySelector('#stage .sheet canvas:not(.ink)'); return {docWas: window.__before.docs.includes(V.doc), cvWas: window.__before.cvs.includes(cv) && cv.width > 0}; });
-    assert(r.docWas && r.cvWas, 'turning from the break into Charlie opened or drew it again: ' + JSON.stringify(r));
+    await landed('Charlie', [1], 'turning from the break into Charlie');
 
     /* to Charlie's last page: Delta is prepared; Back to the library: everything prepared is closed and every page emptied */
     await turn('next', 'Charlie', 2); await turn('next', 'Charlie', 3);
@@ -143,24 +168,58 @@ async function loopTurns(ctx){
     /* a song never visited, entered from the middle of the set: Bravo opened cold on its first page, the song before it (Alpha) is readied */
     await page.evaluate(async () => { const m = await window.__v; await m.openViewer(m.V.queue, 1, 1); });
     await waitFor(async () => { const t = await state(); return t.title.includes('Bravo') && t.page === 1; }, 'reopening Bravo on page 1 did not show it');
-    await settle();
-    await page.evaluate(async () => { window.__before = await window.__snap(); });
+    await before();
     await page.click('#vPrev');
     await waitFor(async () => { const t = await state(); return t.title.includes('Alpha') && t.page === 3; }, 'going back from Bravo (opened cold) did not land on Alpha page 3');
-    r = await page.evaluate(async () => { const {V} = await window.__v, cv = document.querySelector('#stage .sheet canvas:not(.ink)'); return {docWas: window.__before.docs.includes(V.doc), cvWas: window.__before.cvs.includes(cv) && cv.width > 0}; });
-    assert(r.docWas && r.cvWas, 'going back into Alpha from a Bravo opened cold opened or drew Alpha after the tap (the previous song is not prepared): ' + JSON.stringify(r));
+    await landed('Alpha', [3], 'going back into Alpha from a Bravo opened cold (the previous song is not prepared)');
 
     /* inside a song: opened cold on the middle page, both neighbours are drawn before any tap */
     for(const [dir, button, want] of [['next', '#vNext', 3], ['back', '#vPrev', 1]]){
       await page.evaluate(async () => { const m = await window.__v; await m.openViewer(m.V.queue, 3, 2); });
       await waitFor(async () => { const t = await state(); return t.title.includes('Charlie') && t.page === 2; }, 'reopening Charlie on page 2 did not show it');
-      await settle();
-      await page.evaluate(async () => { window.__before = await window.__snap(); });
+      await before();
       await page.click(button);
       await waitFor(() => page.evaluate(w => document.querySelector('#stage .ink')?.dataset.pn == w, want), `${dir} inside Charlie did not show page ${want}`);   // the stage, not just V.page
-      r = await page.evaluate(async () => { const cv = document.querySelector('#stage .sheet canvas:not(.ink)'); return {cvWas: window.__before.cvs.includes(cv) && cv.width > 0}; });
-      assert(r.cvWas, `turning ${dir} inside a song drew page ${want} after the tap: it was not readied (the neighbour on that side is not prefetched)`);
+      await landed('Charlie', [want], `turning ${dir} inside a song opened cold in the middle (the neighbour on that side is not prefetched)`);
     }
+
+    /* a break entered cold (the set opened ON the break, as a resume after an update can): both songs next to it are readied, both ways */
+    const openAt = async (qi, pg) => { await page.evaluate(async ([qi, pg]) => { const m = await window.__v; await m.openViewer(m.V.queue, qi, pg); }, [qi, pg]); };
+    await openAt(2, 1);
+    await waitFor(async () => (await state()).brk, 'reopening on the break did not show it');
+    await before();
+    await page.click('#vNext');
+    await waitFor(async () => (await state()).title.includes('Charlie'), 'out of a break opened cold: Charlie did not show');
+    await landed('Charlie', [1], 'turning out of a break opened cold');
+    await openAt(2, 1);
+    await waitFor(async () => (await state()).brk, 'reopening on the break did not show it');
+    await before();
+    await page.click('#vPrev');
+    await waitFor(async () => { const t = await state(); return t.title.includes('Bravo') && t.page === 3; }, 'back out of a break opened cold: Bravo page 3 did not show');
+    await landed('Bravo', [3], 'turning back out of a break opened cold');
+
+    /* a resize (or the Two pages toggle) on a break page empties the cache: the songs either side are readied again, at the new size */
+    await openAt(2, 1);
+    await waitFor(async () => (await state()).brk, 'reopening on the break did not show it');
+    const vp = page.viewportSize();
+    await page.setViewportSize({width: vp.width - 120, height: vp.height - 60});
+    await sleep(600);                                                   // the viewer redraws 150 ms after the last resize
+    await before();
+    await page.click('#vNext');
+    await waitFor(async () => (await state()).title.includes('Charlie'), 'out of the break after a resize: Charlie did not show');
+    await landed('Charlie', [1], 'turning out of a break after the window was resized');
+    await page.setViewportSize(vp);
+    await sleep(500);                                                   // the viewer's own redraw after this resize (150 ms debounce) must be over, or it would repaint a break page and hide a late render below
+
+    /* a render still running for the page just left must never paint over the break page that follows it:
+       three turns in one breath, the last one into the break (the break shows at once; the render ends after it) */
+    await page.evaluate(async () => { const m = await window.__v; m.closeViewer(); await m.openViewer(m.V.queue, 1, 1); });   // closed first: nothing of Bravo is drawn yet
+    await waitFor(async () => { const t = await state(); return t.title.includes('Bravo') && t.page === 1; }, 'reopening Bravo did not show it');
+    await page.evaluate(async () => { const m = await window.__v; m.next(); m.next(); m.next(); });
+    await waitFor(async () => (await state()).brk, 'three quick turns did not end on the break');
+    await sleep(700);
+    const stageNow = await page.evaluate(() => ({brk: document.querySelectorAll('#stage .breakpage').length, sheets: document.querySelectorAll('#stage .sheet').length}));
+    assert(stageNow.brk === 1 && stageNow.sheets === 0, `a late render painted over the break page: the stage holds ${stageNow.brk} break page and ${stageNow.sheets} sheets`);
     await page.click('#vBack');
     await page.waitForFunction(() => !document.querySelector('#viewer').classList.contains('on'));
     await sleep(200);
@@ -168,6 +227,40 @@ async function loopTurns(ctx){
     assert(after.prep === 0 && after.cache === 0, `Back left ${after.prep} prepared songs and ${after.cache} cached pages`);
     assert(after.docs.every(Boolean), `Back left ${after.docs.filter(d => !d).length} of ${after.docs.length} PDFs open`);
     assert(after.live === 0, `Back left ${after.live} of ${after.seen} page canvases holding memory`);
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
+/* The same readiness with "Two pages" ON (the default on a landscape tablet): a turn is a spread, the last spread of a
+   3-page song is its single last page, and the song entered from the next song is entered on a two-page spread. */
+async function loopTurnsTwoUp(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await playSet(s, true);
+    const {state, settle, before, landed} = await installKit(page);
+    const shown = pns => waitFor(() => page.evaluate(p => JSON.stringify([...document.querySelectorAll('#stage .ink')].map(i => +i.dataset.pn)) === JSON.stringify(p), pns), `the stage did not show pages ${JSON.stringify(pns)}`);
+    const titled = name => waitFor(async () => (await state()).title.includes(name), `${name} did not show`);
+    const openAt = async (qi, pg) => { await page.evaluate(async ([qi, pg]) => { const m = await window.__v; await m.openViewer(m.V.queue, qi, pg); }, [qi, pg]); };
+
+    await shown([1, 2]);
+    await page.click('#vNext'); await shown([3]);                      // Alpha's last spread: the single page 3
+    await before();
+    await page.click('#vNext'); await titled('Bravo'); await shown([1, 2]);
+    await landed('Bravo', [1, 2], 'two pages: turning into Bravo (both pages of its first spread)');
+    await before();
+    await page.click('#vPrev'); await titled('Alpha'); await shown([3]);
+    await landed('Alpha', [3], 'two pages: going back into Alpha (its last spread)');
+
+    await openAt(3, 1); await titled('Charlie'); await shown([1, 2]);   // opened cold: the next spread is drawn ahead
+    await before();
+    await page.click('#vNext'); await shown([3]);
+    await landed('Charlie', [3], 'two pages: turning to the next spread inside a song');
+
+    await openAt(4, 1); await titled('Delta'); await shown([1, 2]);     // Delta opened cold: the song before it is readied on ITS last spread
+    await before();
+    await page.click('#vPrev'); await titled('Charlie'); await shown([3]);
+    await landed('Charlie', [3], 'two pages: going back into Charlie (an odd number of pages: its last spread is page 3 alone)');
     assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 }
@@ -225,5 +318,6 @@ async function loopCacheLimit(ctx){
 
 export const loops = [
   {name: 'page turns: the next and previous song and page are opened and drawn before the tap; unplayed songs are closed and their pages emptied', run: loopTurns},
+  {name: 'page turns: with two pages showing, a turn into the next or previous song, or the next spread, is opened and drawn before the tap', run: loopTurnsTwoUp},
   {name: 'page turns: the page cache stays under its pixel and count limits, never evicts what is on screen or being drawn, and empties what leaves', run: loopCacheLimit},
 ];

@@ -46,7 +46,6 @@ async function showBreak(qi){
   retire(qi);                                 // the song just left stays open: Back from the break is instant
   V.brk = V.queue[qi]; V.qi = qi; V.song = null; V.id = null; V.page = 1; V.n = 1;
   prune(around(qi));
-  prepare(nextSong(qi), 'first'); prepare(prevSong(qi), 'last');    // a break page is the time to ready the songs on both sides
   await draw();
 }
 /* The PDF of queue entry qi opened: the one prepared for it (taken out of the prepared set), or a new one. Resolves to
@@ -59,12 +58,22 @@ function takeDoc(qi, id){
 async function openDoc(id){
   const blob = await get('files', id);
   if(!blob) return null;
-  return pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer())}).promise;
+  return pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer()), worker:sharedWorker()}).promise;
+}
+/* pdf.js starts a new Web Worker (with its own copy of what it is reading) for every document unless it is given one;
+   up to three documents are open now (the song showing and the two next to it), so they share ONE worker: less memory,
+   and no worker to start when a song opens. A destroyed document leaves a worker it was handed alone. */
+let worker = null;
+function sharedWorker(){
+  if(!window.pdfjsLib.PDFWorker) return undefined;
+  if(!worker || worker.destroyed) worker = new window.pdfjsLib.PDFWorker();
+  return worker;
 }
 async function loadSong(qi, page){
   const tok = ++V.tok; const id = V.queue[qi].id;
+  let doc = null;
   try{
-    const doc = await takeDoc(qi, id);
+    doc = await takeDoc(qi, id);
     if(!doc){ toast('That file is missing'); return; }
     const ink = await getInkPages(id, doc.numPages);     // one read for every page, not one awaited read per page
     if(tok !== V.tok){ dropDoc({p:Promise.resolve(doc)}); return; }
@@ -75,7 +84,10 @@ async function loadSong(qi, page){
     if(V.per === 2 && V.page % 2 === 0) V.page--;
     prune(around(qi));
     await draw();
-  }catch(err){ toast('Could not open this PDF'); }
+  }catch(err){
+    if(doc && doc !== V.doc) dropDoc({p:Promise.resolve(doc)});     // opened but never shown (the ink read failed): close it, or its worker and bytes leak
+    toast('Could not open this PDF');
+  }
 }
 const perFor = n => (V.two && innerWidth > innerHeight * 1.1 && n > 1) ? 2 : 1;
 function calcPer(){
@@ -109,12 +121,12 @@ function retire(toQi){
 function prepare(qi, which){
   const e = V.queue[qi]; if(qi < 0 || !e || e.type !== 'song' || qi === V.qi) return;
   let ent = V.prep.get(qi);
-  if(!ent){ ent = {id:e.id, p:openDoc(e.id).catch(() => null)}; V.prep.set(qi, ent); }
+  if(!ent){ ent = {id:e.id, p:openDoc(e.id)}; V.prep.set(qi, ent); }   // a PDF that will not open stays a rejection: the turn into it says so
   ent.p.then(doc => {
     if(!doc || V.prep.get(qi) !== ent) return;           // missing, or taken or closed meanwhile
     const n = doc.numPages, per = perFor(n), start = which === 'last' ? lastStartFor(n, per) : 1, {W, H} = stageSize(per), song = songById(e.id);
     for(let i = 0; i < per && start + i <= n; i++) renderPage(start + i, W, H, cropOf(song, start + i), {doc, id:e.id}).catch(() => {});
-  });
+  }, () => {});                                          // not opened: nothing to draw; a turn into it will show the error
 }
 const stageSize = per => ({W:Math.floor((stage.clientWidth - 16 - (per - 1) * 6) / per), H:stage.clientHeight - 16});
 /* Replaces what the stage shows; the canvases that leave it are emptied unless the cache still keeps them. */
@@ -163,11 +175,16 @@ function drawBreak(){
   el.querySelector('p').textContent = nx ? 'Next: ' + (songById(nx.id)?.title || '') : 'End of set';
   setStage(el);
   updateChrome();
+  /* a break page is the time to ready the songs on both sides (also after a resize or the Two pages toggle emptied the cache) */
+  prepare(nextSong(V.qi), 'first'); prepare(prevSong(V.qi), 'last');
 }
 export async function draw(){
+  /* V.dt first, break or not: a render still running for the page just left (its document is kept open now) must find
+     V.dt changed and never paint over the break page */
+  const dt = ++V.dt;
   if(V.brk) return drawBreak();
   if(!V.doc) return;
-  const dt = ++V.dt; calcPer();
+  calcPer();
   const {W, H} = stageSize(V.per);
   const pns = [];
   for(let i = 0; i < V.per; i++){ const p = V.page + i; if(p <= V.n) pns.push(p); }
