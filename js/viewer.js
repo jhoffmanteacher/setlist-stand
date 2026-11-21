@@ -58,16 +58,7 @@ function takeDoc(qi, id){
 async function openDoc(id){
   const blob = await get('files', id);
   if(!blob) return null;
-  return pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer()), worker:sharedWorker()}).promise;
-}
-/* pdf.js starts a new Web Worker (with its own copy of what it is reading) for every document unless it is given one;
-   up to three documents are open now (the song showing and the two next to it), so they share ONE worker: less memory,
-   and no worker to start when a song opens. A destroyed document leaves a worker it was handed alone. */
-let worker = null;
-function sharedWorker(){
-  if(!window.pdfjsLib.PDFWorker) return undefined;
-  if(!worker || worker.destroyed) worker = new window.pdfjsLib.PDFWorker();
-  return worker;
+  return pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer())}).promise;
 }
 async function loadSong(qi, page){
   const tok = ++V.tok; const id = V.queue[qi].id;
