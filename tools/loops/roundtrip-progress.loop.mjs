@@ -37,7 +37,10 @@ const startWatch = async (page, pressOn) => {
       const t = p.textContent, last = window.__lines[window.__lines.length - 1];
       if(!last || last.t !== t){
         const stop = document.querySelector('.modal [data-x]');
-        window.__lines.push({t, stopHidden: !!(stop && stop.hidden)});
+        /* is the update banner out of reach while the box is open? (shown by force for a moment, to read how it would be drawn) */
+        const u = document.querySelector('#update'); let banner = 'none';
+        if(u){ const was = u.hidden; u.hidden = false; banner = getComputedStyle(u).display; u.hidden = was; }
+        window.__lines.push({t, stopHidden: !!(stop && stop.hidden), busy: document.body.classList.contains('busy'), banner});
         if(pressOn && pressOn.test(t) && stop) stop.click();
       }
     });
@@ -45,6 +48,13 @@ const startWatch = async (page, pressOn) => {
   }, pressOn ? pressOn.source : null);
 };
 const lines = page => page.evaluate(() => window.__lines);
+/* Every line was shown with the page marked busy and the "Updated. Tap to reload" banner out of reach (a tap on it would
+   reload the app and throw away a restore or backup under way); afterwards neither holds. */
+async function bannerGuard(page, L, what){
+  assert(L.length && L.every(x => x.busy && x.banner === 'none'), `${what}: while the box was open the page was not marked busy or the update banner could be tapped: ` + JSON.stringify(L.filter(x => !x.busy || x.banner !== 'none').slice(0, 2)));
+  await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 10000});
+  assert(await page.evaluate(() => !document.body.classList.contains('busy')), `${what}: the page is still marked busy after the box closed`);
+}
 const toastText = page => page.locator('#toast').textContent();
 async function toastIs(page, re, what){
   await page.waitForFunction(src => new RegExp(src).test(document.querySelector('#toast').textContent), re.source, {timeout: 60000}).catch(() => { throw new Error(what); });
@@ -69,6 +79,7 @@ async function loopRestoreProgress(ctx){
     assert(/^Restore stopped\. Nothing was changed\.$/.test(await toastText(page)), 'after Stop the message is "' + await toastText(page) + '"');
     await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 5000});
     const L = await lines(page);
+    await bannerGuard(page, L, "a stopped restore");
     assert(L[0] && L[0].t === 'Opening the backup…', 'the first line is "' + (L[0] && L[0].t) + '", not "Opening the backup…"');
     assert(L.some(x => x.t === 'Checking song 5 of ' + SONGS + '…'), 'no "Checking song 5 of ' + SONGS + '…" line: ' + L.map(x => x.t).join(' | '));
     assert(!L.some(x => /^Saving/.test(x.t)), 'Stop was pressed while checking, yet it went on to save: ' + L.map(x => x.t).slice(-3).join(' | '));
@@ -90,6 +101,7 @@ async function loopRestoreProgress(ctx){
     assert(checking[0] === 'Checking song 1 of ' + SONGS + '…' && checking.at(-1) === 'Checking song ' + SONGS + ' of ' + SONGS + '…', 'checking lines: ' + checking[0] + ' … ' + checking.at(-1));
     assert(L2.at(-1) === 'Saving to this tablet…' && L2.indexOf('Saving to this tablet…') > L2.indexOf(checking.at(-1)), 'the last line is not "Saving to this tablet…" after the checking lines: ' + L2.slice(-3).join(' | '));
     const save = (await lines(page)).at(-1);
+    await bannerGuard(page, await lines(page), 'a completed restore');
     assert(save.stopHidden, 'the Stop button was still shown while the library was being saved');
     await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 10000});
     const songs = Object.values((await snapshot(page)).songs).filter(x => !x.deleted);
@@ -134,6 +146,7 @@ async function loopBackupProgress(ctx){
     assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d\.zip$/.test(dl.suggestedFilename()), 'file name ' + dl.suggestedFilename());
     await toastIs(page, /Backup saved|failed|stopped/, 'no answer after the backup');
     assert(await toastText(page) === 'Backup saved', 'message "' + await toastText(page) + '"');
+    await bannerGuard(page, await lines(page), 'a completed backup');
     const L2 = (await lines(page)).map(x => x.t), packing = L2.filter(t => /^Packing song/.test(t));
     assert(packing[0] === 'Packing song 1 of ' + SONGS + '…' && packing.at(-1) === 'Packing song ' + SONGS + ' of ' + SONGS + '…', 'packing lines: ' + packing[0] + ' … ' + packing.at(-1));
     assert(L2.some(t => /^Making the backup file…/.test(t)) && L2.indexOf(packing.at(-1)) < L2.findIndex(t => /^Making the backup file…/.test(t)), 'no "Making the backup file…" line after the packing lines: ' + L2.slice(-4).join(' | '));

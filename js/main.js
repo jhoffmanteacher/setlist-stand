@@ -68,7 +68,7 @@ function watchUpdates(reg){
   reg.addEventListener('updatefound', () => track(reg.installing));
   /* Never mid-song (or mid-split): a controllerchange while a song or the songbook splitter is open (another tab's tap)
      waits; this tab's own tap only happens on the home screen, where the banner shows. */
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked && !document.body.classList.contains('playing') && !document.body.classList.contains('splitting')) reloadNow(); });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked && !document.body.classList.contains('playing') && !document.body.classList.contains('splitting') && !document.body.classList.contains('busy')) reloadNow(); });
 }
 if('serviceWorker' in navigator){
   /* The kill switch (tools/kill-switch/kill-sw.js, BREAK-GLASS.md) emptied the cache and took over: reload this tab once

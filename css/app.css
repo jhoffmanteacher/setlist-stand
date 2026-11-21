@@ -148,7 +148,7 @@ textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 #nextup{right:calc(12px + env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom))}
 #toast{bottom:calc(24px + env(safe-area-inset-bottom))}
 #update{top:calc(12px + env(safe-area-inset-top))}
-body.playing #update,body.splitting #update{display:none}   /* never offered while a song or the songbook splitter is on screen; it shows when you go Back */
+body.playing #update,body.splitting #update,body.busy #update{display:none}   /* never offered while a song, the songbook splitter or a restore/backup box is on screen; it shows when you go Back */
 
 /* data safety */
 .nudge{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin:0 0 12px;padding:8px 8px 8px 14px;border:1px solid var(--acc);border-left-width:6px;border-radius:10px;background:var(--card);font-weight:600}

@@ -96,9 +96,13 @@ export function modal(html){
    Open it before the first await of a long job: Escape and Stop then reach this dialog, not the screen behind. */
 export function busy(title, text){
   const m = modal(`<h2>${esc(title)}</h2><p class="hint" role="status">${esc(text)}</p><div class="btns"><button data-x>Stop</button></div>`);
-  const line = m.querySelector('p'), stop = m.querySelector('[data-x]');
-  const job = {stopped:false, locked:false, say:t => { line.textContent = t; }, close:() => m.remove(),
-    lock:t => { job.locked = true; stop.hidden = true; if(t) line.textContent = t; }};
+  const line = m.querySelector('p'), stop = m.querySelector('[data-x]'), box = m.firstElementChild;
+  /* body.busy hides the "Updated. Tap to reload" banner (it sits above dialogs) and holds back an update reload: a tap on it
+     must not throw away a restore or a backup that is under way. */
+  document.body.classList.add('busy');
+  const job = {stopped:false, locked:false, say:t => { if(line.textContent !== t) line.textContent = t; },    // not rewritten when unchanged: a screen reader would read it again
+    close:() => { document.body.classList.remove('busy'); m.remove(); },
+    lock:t => { job.locked = true; stop.hidden = true; box.focus(); if(t) job.say(t); }};   // hiding the focused Stop would drop focus onto the page behind
   stop.onclick = () => { if(job.locked) return; job.stopped = true; line.textContent = 'Stopping…'; };
   return job;
 }
