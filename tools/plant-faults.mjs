@@ -355,6 +355,10 @@ const FAULTS = [
     loop: 'pen thicknesses', why: 'the row of three thicknesses stays over the page after one is chosen'},
   {id: 'width-menu-no-outside-close', file: 'js/ink.js', find: "if(!$('#wdMenu').hidden && !e.target.closest('.wdwrap')) widthMenu(false);", replace: "",
     loop: 'pen thicknesses', why: 'the row of thicknesses stays open when the player taps the page instead'},
+  {id: 'stylus-needs-annotate', file: 'js/ink.js', find: "const stylus = !V.annot && e.pointerType === 'pen';", replace: "const stylus = false;",
+    loop: 'the stylus draws with Annotate off', why: 'the stylus does nothing until Annotate is tapped'},
+  {id: 'stylus-erases-with-annotate-off', file: 'js/ink.js', find: "const tool = stylus && V.tool !== 'hl' ? 'pen' : V.tool;", replace: "const tool = V.tool;",
+    loop: 'the stylus draws with Annotate off', why: 'with the eraser chosen last, a stylus stroke erases marks with Annotate off'},
 ];
 
 const args = process.argv.slice(2);

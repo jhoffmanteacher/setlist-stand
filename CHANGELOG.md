@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-21: Fixes from the iPad playtest
+- **The stylus draws without tapping Annotate.** With Annotate off, a stylus draws with the pen (or the highlighter, if that was chosen last); a finger still only turns pages. Tap Annotate for Undo, colours, thickness, the eraser and Text. A hint says so the first time.
+- **Text notes with a finger:** a finger tap is ignored while annotating unless "Finger draws" is on, so a tap with Text chosen seemed to do nothing. It now says: tap "Finger draws" first.
+- **One thickness button.** The three thickness buttons are now one button that opens the three choices. It stays in the same place, dimmed when the highlighter, eraser or Text is chosen, so the other buttons no longer jump around.
+- **No Full screen button in the Home Screen app.** The browser refuses it there (the app already fills the screen), so the button only said "not available". It still shows in a Safari tab and on Android.
+
 ## 2026-11-21: New version keeps the old chart
 - **Replace PDF is now New version.** Pick the new PDF and the song takes it: it keeps its place in every setlist and its crop, and starts with fresh marks. Nothing is thrown away any more: the chart it had, with its pen marks and text notes, is kept in **Archived** as "Song (old 2026-11-21) - Artist".
 - One question comes first ("Use ... as the new version of ...? The current chart and its marks move to Archived.") and then everything is saved in one step, or not at all. Cancel changes nothing.
