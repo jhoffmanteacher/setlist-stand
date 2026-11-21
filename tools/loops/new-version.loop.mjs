@@ -161,7 +161,9 @@ const pen = (id, y) => ({id, t: 'pen', c: '#d62828', w: .003, p: [[.2, y], [.4, 
 
 export const loops = [
 
-{name: 'new version 1: the song keeps its id and plays the new chart in both setlists; ONE new archived song holds the old PDF, marks, notes, crop and a dated version; survives a reload and a backup round trip', async run(ctx){
+/* the song keeps its id and plays the new chart in both setlists; ONE new archived song holds the old PDF, marks, notes, crop and
+   a dated version; Cancel writes nothing; all of it again after a reload and after a backup round trip */
+{name: 'new version 1: setlists play the new chart, Archived keeps the old one (reload, backup)', async run(ctx){
   const s = await session(ctx), page = s.page;
   try{
     const [A, B] = await addPdfs(page, ['two-page.pdf', 'one-page.pdf']);
@@ -251,7 +253,9 @@ export const loops = [
   } finally { await s.close(); }
 }},
 
-{name: 'new version 2: a duplicate PDF asks first and Skip changes nothing; a write that fails part-way changes nothing; "(in G, old ...)"; Add anyway; deleting either copy never touches the other', async run(ctx){
+/* a duplicate PDF asks first and Skip or Escape changes nothing; Escape on the question; a write that fails part-way changes
+   nothing; "(in G, old ...)"; Add anyway and a 200-character version; deleting either copy never touches the other */
+{name: 'new version 2: duplicates, Escape, failed writes, Add anyway, deleting either copy', async run(ctx){
   const s = await session(ctx), page = s.page;
   try{
     const [A, B] = await addPdfs(page, ['two-page.pdf', 'one-page.pdf']);
@@ -352,7 +356,8 @@ export const loops = [
   } finally { await s.close(); }
 }},
 
-{name: 'new version 3: a song whose stored PDF is missing still takes the new chart, says nothing can be kept, and adds no archived song', async run(ctx){
+/* a song whose stored PDF is missing still takes the new chart; the question says nothing can be kept; nothing is archived */
+{name: 'new version 3: a song with no stored PDF takes the new chart, nothing archived', async run(ctx){
   const s = await session(ctx), page = s.page;
   try{
     const [C] = await addPdfs(page, ['one-page.pdf']);
