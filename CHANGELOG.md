@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-21: A privacy page
+- **Privacy policy** at `privacy.html` (https://jhoffmanteacher.github.io/setlist-stand/privacy.html): says in plain words that your music and marks stay on your tablet, that the app has no accounts, ads or tracking, and what the optional Google Drive connection will and will not touch. It is a separate page; the app itself is unchanged and no update banner appears.
+
 ## 2026-11-20: Import a share package
 - **Import a share package** (Library, after Share songs): pick the file someone sent you. A box lists the new songs and the setlist it will add, and asks before it adds anything.
 - **Songs you already have are not added twice**, and they stay exactly as you have them (your own title, artist, version and crop). New songs arrive with the sender's titles, artists, versions and crops, and without any pen marks. A setlist always comes in as a new setlist (if you already have one with that name, it is called "<name> (2)"); nothing is ever replaced.
