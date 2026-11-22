@@ -755,6 +755,8 @@ const FAULTS = [
     loop: 'hygiene-ui backup menu', why: 'the bottom of the Library no longer says what state Google Drive is in'},
   {id: 'backupmenu-sync-hint-always-ready', file: 'js/syncui.js', find: "return signInState().state !== 'none' || lastSync() > 0;", replace: 'return true;',
     loop: 'hygiene-ui backup menu', why: 'Sync with Google Drive says "Keep your tablets the same" on a tablet where Drive was never connected'},
+  {id: 'gig-fill-no-fresh-sync-wait', file: 'js/gigui.js', find: '  if(driveSetUp() && !(lastSync() > 0 && Date.now() - lastSync() < FRESH_MS)) return;      // see above\n', replace: '',
+    loop: 'gigdates 6', why: 'a tablet that has not synced lately fills in gig dates on its old copies: they are stamped newer and win the next sync over the other tablet\'s changes'},
 ];
 
 const args = process.argv.slice(2);

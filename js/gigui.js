@@ -1,6 +1,8 @@
 import {esc, modal, hooks, toast} from './util.js';
 import {state, get, putAll, load, stamp} from './store.js';
 import {explainError} from './errors.js';
+import {driveSetUp} from './syncui.js';
+import {lastSync} from './sync.js';
 import {validGig, gigOf, gigLong, fillCandidates, YEAR_MIN, YEAR_MAX} from './gigdate.js';
 
 /* The gig-date dialogs. All go through modal(): focus trapped, Escape cancels, the page behind inert. */
@@ -53,7 +55,12 @@ export function fillDialog(cands){
 /* The fill-in, once per tablet (localStorage `ss-gig-fill`, set when the person answers; never in the library, a backup or a sync).
    Offered the first time the Setlists list draws with a setlist whose name clearly holds a full date. Fill in writes the ticked
    ones in ONE putAll: only `gig` and `updated` change, never a name. Not now (or Escape) writes nothing and is not asked again.
-   Two tablets that each fill in the same setlist write the same gig with different `updated`: harmless, the newer wins. */
+   Two tablets that each fill in the same setlist write the same gig with different `updated`: harmless, the newer wins.
+   On a tablet that uses Google Drive (signed in, or synced before) it is offered only within FRESH_MS of a finished sync: otherwise this
+   tablet's copy of a setlist may be older than another tablet's, and filling it in would stamp that old copy newer, so a later sync
+   would let it win over the newer one (the other tablet's added songs lost). Until then it waits, and a sync that brings the other
+   tablet's dates in makes those setlists drop out of the offer. A tablet that never uses Drive is offered it as before. */
+const FRESH_MS = 10 * 60e3;
 const FILL_KEY = 'ss-gig-fill';
 let asking = false, answered = false;           // `answered` also holds when the browser will not keep the key
 export async function offerFill(){
@@ -61,6 +68,7 @@ export async function offerFill(){
   let done = answered;
   try{ done = done || !!localStorage.getItem(FILL_KEY); }catch(e){}
   if(done || asking || document.querySelector('.modal')) return;
+  if(driveSetUp() && !(lastSync() > 0 && Date.now() - lastSync() < FRESH_MS)) return;      // see above
   const cands = fillCandidates(state.sets);
   if(!cands.length) return;
   asking = true;

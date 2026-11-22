@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-22: Gig-date fill-in waits for a sync
+- **Fill in gig dates after a sync:** if you use Google Drive, the offer to fill in gig dates from setlist names now comes only right after a sync (within 10 minutes of one). Before, a tablet that had not synced for a while could fill in a date on an out-of-date copy of a setlist, and a later sync could then put that old copy over a newer one from your other tablet. If you never use Drive, nothing changes.
+
 ## 2026-11-22: Two menus on the Library
 - **Share / Import:** Split a songbook, Import a share package and Share songs are now in one menu, under the search box.
 - **Back up / Sync:** Back up everything, Restore from backup and everything for Google Drive (Sync, Test connection, Connect, Disconnect) are in one menu too. The bottom of the Library now keeps only Show archived, one line about Google Drive and the storage lines. The reminder at the top still has its own Back up now and Sync buttons.

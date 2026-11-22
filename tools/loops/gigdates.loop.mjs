@@ -17,6 +17,9 @@
  * gigdates 5  two tablets on the stand-in Drive (sync-two.mjs): a date set on A arrives on B; cleared on B (Gig date dialog) it
  *             arrives on A as NO `gig` key (the newer whole record wins); a new date set on A arrives on B; an unknown field
  *             survives, and no run reports "changed on both tablets".
+ * gigdates 6  on a tablet that uses Drive (`ss-last-sync` set) the fill-in waits for a sync within 10 minutes: an hour-old sync
+ *             offers nothing and writes nothing, a date that arrives from the other tablet drops out of the offer, a fresh sync
+ *             offers it; a last sync over a day ahead counts as never (offered, as on a tablet without Drive).
  * The tablet's "today" is the browser's local date; the browser runs on this machine, so Node's local date is the same one.
  */
 import fs from 'node:fs';
@@ -721,10 +724,114 @@ async function loopSync(ctx){
   } finally { await A.close(); if(B) await B.close(); }
 }
 
+/* ---------- gigdates 6: on a tablet that uses Google Drive the fill-in waits for a recent sync ---------- */
+/* js/gigui.js offerFill(): when driveSetUp() (signed in, or localStorage `ss-last-sync` > 0) the fill-in is offered only within
+   10 minutes of a finished sync, so a stale copy of a setlist is never stamped newer than the other tablet's. The sign-in lives in
+   memory only, so these tablets "use Drive" through `ss-last-sync` alone (lastSync() in js/sync.js). */
+const setLastSync = (page, t) => page.evaluate(t => localStorage.setItem('ss-last-sync', String(t)), t);
+const fillKey = page => page.evaluate(() => localStorage.getItem('ss-gig-fill'));
+const fillDlg = page => page.locator('.modal [role=dialog]', {hasText: 'Fill in gig dates?'});
+async function expectNoOffer(page, what){
+  await page.waitForSelector('#view [data-newset]');
+  await sleep(1200);
+  assert(!await page.locator('.modal').count(), `${what}: a dialog opened (the fill-in must wait for a recent sync)`);
+  assert(await fillKey(page) === null, `${what}: ss-gig-fill was set without the question being asked`);
+}
+async function expectOffer(page, what){
+  await fillDlg(page).waitFor({timeout: 8000}).catch(() => { throw new Error(`${what}: the fill-in dialog did not appear`); });
+  return (await fillDlg(page).locator('label.opt').allTextContents()).map(x => x.trim());
+}
+const redraw = async page => { await page.click('#tLib'); await page.waitForSelector('#view [data-add]'); await page.click('#tSets'); };
+async function loopFillAfterSync(ctx){
+  /* 1: synced an hour ago -> no offer; the other tablet's date arrives -> that setlist drops out; synced a minute ago -> offered */
+  let s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    const t = Date.now();
+    const sf = setRec('Sf October 18 2026', {zzz: 1}, t - 2000), party = setRec('Party 3/7/2026', {}, t - 3000);
+    await putSets(page, [sf, party]);
+    await setLastSync(page, Date.now() - 3600e3);
+    await s.goto();
+    const before = await snapshot(page);
+    await page.click('#tSets');
+    await expectNoOffer(page, 'last sync an hour ago');
+    expectSame(before, await snapshot(page), 'the library (left before, right after) with the last sync an hour ago');
+    await redraw(page);
+    await expectNoOffer(page, 'last sync an hour ago, second visit');
+
+    /* a sync from the other tablet wrote Party's date (a newer whole record) */
+    await putSets(page, [{...party, gig: '2026-03-07', updated: Date.now()}]);
+    await s.goto();
+    await page.click('#tSets');
+    await expectNoOffer(page, 'last sync an hour ago, after the other tablet\'s date arrived');
+
+    await setLastSync(page, Date.now() - 60e3);
+    const mid = await snapshot(page);
+    await redraw(page);
+    const lang = await page.evaluate(() => navigator.language), long = g => fmt(lang, true).format(localDate(g));
+    const texts = await expectOffer(page, 'last sync a minute ago');
+    assert(JSON.stringify(texts) === JSON.stringify([`Sf October 18 2026 → ${long('2026-10-18')}`]),
+      'after a fresh sync the fill-in offers ' + JSON.stringify(texts) + ' (only Sf: Party already got its date from the other tablet)');
+    await clearToast(page);
+    await page.click('.modal [data-ok]');
+    await noModal(page);
+    await waitToast(page, /^Gig date filled in\.$/);
+    const after = await snapshot(page);
+    const a0 = mid.sets[sf.id], a1 = after.sets[sf.id];
+    assert(a1.gig === '2026-10-18', 'Fill in stored ' + JSON.stringify(a1.gig));
+    assert(a1.updated > a0.updated, `Fill in did not move updated (${a0.updated} -> ${a1.updated})`);
+    expectSame(without(a0, 'updated'), without(a1, 'gig', 'updated'), 'Fill in changed more than gig and updated');
+    expectSame({...mid, sets: without(mid.sets, sf.id)}, {...after, sets: without(after.sets, sf.id)}, 'Fill in changed something besides Sf');
+    assert(after.sets[party.id].gig === '2026-03-07' && after.sets[party.id].updated === mid.sets[party.id].updated, 'Fill in touched the setlist that already had a date');
+    assert(await fillKey(page) !== null, 'ss-gig-fill not set after Fill in');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+
+  /* 2: ss-last-sync more than a day in the future counts as never synced (lastSync() is 0). Not signed in either, so driveSetUp()
+        is false: this tablet is treated as one that never used Drive, and the fill-in is offered as before. */
+  s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    await putSets(page, [setRec('Sf October 18 2026', {}, Date.now() - 1000)]);
+    await setLastSync(page, Date.now() + 2 * 864e5);
+    await s.goto();
+    assert(await page.evaluate(() => import('./js/sync.js').then(m => m.lastSync())) === 0, 'a last sync two days ahead is not read as never (lastSync() !== 0)');
+    const before = await snapshot(page);
+    await page.click('#tSets');
+    await expectOffer(page, 'last sync two days in the future (counts as never, not signed in)');
+    await page.click('.modal [data-x]');
+    await noModal(page);
+    await sleep(300);
+    expectSame(before, await snapshot(page), 'Not now on the future-sync tablet');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+
+  /* 3: an old sync, then a sync (ss-last-sync = now): the next draw offers it */
+  s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    await putSets(page, [setRec('Gig 2026-03-07', {}, Date.now() - 1000)]);
+    await setLastSync(page, Date.now() - 30 * 864e5);
+    await s.goto();
+    await page.click('#tSets');
+    await expectNoOffer(page, 'last sync a month ago');
+    await setLastSync(page, Date.now());
+    await redraw(page);
+    await expectOffer(page, 'right after a sync');
+    await page.click('.modal [data-x]');
+    await noModal(page);
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'gigdates 1: parser table, validGig / cleanGig, and the groups in Node', run: loopNode},
   {name: 'gigdates 2: the list, dates and the fill-in', run: loopList},
   {name: 'gigdates 3: backups and share packages', run: loopBackups},
   {name: 'gigdates 4: a backup with bad gig dates restores with them dropped and counted, the rest of each set kept (needs the restore heal)', run: loopHostile},
   {name: 'gigdates 5: a gig date set on one tablet, then changed and cleared on the other, syncs both ways', run: loopSync},
+  {name: 'gigdates 6: on a tablet that uses Google Drive the fill-in waits for a recent sync', run: loopFillAfterSync},
 ];
