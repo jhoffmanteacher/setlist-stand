@@ -10,11 +10,11 @@ export const ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 export const STORE_NAMES = ['songs', 'files', 'sets', 'ink', 'colls'];
 export const DB_VERSION = 2;
 export let MEM = null;
-let dbp;
+let dbp, upgrading = false;
 function db(){
   if(!dbp) dbp = new Promise((res, rej) => {
     const r = indexedDB.open('setlist-stand', DB_VERSION);
-    r.onupgradeneeded = () => { for(const n of STORE_NAMES) if(!r.result.objectStoreNames.contains(n)) r.result.createObjectStore(n); };
+    r.onupgradeneeded = () => { upgrading = true; for(const n of STORE_NAMES) if(!r.result.objectStoreNames.contains(n)) r.result.createObjectStore(n); };
     /* A tab still running the older app (version 1) keeps the database open and cannot be told to let go: the upgrade waits
        until that tab is closed. Say so (main.js shows it); when the tab closes, onsuccess follows and the message goes. */
     r.onblocked = () => dispatchEvent(new Event('ss-db-blocked'));
@@ -104,7 +104,7 @@ export async function openStore(){
   catch(e){
     /* A database made by a NEWER version of the app (this code was rolled back): never fall back to memory, where whatever is
        added or restored is lost on reload. main.js says so and stops; a reload after the next update opens it. */
-    if(e && e.name === 'VersionError') throw e;
+    if(e && (e.name === 'VersionError' || upgrading)) throw e;      // ...or an upgrade that was started and failed (a full tablet): the library is still on disk
     MEM = Object.fromEntries(STORE_NAMES.map(n => [n, new Map()])); return false;
   }
 }

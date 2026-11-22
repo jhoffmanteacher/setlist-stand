@@ -12,7 +12,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, assert, sha256, snapshot, normalise, diff, download} from './harness.mjs';
+import {FIX, assert, sha256, snapshot, normalise, diff, download, idbAll} from './harness.mjs';
 import {importFixtures, buildLibrary, closeDone, readPackage, songsOf} from './share-lib.mjs';
 
 const bytesOf = f => Array.from(fs.readFileSync(path.join(FIX, f)));
@@ -171,6 +171,34 @@ async function loopStartup(ctx){
     assert(await page.locator('[data-add]').count() === 0, 'the app drew a library over a database it cannot open');
     const info = await dbInfo(page);
     assert(info.version === 3, 'the newer database was changed: ' + JSON.stringify(info));
+    assert(/BREAK-GLASS/.test(msg), 'the message does not point at BREAK-GLASS: ' + msg);
+    /* nothing works until the library is read: a tab tap draws no empty library, a picked file is turned away and writes nothing */
+    await page.click('#tLib');
+    await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await page.waitForTimeout(500);
+    assert(await page.locator('#view').innerText() === '', 'the screen drew something over a library it cannot open: ' + await page.locator('#view').innerText());
+    assert((await dbInfo(page)).version === 3 && (await idbAll(page, 'files') && Object.keys(await idbAll(page, 'files')).length === 0), 'a file picked while the library could not be opened was written');
+  } finally { await s.close(); }
+
+  /* ---- the upgrade itself fails (a full tablet cannot make the new store): the real library stays on disk, no memory fallback ---- */
+  s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.context.addInitScript(() => {
+      const make = IDBDatabase.prototype.createObjectStore;
+      IDBDatabase.prototype.createObjectStore = function(...a){ if(/index\.html$/.test(location.pathname) && sessionStorage.getItem('fail-create')) throw new DOMException('full', 'QuotaExceededError'); return make.apply(this, a); };
+    });
+    await page.goto(s.base + 'css/app.css');
+    await writeV1(page, lib);
+    await page.evaluate(() => sessionStorage.setItem('fail-create', '1'));
+    await page.goto(s.base + 'index.html', {waitUntil: 'domcontentloaded'});
+    await page.waitForSelector('#warn .warn', {timeout: 10000});
+    const msg = await page.locator('#warn').innerText();
+    assert(!/blocked on-device storage/.test(msg) && /Nothing was changed/.test(msg), 'a failed upgrade is shown as: ' + msg);
+    assert(await page.locator('[data-add]').count() === 0, 'the app drew a library after the upgrade failed');
+    await page.evaluate(() => sessionStorage.removeItem('fail-create'));
+    await page.reload(); await page.waitForSelector('#libList [data-open]', {timeout: 15000});
+    assert(await page.locator('#libList [data-open]').count() === 1, 'the library is not there after space was freed');
   } finally { await s.close(); }
 
   /* ---- ids in `colls` are held to the plain set backup.js allows ---- */
@@ -181,7 +209,49 @@ async function loopStartup(ctx){
     assert(JSON.stringify(got) === '["ok","fine-2"]', 'cleanColls: ' + JSON.stringify(got));
   } finally { await s.close(); }
 }
-const normaliseSongs = async page => Object.values(await (await import('./harness.mjs')).idbAll(page, 'songs')).filter(x => !x.deleted);
+const normaliseSongs = async page => Object.values(await idbAll(page, 'songs')).filter(x => !x.deleted);
+
+/* The in-memory fallback (storage blocked) has the collections store too; and a default that points at a deleted collection counts as none. */
+async function loopMemoryAndStaleDefault(ctx){
+  let s = await ctx.session();
+  try{
+    const {page} = s;
+    await page.addInitScript(() => { indexedDB.open = function(){ const r = {}; setTimeout(() => { r.error = new DOMException('blocked', 'SecurityError'); if(r.onerror) r.onerror({target: r}); }, 0); return r; }; });
+    await page.goto(s.base + 'index.html');
+    await page.waitForSelector('#libList');
+    assert(/blocked on-device storage/.test(await page.locator('#warn').innerText()), 'the blocked-storage warning is missing');
+    await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await page.waitForSelector('#libList [data-open]', {timeout: 15000});
+    await page.click('#view [data-collmanage]');
+    await page.click('.collmgr [data-newcoll]');
+    await page.locator('.collname input').fill('Memory Band');
+    await page.click('.collname [data-ok]');
+    await page.locator('.collmgr .mname', {hasText: 'Memory Band'}).waitFor({timeout: 5000});
+    await page.click('.collmgr [data-x]');
+    await page.click('#libList [data-edit]');
+    await page.locator('.modal fieldset.checks label', {hasText: 'Memory Band'}).locator('input').check();
+    await page.click('.modal [data-ok]');
+    await page.waitForFunction(() => !document.querySelector('.modal'));
+    await page.click('.collbar [data-collpick]:not([data-collpick="all"])');
+    assert(await page.locator('#libList [data-open]').count() === 1, 'the collection made in memory does not hold the song');
+    assert(!s.errors.length, 'page errors in memory mode: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+
+  s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    await putColls(page, [['clive', 'Live Band']]);
+    await page.evaluate(async () => { const st = await import('./js/store.js'); await st.putAll([{store: 'colls', key: 'cdead', value: {id: 'cdead', deleted: true, updated: 5}}]); localStorage.setItem('ss-default-coll', 'cdead'); });
+    await page.reload(); await page.waitForSelector('.collbar [data-collpick]');
+    assert(await page.locator('.collbar [data-collpick="all"]').getAttribute('aria-pressed') === 'true', 'the app opened on a default that no longer exists');
+    assert(!/\(default\)/.test((await page.locator('.collbar').innerText())), 'a default that was deleted is still marked: ' + await page.locator('.collbar').innerText());
+    await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await page.waitForSelector('#libList [data-open]', {timeout: 15000});
+    const rec = Object.values(await idbAll(page, 'songs'))[0];
+    assert(JSON.stringify(rec.colls) === '[]', 'a new song joined a default that no longer exists: ' + JSON.stringify(rec.colls));
+  } finally { await s.close(); }
+}
 
 async function chooseColl(page, id){
   await page.click('#tLib');
@@ -281,5 +351,6 @@ export const loops = [
   {name: 'collections 1: a version 1 database upgrades with every record, PDF and mark unchanged but `colls: []`, and a second load changes nothing', run: loopUpgrade},
   {name: 'collections 2: a tab on the old app blocks the upgrade, the page says so and goes on when it lets go; this version lets go when a newer one asks', run: loopBlocked},
   {name: 'collections 3: a failed upgrade write does not stop the app, a newer database is never read into memory, and colls ids stay plain', run: loopStartup},
+  {name: 'collections 4: the in-memory fallback has the collections store, and a default that points at a deleted collection counts as none', run: loopMemoryAndStaleDefault},
   {name: 'share 6: a package holds no collection; an import joins the shown (or default) collection and leaves a matched song as it was', run: loopShare},
 ];

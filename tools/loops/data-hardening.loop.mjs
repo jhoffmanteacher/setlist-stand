@@ -262,6 +262,15 @@ print(json.dumps(out))`;
     await s.goto();
     await page.waitForSelector('.collbar [data-collpick]');
     assert(await page.locator('#view img, #view [onerror]').count() === 0, 'a crafted collection name became markup');
+    /* ...and in the manager, the Edit dialog's tick boxes and the "Add songs to" list */
+    await page.click('#view [data-collmanage]');
+    await page.locator('.collmgr .mname').first().waitFor();
+    assert(await page.locator('.collmgr img, .collmgr [onerror]').count() === 0 && (await page.locator('.collmgr .mname', {hasText: '<img'}).count()) === 1, 'a crafted collection name is not shown as plain text in the manager');
+    await page.click('.collmgr [data-x]');
+    await page.click('#libList [data-edit]');
+    await page.locator('.modal fieldset.checks').waitFor();
+    assert(await page.locator('.modal img, .modal [onerror]').count() === 0 && await page.locator('.modal fieldset.checks label', {hasText: '<img'}).count() === 1, 'a crafted collection name is not shown as plain text in Edit');
+    await page.click('.modal [data-x]');
     const labels = await page.locator('.collbar button').evaluateAll(l => l.map(b => b.textContent));
     assert(JSON.stringify(labels) === JSON.stringify(['All', NAME, 'Local band', 'Collections']), 'picker buttons: ' + JSON.stringify(labels));
     /* choosing it lists only the songs in it; the unknown id "ghost" counts for nothing, and the setlist (in "ghost" only) is not in it */

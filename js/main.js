@@ -1,5 +1,5 @@
-import {initErrors} from './errors.js';
-import {$, hooks} from './util.js';
+import {initErrors, explainError} from './errors.js';
+import {$, esc, hooks} from './util.js';
 import {openStore, load, ensureHashes, songById} from './store.js';
 import {renderLibrary, onClick as libraryClick, addFiles, newVersion} from './library.js';
 import {renderSetlists, onClick as setlistClick, closeSet, initSetlists} from './setlists.js';
@@ -31,8 +31,12 @@ addEventListener('ss-db-changed', () => {
   w.insertAdjacentHTML('beforeend', '<p class="warn" role="alert" data-dbchanged>Setlist Stand was updated in another tab. Reload this page before you change anything here.</p>');
 });
 
+/* Nothing on the screen works until the library has been read: while the upgrade is blocked, or the database cannot be opened, a tap
+   on a tab or a picked file must not draw an empty library or write into it. */
+let ready = false;
 let tab = 'lib';
 function render(){
+  if(!ready) return;
   $('#tLib').setAttribute('aria-selected', tab === 'lib');
   $('#tSets').setAttribute('aria-selected', tab !== 'lib');
   const v = $('#view');
@@ -42,11 +46,11 @@ hooks.render = render;
 
 $('#tLib').onclick = () => { tab = 'lib'; render(); };
 $('#tSets').onclick = () => { tab = 'sets'; closeSet(); render(); };
-$('#file').onchange = async e => { const fs = [...e.target.files]; e.target.value = ''; await addFiles(fs); };
-$('#newVersionFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await newVersion(f); };
-$('#splitFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await startSplit(f); };
-$('#shareFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await importPackage(f); };
-$('#restoreFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
+$('#file').onchange = async e => { if(!ready){ e.target.value = ''; return; } const fs = [...e.target.files]; e.target.value = ''; await addFiles(fs); };
+$('#newVersionFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await newVersion(f); };
+$('#splitFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await startSplit(f); };
+$('#shareFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importPackage(f); };
+$('#restoreFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
 
 $('#view').addEventListener('click', async e => {
   const b = e.target.closest('button'); if(!b) return;
@@ -116,8 +120,11 @@ async function applyResume(){
 (async () => {
   let persistent;
   try{ persistent = await openStore(); }
-  catch(e){      // the library was made by a newer version of the app (this one was rolled back): nothing is read or written
-    $('#warn').innerHTML = '<p class="warn" role="alert">Your library was saved by a newer version of Setlist Stand than this copy. Nothing was changed. Reload this page (with internet) to get the newer version.</p>';
+  catch(e){      // nothing is read or written: either the library was made by a newer version (this copy was rolled back), or the upgrade could not be saved
+    const newer = e && e.name === 'VersionError';
+    $('#warn').innerHTML = '<p class="warn" role="alert">' + (newer
+      ? 'Your library was saved by a newer version of Setlist Stand than this copy. It was left alone. Do not add or restore anything here: see BREAK-GLASS.md, situation (a).'
+      : esc(explainError(e, 'The library could not be updated.')) + ' Nothing was changed. Free some space on the tablet, then reload this page.') + '</p>';
     return;
   }
   if(!persistent) $('#warn').innerHTML = '<p class="warn">This browser blocked on-device storage, so music you add here disappears when you close the page.</p>';
@@ -125,7 +132,7 @@ async function applyResume(){
   if(!window.pdfjsLib) $('#warn').innerHTML += '<p class="warn">The PDF reader did not load. Reload the page.</p>';
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
   initViewer(); initInk(); initCrop(); initSetlists(); initSplit();
-  await load(); initShown(); render();
+  await load(); initShown(); ready = true; render();
   announceSignIn(signIn).catch(() => {});      // only when the page came back from a sign-in the person started
   await applyResume();
   ensureHashes().catch(() => {});
