@@ -22,6 +22,8 @@ const PRECACHE = [
   'js/library.js',
   'js/copysong.js',
   'js/collections.js',
+  'js/gigdate.js',
+  'js/gigui.js',
   'js/nudge.js',
   'js/setlists.js',
   'js/viewer.js',

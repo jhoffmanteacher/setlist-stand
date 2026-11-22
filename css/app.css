@@ -115,6 +115,12 @@ fieldset.checks legend{padding:0;margin-bottom:4px}
 .pick label.po input:focus-visible + .badge{outline:3px solid var(--ink);outline-offset:2px}
 .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .box input[type=text]{min-height:48px;border-radius:10px;border:1px solid var(--line);background:var(--bg);padding:0 12px;font-size:16px}
+.box input[type=date]{min-height:48px;border-radius:10px;border:1px solid var(--line);background:var(--bg);padding:0 12px;font-size:16px}
+/* gig dates: the date under an open setlist's title, and the year headers on the Setlists list */
+.gigline{margin:-8px 0 12px;color:var(--mute);font-size:18px;font-weight:600}
+.grp{margin:18px 0 6px;font-size:18px}
+.grp button{display:flex;align-items:center;gap:8px;width:100%;min-height:48px;border:0;background:transparent;padding:0 4px;text-align:left;font-weight:700;font-size:18px}
+.grp .chev{width:1.2em;color:var(--mute)}
 .btns{display:flex;justify-content:flex-end;gap:8px}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#eeeae2;color:#17181c;padding:10px 16px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;font-weight:600}
 #toast.on{opacity:1}

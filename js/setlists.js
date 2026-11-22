@@ -5,6 +5,8 @@ import {printDialog} from './print.js';
 import {shareSet} from './share.js';
 import {renderNudge} from './nudge.js';
 import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
+import {gigOf, gigLong, gigShort, groupSets, isOpen, toggleGroup} from './gigdate.js';
+import {gigDialog, newSetDialog, offerFill} from './gigui.js';
 
 export let openSet = null;
 export const closeSet = () => { openSet = null; };
@@ -22,8 +24,8 @@ export function renderSetlists(v){
     if(!st){ openSet = null; return renderSetlists(v); }
     const items = liveItems(st), n = songCount(st);
     let k = 0;
-    v.innerHTML = `<div class="bar"><button data-allsets>&#8249; Setlists</button><h2>${esc(st.name)}</h2></div><div id="libNudge"></div>
-      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-shareset ${n ? '' : 'disabled'}>Share</button><button data-dup>Duplicate</button><button data-renset>Rename</button>${state.colls.length ? '<button data-setcolls>Collections</button>' : ''}</div>
+    v.innerHTML = `<div class="bar"><button data-allsets>&#8249; Setlists</button><h2>${esc(st.name)}</h2></div>${gigOf(st) ? `<p class="gigline">${esc(gigLong(gigOf(st)))}</p>` : ''}<div id="libNudge"></div>
+      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-shareset ${n ? '' : 'disabled'}>Share</button><button data-dup>Duplicate</button><button data-renset>Rename</button><button data-gig>Gig date</button>${state.colls.length ? '<button data-setcolls>Collections</button>' : ''}</div>
       ${items.length ? `<ul class="list" id="items">${items.map((it, i) => {
         if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${esc(i)}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${esc(i)}">Remove</button></div></li>`;
         const s = songById(it.id); k++;
@@ -33,11 +35,27 @@ export function renderSetlists(v){
   } else {
     const shownSets = sets.filter(inShown), coll = shownColl();
     v.innerHTML = pickerHtml() + `<div class="bar"><button class="pri" data-newset>New setlist</button></div><div id="libNudge"></div>` +
-      (shownSets.length ? `<ul class="list">${shownSets.map(st => { const n = songCount(st); const id = esc(st.id); return `<li class="row"><button class="main" data-set="${id}"><span class="t">${esc(st.name)}</span><span class="s">${esc(n)} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${id}" ${n ? '' : 'disabled'}>Play</button><button data-dupset="${id}">Duplicate</button><button data-delset="${id}">Delete</button></div></li>`; }).join('')}</ul>`
+      (shownSets.length ? listHtml(shownSets)
       : coll ? `<div class="empty"><h2>No setlists in ${esc(coll.name)} yet</h2><p>A new setlist joins ${esc(coll.name)} while it is shown.</p></div>`
       : `<div class="empty"><h2>No setlists yet</h2><p>Make one for each gig or rehearsal.</p></div>`);
   }
   renderNudge();                       // the backup reminder, under the bar (js/nudge.js)
+  if(!openSet) offerFill();            // once per tablet: gig dates found in setlist names (js/gigui.js)
+}
+
+const rowHtml = st => {
+  const n = songCount(st), id = esc(st.id), g = gigOf(st);
+  return `<li class="row"><button class="main" data-set="${id}"><span class="t">${esc(st.name)}</span><span class="s">${g ? esc(gigShort(g)) + ' &middot; ' : ''}${esc(n)} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${id}" ${n ? '' : 'disabled'}>Play</button><button data-dupset="${id}">Duplicate</button><button data-delset="${id}">Delete</button></div></li>`;
+};
+/* The list of setlists: grouped by gig date when any has one (js/gigdate.js groupSets), else flat as it always was. */
+let groups = [];
+function listHtml(sets){
+  groups = groupSets(sets) || [];
+  if(!groups.length) return `<ul class="list">${sets.map(rowHtml).join('')}</ul>`;
+  return groups.map(g => {
+    const open = isOpen(g);
+    return `<h3 class="grp"><button data-grp="${esc(g.id)}" aria-expanded="${open}"><span class="chev" aria-hidden="true">${open ? '&#9662;' : '&#9656;'}</span>${esc(g.label)}${open ? '' : ' (' + g.sets.length + ')'}</button></h3>${open ? `<ul class="list">${g.sets.map(rowHtml).join('')}</ul>` : ''}`;
+  }).join('');
 }
 
 async function duplicate(st){
@@ -49,10 +67,11 @@ async function duplicate(st){
 export async function onClick(b, d){
   const {sets, songs} = state;
   if('newset' in d){
-    const n = await ask('New setlist', '');
-    if(n){ const st = {id:uid(), name:n, items:[], colls:joinColls(), created:Date.now()}; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
+    const r = await newSetDialog();
+    if(r){ const st = {id:uid(), name:r.name, items:[], colls:joinColls(), created:Date.now()}; if(r.gig) st.gig = r.gig; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
     return true;
   }
+  if(d.grp){ const g = groups.find(x => x.id === d.grp); if(g){ toggleGroup(g); hooks.render(); } return true; }
   if(d.set){ openSet = d.set; hooks.render(); return true; }
   if('allsets' in d){ openSet = null; hooks.render(); return true; }
   if(d.dupset){ await duplicate(sets.find(s => s.id === d.dupset)); return true; }
@@ -80,6 +99,11 @@ export async function onClick(b, d){
   }
   if('addbreak' in d){ items.push({type:'break', id:uid(), name:'Break'}); await save(); return true; }
   if(d.renbreak){ const it = items[+d.renbreak]; const n = await ask('Rename break', it.name); if(n){ it.name = n; await save(); } return true; }
+  if('gig' in d){
+    const r = await gigDialog('Gig date of ' + st.name, st.gig);
+    if(r){ if(r.gig) st.gig = r.gig; else delete st.gig; await saveSet(st); await load(); hooks.render(); }
+    return true;
+  }
   if('renset' in d){ const n = await ask('Rename setlist', st.name); if(n){ st.name = n; await save(); } return true; }
   if(d.rm){ items.splice(+d.rm, 1); await save(); return true; }
   return false;
