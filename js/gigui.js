@@ -57,7 +57,7 @@ export function fillDialog(cands){
 const FILL_KEY = 'ss-gig-fill';
 let asking = false, answered = false;           // `answered` also holds when the browser will not keep the key
 export async function offerFill(){
-  await new Promise(r => setTimeout(r, 60));           // a screen that draws and then opens its own dialog (the sync report) gets there first
+  await 0;                                             // a screen that draws and then opens its own dialog in the same breath (the sync report) gets there first
   let done = answered;
   try{ done = done || !!localStorage.getItem(FILL_KEY); }catch(e){}
   if(done || asking || document.querySelector('.modal')) return;

@@ -424,6 +424,67 @@ async function gigDialogLoop(ctx){
   } finally { await s.close(); }
 }
 
+/* ---------- (b3) the download dialogs: Download <name>, Download all, and the Download all busy box ----------
+   The busy box is held open by a readwrite transaction on `files` in a second connection (the size estimate's reads wait
+   behind it), so it stays up for the focus checks; Escape (= Stop) lets it go 300 ms later. */
+async function downloadDialogLoop(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    let downloads = 0;
+    page.on('download', () => downloads++);
+    await s.goto();
+    await importFixtures(page);
+    await newSet(page, 'Dl A', ['One-page']);
+    await newSet(page, 'Dl B', ['Two-page']);
+    const before = JSON.stringify(await liveSets(page));
+
+    /* Download <name> on an open setlist */
+    const pb = '#view [data-print]';
+    await page.focus(pb); await page.keyboard.press('Enter');
+    await page.locator('.modal h2', {hasText: 'Download Dl B'}).waitFor({timeout: 5000}).catch(() => { throw new Error('the Download Dl B dialog did not open'); });
+    await checkDialog(page, 'Download <name> dialog');
+    await escapeBack(page, pb, 'Download <name> dialog');
+
+    /* Download all on the list */
+    await page.click('#view [data-allsets]');
+    const da = '#view [data-dlall]';
+    await page.waitForSelector(da + ':not([disabled])');
+    await page.focus(da); await page.keyboard.press('Enter');
+    await page.locator('.modal h2', {hasText: 'Download all setlists'}).waitFor({timeout: 5000}).catch(() => { throw new Error('the Download all dialog did not open'); });
+    await checkDialog(page, 'Download all dialog');
+    await escapeBack(page, da, 'Download all dialog');
+
+    /* the busy box: held open, focus trapped; Escape = Stop, then nothing is downloaded */
+    await page.evaluate(() => new Promise((res, rej) => {
+      const r = indexedDB.open('setlist-stand');
+      r.onerror = () => rej(r.error);
+      r.onsuccess = () => {
+        const d = r.result, tx = d.transaction('files', 'readwrite'), st = tx.objectStore('files');
+        const spin = () => { if(!window.__dlRelease) st.count().onsuccess = spin; };
+        spin();
+        tx.oncomplete = () => d.close();
+        addEventListener('keydown', e => { if(e.key === 'Escape') setTimeout(() => { window.__dlRelease = true; }, 300); }, {capture: true});
+        res();
+      };
+    }));
+    await page.focus(da); await page.keyboard.press('Enter');
+    await page.locator('.modal [data-ok]').waitFor();
+    await page.focus('.modal [data-ok]'); await page.keyboard.press('Enter');
+    await page.locator('.modal h2', {hasText: 'Downloading setlists'}).waitFor({timeout: 5000}).catch(() => { throw new Error('the busy box did not open'); });
+    assert(await page.locator('.modal [role=status]').textContent() === 'Getting ready…', 'busy box status: ' + await page.locator('.modal [role=status]').textContent());
+    await checkDialog(page, 'Download all busy box');
+    assert(await page.locator('.modal h2', {hasText: 'Downloading setlists'}).count() === 1, 'the busy box closed before Escape (the hold did not hold)');
+    await escapeBack(page, da, 'Download all busy box (Escape = Stop)');
+    await page.waitForFunction(() => document.querySelector('#toast.on')?.textContent === 'Stopped. Nothing was downloaded.', null, {timeout: 5000})
+      .catch(async () => { throw new Error('after Escape on the busy box the toast reads "' + await page.locator('#toast').textContent() + '"'); });
+    await sleep(1500);
+    assert(!downloads, `${downloads} download(s) started from the download dialogs`);
+    assert(JSON.stringify(await liveSets(page)) === before, 'the download dialogs changed a setlist');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 /* ---------- (c) keyboard reorder and (d) tablet CSS ---------- */
 async function reorderLoop(ctx){
   const s = await ctx.session();
@@ -509,5 +570,6 @@ export const loops = [
   {name: 'hygiene: CSP holds for import, view, ink, notes, crop, print, backup, restore, service worker, fonts', run: cspLoop},
   {name: 'hygiene: dialogs trap focus, Escape cancels, focus returns, page behind is inert', run: dialogLoop},
   {name: 'hygiene: gig-date dialogs (New setlist with a date, Gig date, the fill-in) trap focus; Escape and Cancel change nothing; Enter in the name saves', run: gigDialogLoop},
+  {name: 'hygiene: download dialogs (Download <name>, Download all, its busy box) trap focus; Escape cancels or stops and downloads nothing', run: downloadDialogLoop},
   {name: 'hygiene: setlist rows reorder with arrow keys; tablet CSS (overscroll, touch-action, safe areas)', run: reorderLoop},
 ];

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, fileHashes, download, requireUmd} from './harness.mjs';
+import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, fileHashes, download, requireUmd, JSZip, snapshot, diff} from './harness.mjs';
 
 const PL = requireUmd(path.join(ROOT, 'vendor', 'pdf-lib.min.js'));
 const PW = 612, PH = 792;                                  // fixture page size (letter, points)
@@ -339,6 +339,78 @@ const PROTECTED_LINE = 'These charts are protected, so they print as pictures: t
    mean channel difference under 3 and 99% of pixels within 40 (JPEG and resampling noise; a wrong page, a shifted
    page or missing marks are far outside this). */
 const LOOK = {mean: 3, p99: 40};
+
+/* ---------- Download all (js/downloadall.js) ---------- */
+/* A new setlist through the real dialog; returns its id (the one set id that was not there before; names may repeat). */
+async function newSetId(page, name){
+  const before = new Set(Object.keys(await idbAll(page, 'sets')));
+  await newSet(page, name);
+  return waitFor(async () => Object.keys(await idbAll(page, 'sets')).find(k => !before.has(k)), `setlist "${name}" not saved`);
+}
+async function openSetById(page, id){
+  await toLibrary(page);
+  await page.click('#tSets');
+  await page.click(`#view [data-set="${id}"]`);
+  await page.waitForSelector('#view [data-addto]');
+}
+/* Download PDF on the open setlist. how: 'plain' (no protected charts), 'pics' (Print them as pictures), 'without'
+   (Print without them: only a chart that cannot be read). Returns {bytes, name}. */
+async function downloadOne(page, withInk, how){
+  let dl;
+  if(how === 'plain'){
+    await page.click('#view [data-print]');
+    const m = page.locator('.modal');
+    await m.waitFor();
+    await m.locator('#pInk').setChecked(withInk);
+    dl = await download(page, () => m.locator('[data-ok]').click());
+  } else {
+    await askProtected(page, withInk);
+    dl = await download(page, () => page.click(how === 'pics' ? '.modal [data-pics]' : '.modal [data-without]'));
+  }
+  if(await page.locator('.modal').count()){ const x = page.locator('.modal [data-x]'); await x.waitFor({timeout: 5000}); await x.click(); }
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  return {bytes: await fsp.readFile(dl.file), name: dl.name};
+}
+/* Download all through the real dialog. Returns the zip, its name, the first dialog's text, every busy line shown,
+   and the final dialog's text and list items (null when it closed with a toast). */
+async function downloadAll(page, withInk){
+  await toLibrary(page);
+  await page.click('#tSets');
+  await page.click('#view [data-dlall]');
+  const m = page.locator('.modal');
+  await m.locator('#dInk').waitFor();
+  const ask = (await m.textContent()).replace(/\s+/g, ' ');
+  await m.locator('#dInk').setChecked(withInk);
+  await page.evaluate(() => { window.__dl = []; window.__dlOb = new MutationObserver(() => {
+    const t = document.querySelector('.modal [role=status]')?.textContent;
+    if(t && window.__dl.at(-1) !== t) window.__dl.push(t); });
+    window.__dlOb.observe(document.body, {subtree: true, childList: true, characterData: true}); });
+  const dl = await download(page, () => m.locator('[data-ok]').click());
+  const statuses = await page.evaluate(() => { window.__dlOb.disconnect(); return window.__dl; });
+  let fin = null;
+  if(await page.waitForFunction(() => /Zip saved/.test(document.querySelector('.modal h2')?.textContent || ''), null, {timeout: 5000}).then(() => true, () => false)){
+    fin = {text: (await dialogText(page)).replace(/\s+/g, ' '), items: (await page.locator('.modal li').allTextContents()).map(x => x.trim())};
+    await page.click('.modal [data-x]');
+  }
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  return {bytes: await fsp.readFile(dl.file), name: dl.name, ask, statuses, fin};
+}
+/* The zip's own central directory, read byte by byte (not through JSZip): [{name, method, csize, usize}]. */
+function zipDirectory(buf){
+  let e = buf.length - 22;
+  while(e >= 0 && buf.readUInt32LE(e) !== 0x06054b50) e--;
+  assert(e >= 0, 'zip: no end-of-directory record');
+  const n = buf.readUInt16LE(e + 10), out = [];
+  let o = buf.readUInt32LE(e + 16);
+  for(let i = 0; i < n; i++){
+    assert(buf.readUInt32LE(o) === 0x02014b50, `zip: directory entry ${i} has a bad signature`);
+    const nl = buf.readUInt16LE(o + 28), xl = buf.readUInt16LE(o + 30), cl = buf.readUInt16LE(o + 32), lh = buf.readUInt32LE(o + 42);
+    const name = buf.toString('utf8', o + 46, o + 46 + nl);
+    out.push({name, method: buf.readUInt16LE(o + 10), csize: buf.readUInt32LE(o + 20), usize: buf.readUInt32LE(o + 24), localMethod: buf.readUInt16LE(lh + 8)});
+    o += 46 + nl + xl + cl;
+  }
+  return out;
+}
 
 /* ======================================================================================================== */
 export const loops = [
@@ -744,6 +816,161 @@ export const loops = [
     if(await page.locator('.modal').count()) await page.click('.modal [data-x]');
     const rest = await renderPdf(page, 'rest', await fsp.readFile(dl.file), .5);
     assert(fmt(rest.map(p => p.text)) === fmt(['Fixture Song A — page 1', 'Fixture Song A — page 2']), 'printed ' + fmt(rest.map(p => p.text)));
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'print: Download all zips each setlist\'s own Download PDF (dated and " (2)" names, empty skipped, stored; marks, crops, rotation, pictures; password chart named), library unchanged', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    /* fixtures: an open /Rotate 90 page, an encrypted copy of two-page.pdf, and a chart whose stored bytes need a password */
+    const doc = await PL.PDFDocument.create(), font = await doc.embedFont(PL.StandardFonts.HelveticaBold);
+    const rp = doc.addPage([PW, PH]);
+    rp.drawRectangle({x: 100, y: 160, width: 80, height: 80, color: PL.rgb(0, 160 / 255, 0)});
+    rp.drawText('Rotated 90', {x: 200, y: 400, size: 30, font, color: PL.rgb(0, 0, 0)});
+    rp.setRotation(PL.degrees(90));
+    const rot = path.join(TMP, 'dlall-rot90.pdf'); fs.writeFileSync(rot, await doc.save());
+    const locked = encryptPdf(path.join(FIX, 'two-page.pdf'), path.join(TMP, 'dlall-two-locked.pdf'));
+    const placeholder = encryptPdf(path.join(FIX, 'three-page.pdf'), path.join(TMP, 'Locked Out.pdf'));
+    const pw = fs.readFileSync(encryptPdf(path.join(FIX, 'three-page.pdf'), path.join(TMP, 'dlall-real-password.pdf'), 'secret'));
+    await s.goto();
+    const files = [path.join(FIX, 'one-page.pdf'), path.join(FIX, 'two-page.pdf'), path.join(FIX, 'three-page.pdf'), rot, locked, placeholder];
+    const ids = await importFiles(page, files);
+    const C = ids['one-page.pdf'], A = ids['two-page.pdf'], B = ids['three-page.pdf'], R = ids['dlall-rot90.pdf'], LA = ids['dlall-two-locked.pdf'], NP = ids['Locked Out.pdf'];
+    /* marks (pen, highlighter, note), crops (song-wide, one page), stored records as the input */
+    const pen = {id: 'pen', updated: 1, t: 'pen', c: RED, w: .006, p: [[.15, .15], [.3, .2], [.45, .28]]};
+    const marks = [pen, {id: 'hl', updated: 1, t: 'hl', c: YELLOW, w: .02, p: [[.5, .7], [.7, .72], [.85, .75]]},
+      {id: 'note', updated: 1, t: 'text', x: .12, y: .4, text: 'Verse 2', size: .018, c: BLUE}];
+    const cropB = {x: .12, y: .1, w: .78, h: .7}, cropA2 = {x: .1, y: .1, w: .8, h: .75}, cropR = {x: .08, y: .12, w: .87, h: .73};
+    for(const [id, pns] of [[A, [1, 2]], [B, [1, 3]], [R, [1]], [LA, [1, 2]], [C, [1]]]) for(const pn of pns) await idbPut(page, 'ink', id + ':' + pn, {updated: 1, strokes: marks});
+    const songs0 = await songsById(page);
+    for(const [id, crop] of [[A, {all: null, pages: {2: cropA2}}], [LA, {all: null, pages: {2: cropA2}}], [B, {all: cropB, pages: {}}], [R, {all: cropR, pages: {}}]])
+      await idbPut(page, 'songs', id, {...songs0[id], crop});
+    await idbPut(page, 'files', NP, null, pw.toString('base64'));
+    await s.goto();                                         // the app reads songs (and their crops) at start
+    const songs = await songsById(page);
+    /* the setlists, made through the real dialogs; one gets a gig date (next year: in the open Upcoming group) */
+    const gig = `${new Date().getFullYear() + 1}-03-14`;
+    const sets = [
+      {key: 'gig', name: 'Gig night', ids: [A, B, R], how: 'plain', file: `${gig} Gig night.pdf`},
+      {key: 'same1', name: 'Same name', ids: [C, A], how: 'plain', file: 'Same name.pdf'},
+      {key: 'same2', name: 'Same name', ids: [B], how: 'plain', file: 'Same name.pdf'},
+      {key: 'prot', name: 'Protected', ids: [LA, C, LA], how: 'pics', file: 'Protected.pdf'},
+      {key: 'pw', name: 'Password', ids: [NP, A], how: 'without', file: 'Password.pdf'},
+      {key: 'empty', name: 'Empty', ids: [], file: null},
+    ];
+    for(const st of sets){
+      st.id = await newSetId(page, st.name);
+      for(const id of st.ids) await addSong(page, songs[id].title);
+    }
+    await openSetById(page, sets[0].id);
+    await page.click('#view [data-gig]');
+    await page.locator('.modal input[type=date]').fill(gig);
+    await page.click('.modal [data-ok]');
+    await waitFor(async () => (await idbAll(page, 'sets'))[sets[0].id].gig === gig, 'gig date not saved');
+    await page.waitForFunction(() => !document.querySelector('.modal'));
+    const before = await snapshot(page);
+    const full = sets.filter(st => st.ids.length), fails = [];
+    const textsOf = pages => pages.map(p => p.text);
+    const bare = pages => pages.map(p => p.text.replace(/Verse 2/g, '').trim());     // the page's own text, without the text note
+    for(const withInk of [true, false]){
+      const tag = withInk ? 'with annotations' : 'without annotations';
+      /* each setlist alone, through Download PDF */
+      for(const st of full){
+        await openSetById(page, st.id);
+        const one = await downloadOne(page, withInk, st.how);
+        assert(one.name === st.file, `${tag}: Download PDF of "${st.name}" saved as "${one.name}", expected "${st.file}"`);
+        st.one = one.bytes;
+      }
+      /* all together */
+      const z = await downloadAll(page, withInk);
+      assert(z.name === 'Setlists - Setlist Stand.zip', `${tag}: the zip is called "${z.name}"`);
+      assert(z.ask.includes(`Makes one PDF for each of your ${full.length} setlists, in one zip file.`) && z.ask.includes('1 setlist has no songs and is skipped.'), `${tag}: the dialog reads "${z.ask}"`);
+      const making = z.statuses.filter(t => /^Making setlist/.test(t));
+      const wantMaking = full.map((_, i) => new RegExp(`^Making setlist ${i + 1} of ${full.length}: `));
+      if(!(making.length === full.length && making.every((t, i) => wantMaking[i].test(t)) && z.statuses.some(t => /^Making the zip file/.test(t))))
+        fails.push(`${tag}: busy lines ${fmt(z.statuses)}`);
+      const npItem = `Password: ${songs[NP].title} needs a password`;
+      if(!z.fin) fails.push(`${tag}: no "Zip saved" dialog naming the left-out chart`);
+      else {
+        if(fmt(z.fin.items) !== fmt([npItem])) fails.push(`${tag}: left out ${fmt(z.fin.items)}, expected ${fmt([npItem])}`);
+        if(!z.fin.text.includes(`${full.length} setlist PDFs in Setlists - Setlist Stand.zip`)) fails.push(`${tag}: final dialog reads "${z.fin.text}"`);
+      }
+      /* the zip read back: its own directory, then JSZip */
+      const dir = zipDirectory(z.bytes);
+      for(const e of dir) if(e.method !== 0 || e.localMethod !== 0 || e.csize !== e.usize) fails.push(`${tag}: zip entry "${e.name}" is not stored: method ${e.method}/${e.localMethod}, ${e.csize} of ${e.usize} bytes`);
+      const zip = await JSZip.loadAsync(z.bytes, {checkCRC32: true});
+      const names = Object.keys(zip.files).filter(n => !zip.files[n].dir).sort();
+      const wantNames = [`${gig} Gig night.pdf`, 'Password.pdf', 'Protected.pdf', 'Same name (2).pdf', 'Same name.pdf'].sort();
+      assert(fmt(names) === fmt(wantNames) && fmt(dir.map(e => e.name).sort()) === fmt(wantNames), `${tag}: zip holds ${fmt(names)} (directory ${fmt(dir.map(e => e.name))}), expected ${fmt(wantNames)}`);
+      /* which entry is which setlist: unique names by name, the two "Same name" sets by what their pages read */
+      const entry = {};
+      for(const n of names){
+        const bytes = await zip.file(n).async('nodebuffer');
+        entry[n] = {bytes, pages: await renderPdf(page, 'z:' + n, bytes, 1)};
+      }
+      const claimed = new Set();
+      for(const st of full){
+        const mine = await renderPdf(page, 'one:' + st.key, st.one, 1);
+        const cands = st.file === 'Same name.pdf' ? ['Same name.pdf', 'Same name (2).pdf'] : [st.file];
+        const n = cands.find(c => !claimed.has(c) && fmt(textsOf(entry[c].pages)) === fmt(textsOf(mine)));
+        if(!n){ fails.push(`${tag}: no zip entry among ${fmt(cands)} reads like "${st.name}"'s own PDF ${fmt(textsOf(mine))} (zip: ${fmt(cands.map(c => textsOf(entry[c].pages)))})`); continue; }
+        claimed.add(n); st.entry = n; st.mine = mine;
+        const zp = entry[n].pages;
+        if(zp.length !== mine.length){ fails.push(`${tag}: "${n}" has ${zp.length} pages, the setlist's own PDF ${mine.length}`); continue; }
+        for(let i = 0; i < zp.length; i++){
+          if(!near(zp[i].vw, mine[i].vw, .5) || !near(zp[i].vh, mine[i].vh, .5)) fails.push(`${tag}: "${n}" page ${i + 1} is ${zp[i].vw.toFixed(1)}x${zp[i].vh.toFixed(1)}pt, own PDF ${mine[i].vw.toFixed(1)}x${mine[i].vh.toFixed(1)}pt`);
+          const d = await pixDiff(page, 'z:' + n, i, 'one:' + st.key, i);
+          if(d.size) fails.push(`${tag}: "${n}" page ${i + 1} renders ${d.size.slice(0, 2).join('x')}px, own PDF ${d.size.slice(2).join('x')}px`);
+          else if(!(d.nDiff / d.total <= 1e-4 && d.max <= 32)) fails.push(`${tag}: "${n}" page ${i + 1} differs from the setlist's own PDF: ${d.nDiff} of ${d.total} pixels, max ${d.max}`);
+        }
+      }
+      /* the comparison has teeth: what went in is visible in the zip's PDFs (marks only with annotations, crops, rotation, pictures) */
+      const G = sets[0], P = sets[3], W = sets[4];
+      if(G.entry){
+        const k = 'z:' + G.entry, gp = entry[G.entry].pages;
+        const want = ['Fixture Song A — page 1', 'Fixture Song A — page 2', 'Fixture Song B — page 1', 'Fixture Song B — page 2', 'Fixture Song B — page 3', 'Rotated 90'];
+        if(fmt(bare(gp)) !== fmt(want)) fails.push(`${tag}: "${G.entry}" reads ${fmt(bare(gp))}, expected ${fmt(want)}`);
+        const red = await boxOf(page, k, 0, {c: RED, aMin: .5}), blue = await boxOf(page, k, 0, {c: BLUE, aMin: .5});
+        if(withInk){
+          if(!boxNear(red, strokeBox(pen), pen.w + .02, pen.w * PW / PH + .02)) fails.push(`${tag}: pen on "${G.entry}" page 1 at ${bb(red)}, stored ${fmt(strokeBox(pen))}`);
+          if(!(blue.n && near(blue.x0, .12, .03) && near(blue.y0, .4, .03))) fails.push(`${tag}: note on "${G.entry}" page 1 at ${bb(blue)}, stored at [.12, .4]`);
+        } else for(let i = 0; i < gp.length; i++){
+          const r = await boxOf(page, k, i, {c: RED, aMin: .5}), b = await boxOf(page, k, i, {c: BLUE, aMin: .5});
+          if(r.n || b.n) fails.push(`${tag}: "${G.entry}" page ${i + 1} has marks: red ${bb(r)}, blue ${bb(b)}`);
+        }
+        const asp = (c, w, h) => c.w * w / (c.h * h);
+        for(const [i, a] of [[1, asp(cropA2, PW, PH)], [2, asp(cropB, PW, PH)], [4, asp(cropB, PW, PH)], [5, asp(cropR, PH, PW)]])
+          if(!near(gp[i].vw / gp[i].vh, a, a * .01)) fails.push(`${tag}: "${G.entry}" page ${i + 1} visible aspect ${(gp[i].vw / gp[i].vh).toFixed(4)}, crop aspect ${a.toFixed(4)}`);
+        if(!(gp[5].vw > gp[5].vh)) fails.push(`${tag}: the /Rotate 90 page is not landscape: ${gp[5].vw.toFixed(1)}x${gp[5].vh.toFixed(1)}pt`);
+      }
+      if(P.entry){
+        const pp = entry[P.entry].pages;
+        if(!(pp.length === 5 && [0, 1, 3, 4].every(i => !/Fixture Song/.test(pp[i].text)) && bare(pp)[2] === 'Fixture Song C — page 1'))
+          fails.push(`${tag}: "${P.entry}" should be picture, picture, C, picture, picture: reads ${fmt(textsOf(pp))}`);
+        const r = await boxOf(page, 'z:' + P.entry, 0, {c: RED, aMin: .5});
+        if(withInk ? !r.n : r.n) fails.push(`${tag}: picture page 1 of "${P.entry}" red pen ${bb(r)}`);
+      }
+      if(W.entry && fmt(bare(entry[W.entry].pages)) !== fmt(['Fixture Song A — page 1', 'Fixture Song A — page 2'])) fails.push(`${tag}: "${W.entry}" reads ${fmt(bare(entry[W.entry].pages))}, expected only song A`);
+      await page.evaluate(() => { window.__pl.store = {}; });
+    }
+    /* above the size limit (lowered for the test on the app's own module): refused before any work, nothing downloaded */
+    await page.evaluate(async () => { (await import(new URL('js/downloadall.js', location.href).href)).limits.maxBytes = 1; });
+    const dls = []; page.on('download', d => dls.push(d.suggestedFilename()));
+    await toLibrary(page); await page.click('#tSets'); await page.click('#view [data-dlall]');
+    await page.locator('.modal [data-ok]').click();
+    await page.waitForFunction(() => /Too much to make at once/.test(document.querySelector('.modal h2')?.textContent || ''), null, {timeout: 10000})
+      .catch(async () => { throw new Error(`no size refusal: dialog "${await dialogText(page)}", toast "${await page.locator('#toast').textContent()}"`); });
+    const refusal = (await dialogText(page)).replace(/\s+/g, ' ');
+    if(!refusal.includes('That is too much to make at once on a tablet. Download setlists one at a time, or show one collection first.')) fails.push('size refusal reads ' + refusal);
+    await page.click('.modal [data-x]');
+    await sleep(500);
+    if(dls.length) fails.push('the size refusal downloaded ' + fmt(dls));
+    await page.evaluate(async () => { (await import(new URL('js/downloadall.js', location.href).href)).limits.maxBytes = 400e6; });
+    const after = await snapshot(page), d = diff(before, after);
+    if(d.length) fails.push('the library changed during the downloads: ' + d.join('; '));
+    assert(!fails.length, fails.join('; '));
+    await sourceUntouched(page, ids, Object.fromEntries(files.filter(f => f !== placeholder).map(f => [path.basename(f), f])));
     noErrors(s);
   } finally { await s.close(); }
 }},

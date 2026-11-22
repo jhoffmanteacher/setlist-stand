@@ -1943,6 +1943,118 @@ async function stepGigDates(t){
   assert(await gigOfSet('Sf October 18 2026') === '2026-10-18', 'the filled-in gig was lost on reload');
 }
 
+/* Download PDF and Download all (js/print.js setFileName, js/downloadall.js): the dated file name, the zip of every shown setlist
+   (empty ones skipped, " (2)" on a name clash), Stop part-way, the size refusal; nothing in the library changes. */
+async function stepDownloads(t){
+  const {page} = t, errs = t.errors.length, gig = '2026-12-05';
+  const toSets = async () => {
+    await toLibrary(page); await page.click('#tSets');
+    if(await page.locator('.collbar [data-collpick="all"]').count()) await page.click('.collbar [data-collpick="all"]');
+    if(await page.locator('#view [data-allsets]').count()) await page.click('#view [data-allsets]');
+    await page.waitForSelector('#view [data-newset]');
+  };
+  /* a new setlist (New setlist opens it), with the picker's first song unless empty; then back to the list unless stayOpen */
+  const make = async (name, date, withSong, stayOpen) => {
+    await toSets();
+    await page.click('#view [data-newset]');
+    await page.locator('.modal input[type=text]').fill(name);
+    if(date) await page.locator('.modal input[type=date]').fill(date);
+    await page.click('.modal [data-ok]');
+    await page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n && !!document.querySelector('#view [data-addto]'), name);
+    if(withSong){
+      await page.click('#view [data-addto]');
+      await page.locator('.modal .pick input[type=checkbox]').first().check();
+      await page.click('.modal [data-ok]');
+      await page.waitForFunction(() => document.querySelectorAll('#view [data-playat]').length === 1, null, {timeout: 5000});
+    }
+    if(!stayOpen) await toSets();
+  };
+  const snap = async () => { const o = {}; for(const s of ['songs', 'files', 'sets', 'ink', 'colls']) o[s] = await idbAll(page, s); return JSON.stringify(o); };
+  /* counts download events while fn runs and for `ms` after */
+  const noDownload = async (fn, ms, what) => {
+    let n = 0; const on = () => n++;
+    page.on('download', on);
+    try{ await fn(); await sleep(ms); } finally { page.off('download', on); }
+    assert(!n, `${what}: ${n} download(s) started`);
+  };
+  const toastIs = (text, what) => page.waitForFunction(s => document.querySelector('#toast.on')?.textContent === s, text, {timeout: 8000})
+    .catch(async () => { throw new Error(`${what}: toast "${await page.locator('#toast').textContent()}", expected "${text}"`); });
+  const openDlAll = async () => {
+    await toSets();
+    await page.waitForSelector('#view [data-dlall]:not([disabled])');
+    await page.click('#view [data-dlall]');
+    await page.locator('.modal h2', {hasText: 'Download all setlists'}).waitFor();
+    assert(await page.locator('.modal #dInk').isChecked(), 'Download all: Include my annotations is not ticked');
+  };
+
+  /* one setlist: the button reads Download PDF, the dialog "Download <name>", the file "<gig> <name>.pdf" */
+  await make('Dl Pair', gig, true, true);
+  let before = await snap();
+  assert((await page.locator('#view [data-print]').textContent()) === 'Download PDF', 'the button reads ' + await page.locator('#view [data-print]').textContent());
+  await page.click('#view [data-print]');
+  const h = await page.locator('.modal h2').textContent();
+  assert(h === 'Download Dl Pair', 'single download dialog title: ' + h);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  const one = await printSet(page, true);
+  assert(one.name === `${gig} Dl Pair.pdf`, 'Download PDF file name: ' + one.name);
+  assert((await PDFDocument.load(await fsp.readFile(one.file))).getPageCount() >= 1, 'the downloaded PDF has no pages');
+  assert(await snap() === before, 'Download PDF changed the library');
+
+  /* Download all under "All": a second "Dl Pair" (same name and date) and an empty "Dl Empty" */
+  await make('Dl Pair', gig, true);
+  await make('Dl Empty', null, false);
+  const songsNow = await idbAll(page, 'songs');      // a setlist whose songs were all deleted counts as empty (liveItems)
+  const full = Object.values(await idbAll(page, 'sets')).filter(s => !s.deleted && s.items.some(it => it.type === 'song' && songsNow[it.id] && !songsNow[it.id].deleted)).length;
+  before = await snap();
+  await openDlAll();
+  const z = await download(page, () => page.click('.modal [data-ok]'));
+  assert(z.name === 'Setlists - Setlist Stand.zip', 'zip name: ' + z.name);
+  if(await page.locator('.modal h2', {hasText: 'Zip saved'}).count()) await page.click('.modal [data-x]');
+  else await page.waitForFunction(() => /^Saved \d+ setlist PDFs?$/.test(document.querySelector('#toast').textContent), null, {timeout: 5000})
+    .catch(async () => { throw new Error('no "Saved N setlist PDFs" toast: ' + await page.locator('#toast').textContent()); });
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  const zip = await JSZip.loadAsync(await fsp.readFile(z.file)), names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
+  const mine = names.filter(n => /Dl (Pair|Empty)/.test(n)).sort();
+  assert(JSON.stringify(mine) === JSON.stringify([`${gig} Dl Pair (2).pdf`, `${gig} Dl Pair.pdf`]), 'this step\'s PDFs in the zip: ' + JSON.stringify(mine));
+  assert(names.length === full && names.every(n => /\.pdf$/.test(n)), `the zip holds ${names.length} files (${JSON.stringify(names)}), expected ${full} PDFs (one per setlist with songs)`);
+  for(const n of mine) assert((await PDFDocument.load(await zip.file(n).async('uint8array'))).getPageCount() >= 1, `${n} in the zip has no pages`);
+  assert(await snap() === before, 'Download all changed the library');
+
+  /* Stop part-way: the page itself presses Stop the moment the second setlist starts, so it is always mid-build */
+  assert(full >= 2, `only ${full} setlist(s) with songs: Stop part-way needs two`);
+  await openDlAll();
+  await page.evaluate(() => {
+    const ob = new MutationObserver(() => {
+      const p = document.querySelector('.modal [role=status]');
+      if(p && /^Making setlist 2 of /.test(p.textContent)){ ob.disconnect(); window.__dlStopAt = p.textContent; document.querySelector('.modal [data-x]').click(); }
+    });
+    ob.observe(document.body, {subtree: true, childList: true, characterData: true});
+  });
+  await noDownload(async () => {
+    await page.click('.modal [data-ok]');
+    await toastIs('Stopped. Nothing was downloaded.', 'Stop part-way');
+    await page.waitForFunction(() => !document.querySelector('.modal'));
+  }, 2000, 'Stop part-way');
+  assert(await page.evaluate(() => window.__dlStopAt), 'Stop was not pressed during "Making setlist 2 of N"');
+
+  /* the size refusal: the limit lowered in the module instance the app uses; refused before any work, nothing downloaded */
+  const setMax = v => page.evaluate(async v => { (await import(new URL('js/downloadall.js', location.href).href)).limits.maxBytes = v; }, v);
+  await setMax(1);
+  try{
+    await openDlAll();
+    await noDownload(async () => {
+      await page.click('.modal [data-ok]');
+      await page.locator('.modal h2', {hasText: 'Too much to make at once'}).waitFor({timeout: 5000}).catch(() => { throw new Error('no "Too much to make at once" notice'); });
+    }, 2000, 'size refusal');
+    assert(/too much to make at once on a tablet/.test(await page.locator('.modal').textContent()), 'the refusal text: ' + await page.locator('.modal').textContent());
+    await page.click('.modal [data-x]');
+    await page.waitForFunction(() => !document.querySelector('.modal'));
+  } finally { await setMax(400e6); }
+  assert(await snap() === before, 'Stop or the size refusal changed the library');
+  assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -1981,6 +2093,7 @@ const STEPS = [
   ['30c Add songs in tap order: numbers, untap renumbers, Add N, setlist ends in that order; search keeps numbers', stepPickOrder],
   ['30d Backup reminder: after a backup none; a stroke or a rename brings it back on Library and Setlists, never in the viewer; a restore clears it', stepBackupReminder],
   ['30e Gig dates: Upcoming, this year, No date, last year closed; set, change, clear; kept on reload; the fill-in from a name, once', stepGigDates],
+  ['30f Downloads: Download PDF names the file with the gig date; Download all zips one PDF per setlist with songs, " (2)" on a clash; Stop part-way and the size refusal download nothing; the library is unchanged', stepDownloads],
   ['31 no request left localhost during the run', stepNoExternal],
 ];
 

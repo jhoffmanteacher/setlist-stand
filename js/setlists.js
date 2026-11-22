@@ -2,6 +2,7 @@ import {$, esc, uid, ask, pick, armed, hooks, toast, form} from './util.js';
 import {load, state, songById, saveSet, markDeleted, liveItems} from './store.js';
 import {openViewer} from './viewer.js';
 import {printDialog} from './print.js';
+import {downloadAll} from './downloadall.js';
 import {shareSet} from './share.js';
 import {renderNudge} from './nudge.js';
 import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
@@ -25,7 +26,7 @@ export function renderSetlists(v){
     const items = liveItems(st), n = songCount(st);
     let k = 0;
     v.innerHTML = `<div class="bar"><button data-allsets>&#8249; Setlists</button><h2>${esc(st.name)}</h2></div>${gigOf(st) ? `<p class="gigline">${esc(gigLong(gigOf(st)))}</p>` : ''}<div id="libNudge"></div>
-      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-shareset ${n ? '' : 'disabled'}>Share</button><button data-dup>Duplicate</button><button data-renset>Rename</button><button data-gig>Gig date</button>${state.colls.length ? '<button data-setcolls>Collections</button>' : ''}</div>
+      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Download PDF</button><button data-shareset ${n ? '' : 'disabled'}>Share</button><button data-dup>Duplicate</button><button data-renset>Rename</button><button data-gig>Gig date</button>${state.colls.length ? '<button data-setcolls>Collections</button>' : ''}</div>
       ${items.length ? `<ul class="list" id="items">${items.map((it, i) => {
         if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${esc(i)}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${esc(i)}">Remove</button></div></li>`;
         const s = songById(it.id); k++;
@@ -34,7 +35,7 @@ export function renderSetlists(v){
       : `<div class="empty"><h2>Empty setlist</h2><p>Tap Add songs to pick charts from your library.</p></div>`}`;
   } else {
     const shownSets = sets.filter(inShown), coll = shownColl();
-    v.innerHTML = pickerHtml() + `<div class="bar"><button class="pri" data-newset>New setlist</button></div><div id="libNudge"></div>` +
+    v.innerHTML = pickerHtml() + `<div class="bar"><button class="pri" data-newset>New setlist</button><button data-dlall ${shownSets.some(st => songCount(st)) ? '' : 'disabled'}>Download all</button></div><div id="libNudge"></div>` +
       (shownSets.length ? listHtml(shownSets)
       : coll ? `<div class="empty"><h2>No setlists in ${esc(coll.name)} yet</h2><p>A new setlist joins ${esc(coll.name)} while it is shown.</p></div>`
       : `<div class="empty"><h2>No setlists yet</h2><p>Make one for each gig or rehearsal.</p></div>`);
@@ -72,6 +73,7 @@ export async function onClick(b, d){
     return true;
   }
   if(d.grp){ const g = groups.find(x => x.id === d.grp); if(g){ toggleGroup(g); hooks.render(); const h = document.querySelector(`[data-grp="${CSS.escape(g.id)}"]`); if(h) h.focus(); } return true; }
+  if('dlall' in d){ downloadAll(sets.filter(inShown), shownColl()); return true; }
   if(d.set){ openSet = d.set; hooks.render(); return true; }
   if('allsets' in d){ openSet = null; hooks.render(); return true; }
   if(d.dupset){ await duplicate(sets.find(s => s.id === d.dupset)); return true; }

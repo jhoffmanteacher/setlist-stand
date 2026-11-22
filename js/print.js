@@ -1,5 +1,6 @@
 import {esc, toast, modal, fileName, saveBlob, canShareFile, shareBlob} from './util.js';
 import {get, getInk, liveStrokes, songById, cropOf} from './store.js';
+import {gigOf} from './gigdate.js';
 
 const hexRgb = h => PDFLib.rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255);
 
@@ -141,12 +142,16 @@ export async function buildSetPdf(ids, withInk, opts = {}){
   return {bytes:out.getPageCount() ? await out.save() : null, locked, left, lockedPages};
 }
 
+/* The file a setlist's PDF is saved as: its gig date first when it has one ("2026-10-18 Sf October 18 2026.pdf"). Download PDF and
+   Download all (js/downloadall.js) name files the same way. */
+export const setFileName = st => fileName((gigOf(st) ? gigOf(st) + ' ' : '') + st.name) + '.pdf';
+
 export function printDialog(st, ids){
-  const m = modal(`<h2>Print ${esc(st.name)}</h2><p class="hint">Makes one PDF with all ${ids.length} songs in setlist order.</p>
+  const m = modal(`<h2>Download ${esc(st.name)}</h2><p class="hint">Makes one PDF with all ${ids.length} songs in setlist order.</p>
     <label class="opt"><input type="checkbox" id="pInk" checked>Include my annotations</label>
     <div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Make PDF</button></div>`);
   const box = m.querySelector('.box');
-  const name = fileName(st.name) + '.pdf';
+  const name = setFileName(st);
   const save = bytes => {
     const blob = new Blob([bytes], {type:'application/pdf'});
     saveBlob(blob, name);
