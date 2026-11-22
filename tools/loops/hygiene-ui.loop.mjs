@@ -328,6 +328,102 @@ async function dialogLoop(ctx){
   } finally { await s.close(); }
 }
 
+/* ---------- (b2) the gig-date dialogs: New setlist (name + date), Gig date, the once-per-tablet fill-in ----------
+   Its own session: the fill-in comes up over the Setlists list the first time a setlist's name holds a full date, and would
+   otherwise land on top of the other dialog checks. */
+async function gigDialogLoop(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    const ns = '#view [data-newset]', sets = async () => (await liveSets(page)).sort((a, b) => a.created - b.created);
+    await page.click('#tSets');
+    assert(!(await page.locator('.modal').count()), 'a dialog came up over an empty Setlists list');
+
+    /* New setlist: a name and a date box; focus on the name; Escape makes nothing */
+    await page.focus(ns); await page.keyboard.press('Enter');
+    await page.locator('.modal input[type=text]').waitFor();
+    assert(await page.locator('.modal input[type=date]').count() === 1, 'New setlist: no date box');
+    assert(await page.evaluate(() => document.activeElement === document.querySelector('.modal input[type=text]')), 'New setlist: the name field does not have focus');
+    await checkDialog(page, 'New setlist dialog (name and gig date)');
+    await page.locator('.modal input[type=text]').fill('Escaped Gig');
+    await page.locator('.modal input[type=date]').fill('2026-12-05');
+    await page.focus('.modal input[type=text]');
+    await escapeBack(page, ns, 'New setlist dialog (name and gig date)');
+    assert(!(await sets()).length, 'Escape on New setlist made a setlist');
+
+    /* Enter on Cancel cancels (it does not save from the name typed); Enter with no name saves nothing and keeps the dialog */
+    await page.focus(ns); await page.keyboard.press('Enter');
+    await page.locator('.modal input[type=text]').fill('Cancelled Gig');
+    await page.focus('.modal [data-x]'); await page.keyboard.press('Enter');
+    await noModal(page).catch(() => { throw new Error('New setlist: Enter on Cancel did not close the dialog'); });
+    assert(!(await sets()).length, 'New setlist: Enter on Cancel made a setlist');
+    await page.focus(ns); await page.keyboard.press('Enter');
+    await page.locator('.modal input[type=text]').waitFor();
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    assert(await page.locator('.modal input[type=text]').count() === 1 && !(await sets()).length, 'New setlist: Enter with no name closed the dialog or made a setlist');
+
+    /* Enter in the name field saves, with the date */
+    await page.locator('.modal input[type=date]').fill('2026-12-05');
+    await page.locator('.modal input[type=text]').fill('Hygiene Gig');
+    await page.focus('.modal input[type=text]'); await page.keyboard.press('Enter');
+    await noModal(page).catch(() => { throw new Error('New setlist: Enter in the name field did not save'); });
+    await page.waitForSelector('#view [data-gig]');
+    let [st] = await sets();
+    assert(st && st.name === 'Hygiene Gig' && st.gig === '2026-12-05', 'New setlist: Enter in the name field saved ' + JSON.stringify(st));
+
+    /* Gig date: the dialog shows the date; a changed box then Escape changes nothing */
+    const gb = '#view [data-gig]';
+    await page.focus(gb); await page.keyboard.press('Enter');
+    await page.locator('.modal input[type=date]').waitFor();
+    assert(await page.locator('.modal input[type=date]').inputValue() === '2026-12-05', 'Gig date dialog shows ' + await page.locator('.modal input[type=date]').inputValue());
+    await checkDialog(page, 'Gig date dialog');
+    await page.locator('.modal input[type=date]').fill('2027-01-09');
+    await escapeBack(page, gb, 'Gig date dialog');
+    let [now] = await sets();
+    assert(JSON.stringify(now) === JSON.stringify(st), 'Escape on the Gig date dialog changed the setlist: ' + JSON.stringify(now));
+    /* Cancel by Enter changes nothing either, Clear stays a real button */
+    await page.focus(gb); await page.keyboard.press('Enter');
+    await page.locator('.modal input[type=date]').fill('2027-01-09');
+    await page.focus('.modal [data-x]'); await page.keyboard.press('Enter');
+    await noModal(page);
+    [now] = await sets();
+    assert(JSON.stringify(now) === JSON.stringify(st), 'Enter on Cancel in the Gig date dialog changed the setlist: ' + JSON.stringify(now));
+
+    /* the fill-in: a setlist whose name holds a full date, then the list; Escape = Not now: nothing written, never offered again */
+    await page.click('#tSets');
+    assert(!(await page.locator('.modal').count()), 'a dialog came up over the list before any name held a date');
+    await page.focus(ns); await page.keyboard.press('Enter');
+    await page.locator('.modal input[type=text]').fill('Sf October 18 2026');
+    await page.keyboard.press('Enter');
+    await noModal(page);
+    await page.waitForSelector('#view [data-gig]');
+    assert(!(await page.locator('.modal').count()), 'the fill-in came up over an open setlist');
+    const before = await sets();
+    await page.focus('#tSets'); await page.keyboard.press('Enter');
+    await page.locator('.modal h2', {hasText: 'Fill in gig dates?'}).waitFor({timeout: 5000}).catch(() => { throw new Error('the fill-in dialog did not come up'); });
+    const opts = await page.evaluate(() => [...document.querySelectorAll('.modal label.opt input')].map(i => i.checked));
+    assert(opts.length === 1 && opts[0], 'fill-in: expected one ticked row, got ' + JSON.stringify(opts));
+    await checkDialog(page, 'Fill-in dialog');
+    await escapeBack(page, '#tSets', 'Fill-in dialog');
+    assert(JSON.stringify(await sets()) === JSON.stringify(before), 'Escape on the fill-in wrote to a setlist: ' + JSON.stringify(await sets()));
+    assert(await page.evaluate(() => localStorage.getItem('ss-gig-fill')) !== null, 'Escape on the fill-in did not note the answer (ss-gig-fill)');
+    await page.click('#tLib'); await page.click('#tSets');
+    await page.waitForSelector(ns);
+    await sleep(300);
+    assert(!(await page.locator('.modal').count()), 'the fill-in was offered again after Escape');
+    await page.reload();
+    await page.waitForSelector('#libList');
+    await page.click('#tSets');
+    await page.waitForSelector(ns);
+    await sleep(300);
+    assert(!(await page.locator('.modal').count()), 'the fill-in was offered again after a reload');
+    assert(JSON.stringify(await sets()) === JSON.stringify(before), 'the setlists changed after the fill-in was declined');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 /* ---------- (c) keyboard reorder and (d) tablet CSS ---------- */
 async function reorderLoop(ctx){
   const s = await ctx.session();
@@ -412,5 +508,6 @@ async function reorderLoop(ctx){
 export const loops = [
   {name: 'hygiene: CSP holds for import, view, ink, notes, crop, print, backup, restore, service worker, fonts', run: cspLoop},
   {name: 'hygiene: dialogs trap focus, Escape cancels, focus returns, page behind is inert', run: dialogLoop},
+  {name: 'hygiene: gig-date dialogs (New setlist with a date, Gig date, the fill-in) trap focus; Escape and Cancel change nothing; Enter in the name saves', run: gigDialogLoop},
   {name: 'hygiene: setlist rows reorder with arrow keys; tablet CSS (overscroll, touch-action, safe areas)', run: reorderLoop},
 ];

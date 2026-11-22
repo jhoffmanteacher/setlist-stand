@@ -3,8 +3,16 @@
      node tools/loops.mjs --only model [--seed S] [--cases N] [--case I] [--verbose]
 
    THE QUESTION. After any mix of what a user does (import, edit, archive, delete, New version of a chart, build and
-   reorder setlists with breaks, draw, erase, undo, clear, text notes, crops, reloads), does the app show and
+   reorder setlists with breaks, gig dates set / changed / cleared and the once-per-tablet fill-in from setlist names, the
+   Setlists list's groups opened and closed, draw, erase, undo, clear, text notes, crops, reloads), does the app show and
    store exactly what it should, and does a backup bring all of it back?
+
+   GIG DATES. The model predicts each set's `gig` and the Setlists list as it reads top to bottom (group headers, which are
+   open, and the rows in each), from its own grouping (groupsM) and its own date-in-a-name parser (nameDate), both written
+   from the work order, never imported from js/gigdate.js. Dates are picked relative to today (the timeline prints the rule,
+   "today+12d"), so every group is used whatever the day; which group a date falls in depends on the day, so replay a
+   failure on the same day. The fill-in dialog comes up the first time the list draws with a candidate: the 'fill-in'
+   action answers it when it is chosen, any other visit to the list answers it from the case's own second RNG.
 
    HOW. Each case drives the REAL UI (Playwright, mouse pointer events, the app's own dialogs and two-tap
    confirms) with a seeded random sequence of ~25 actions. An independent MODEL (plain JS objects in this file,
@@ -59,7 +67,11 @@ const SONGS = ['Étude', 'The Ångström Waltz', 'A Night in B♭', 'F♯ Blues'
   'An Ending', 'A Bossa', 'Bossa'];
 const ARTISTS = ['', '', 'Beyoncé', 'Sigur Rós', 'The Beatles', 'Mötley Crüe', 'B♭ Band', 'live'];
 const VERSIONS = ['', '', 'in B♭', 'in F♯', 'live', 'OLD', 'é', '2'];
-const SET_NAMES = ['Gig', 'Sunday Service', 'Café Set', 'Jazz in B♭', 'F♯ Night', 'Ölfest', 'The Wedding'];
+/* Some setlist names hold one full date (the one-time fill-in offers it), some only look like one (no year, two-digit year,
+   February 31, two dates): the model's own parser below decides which, never the app's. */
+const SET_NAMES = ['Gig', 'Sunday Service', 'Café Set', 'Jazz in B♭', 'F♯ Night', 'Ölfest', 'The Wedding',
+  'Sf October 18 2026', '18 Oct 2026 Wedding', 'Gig 2026-03-07', 'Party 3/7/2026', 'Ölfest Feb 29 2028', 'Café oct 5, 2025', 'DECEMBER 31 2025',
+  'Blue Oak February 31', 'Ocean Ale House March 2026', 'Ameswell Jan 31', 'Mt Carmel 26 24', 'February 31 2026', 'Oct 1 2026 and Oct 2 2026', 'Leap 2/29/2027'];
 const BREAK_NAMES = ['Set 2', 'Intermission', 'Pause café', 'Encore ♯', 'Break ♭'];
 const NOTE_TEXTS = ['Verse', 'Coda ♯', 'Café', 'Solo x2', 'D.S. al Coda', 'B♭ riff', 'Tacet', 'Ritard'];
 const PEN = ['#1a1a1a', '#d62828', '#1f5fd6'], HL = ['#ffd400', '#7be07b'];
@@ -113,6 +125,77 @@ const tomb = it => ({id: it.id, deleted: true});
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 const fmt = o => JSON.stringify(o, (k, v) => typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v);
 
+/* ---------- gig dates (work order "gig dates", Part 1; written here from its text, not from js/gigdate.js) ----------
+   A set may hold gig: 'YYYY-MM-DD'; absent = none. The model only ever stores real dates (they come from the UI). */
+const p2 = n => String(n).padStart(2, '0');
+const ymd = d => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+const todayM = () => ymd(new Date());               // "upcoming" = today or later, in the tablet's local time
+const leap = y => y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+const realDay = (y, m, d) => y >= 1000 && m >= 1 && m <= 12 && d >= 1 && d <= [31, leap(y) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+/* "Clearly a full date" in a setlist's name: a month name (full or three letters, any case, a dot allowed) with a day and a
+   four-digit year in either order, or YYYY-MM-DD, or M/D/YYYY, as words of the name; the date must exist; exactly one such
+   date-shaped part in the name. Returns 'YYYY-MM-DD' or null. */
+const MONTH_WORDS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const monthWord = w => { const t = w.toLowerCase().replace(/\.$/, ''); const i = MONTH_WORDS.findIndex(m => t === m || t === m.slice(0, 3)); return i + 1; };
+const isDay = w => /^\d{1,2}$/.test(w), isYear = w => /^\d{4}$/.test(w);
+function nameDate(name){
+  const w = name.split(/\s+/).filter(Boolean).map(x => x.replace(/,$/, ''));
+  const found = [];
+  for(let i = 0; i < w.length; i++){
+    let m;
+    if((m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(w[i]))) found.push([+m[1], +m[2], +m[3]]);
+    else if((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(w[i]))) found.push([+m[3], +m[1], +m[2]]);
+    if(i + 2 < w.length && monthWord(w[i]) && isDay(w[i + 1]) && isYear(w[i + 2])) found.push([+w[i + 2], monthWord(w[i]), +w[i + 1]]);
+    if(i + 2 < w.length && isDay(w[i]) && monthWord(w[i + 1]) && isYear(w[i + 2])) found.push([+w[i + 2], monthWord(w[i + 1]), +w[i]]);
+  }
+  if(found.length !== 1) return null;
+  const [y, mo, d] = found[0];
+  return realDay(y, mo, d) ? `${y}-${p2(mo)}-${p2(d)}` : null;
+}
+/* the work order's own table ("Prove it"), and the names this loop uses: the model's parser must agree before any case runs */
+for(const [n, want] of [['Sf October 18 2026', '2026-10-18'], ['18 Oct 2026', '2026-10-18'], ['Gig 2026-03-07', '2026-03-07'], ['Party 3/7/2026', '2026-03-07'],
+  ['Blue Oak February 31', null], ['Ocean Ale House March 2026', null], ['Ameswell Jan 31', null], ['Mt Carmel 26 24', null], ['February 31 2026', null],
+  ['Oct 1 2026 and Oct 2 2026', null], ['Oct 18, 2026', '2026-10-18'], ['Ölfest Feb 29 2028', '2028-02-29'], ['Leap 2/29/2027', null], ['Café oct 5, 2025', '2025-10-05'],
+  ['DECEMBER 31 2025', '2025-12-31'], ['18 Oct 2026 Wedding', '2026-10-18'], ['Gig', null]])
+  if(nameDate(n) !== want) throw new Error(`model.loop.mjs: the model's own date parser gives ${nameDate(n)} for "${n}", expected ${want}`);
+/* "Saturday, October 18, 2026" (open setlist, fill-in) and "Sat, Oct 18, 2026" (list rows), in the page's locale */
+const dateWords = (M, g, long) => { const [y, m, d] = g.split('-').map(Number);
+  return new Intl.DateTimeFormat(M.locale, {timeZone: 'UTC', weekday: long ? 'long' : 'short', year: 'numeric', month: long ? 'long' : 'short', day: 'numeric'}).format(new Date(Date.UTC(y, m - 1, d))); };
+/* The Setlists list in groups: Upcoming (gig today or later, soonest first), this year's past gigs (header = the year, newest
+   first), No date (newest made first), then each earlier year (newest year first, closed until tapped). A group with no setlist
+   is not shown; with no dated setlist at all there are no groups (null). Equal dates: newest made first. */
+function groupsM(sets, today){
+  const dated = sets.filter(st => st.gig);
+  if(!dated.length) return null;
+  const year = today.slice(0, 4), made = (a, b) => b.n - a.n;
+  const soon = (a, b) => (a.gig < b.gig ? -1 : a.gig > b.gig ? 1 : made(a, b)), late = (a, b) => (a.gig > b.gig ? -1 : a.gig < b.gig ? 1 : made(a, b));
+  const gs = [{id: 'up', label: 'Upcoming', open: true, sets: dated.filter(st => st.gig >= today).sort(soon)},
+    {id: 'y' + year, label: year, open: true, sets: dated.filter(st => st.gig < today && st.gig.slice(0, 4) === year).sort(late)},
+    {id: 'none', label: 'No date', open: true, sets: sets.filter(st => !st.gig).sort(made)}];
+  for(const y of [...new Set(dated.map(st => st.gig.slice(0, 4)).filter(y => y < year))].sort().reverse())
+    gs.push({id: 'y' + y, label: y, open: false, sets: dated.filter(st => st.gig.slice(0, 4) === y).sort(late)});
+  return gs.filter(g => g.sets.length);
+}
+/* a group's open or closed state: what the person last made it, kept in memory (a reload forgets it), else its starting state */
+const openM = (M, g) => M.open.has(g.id) ? M.open.get(g.id) : g.open;
+/* a gig date the RNG picks, relative to today so every group gets used whatever day the loop runs (the timeline prints the rule,
+   not the date, so it is the same for the same seed) */
+function pickWhen(r){
+  const k = r.pick(['today', 'ahead', 'ahead', 'past', 'past', 'year', 'year', 'jan1', 'dec31']);
+  if(k === 'ahead') return {k, d: 1 + r.int(500)};
+  if(k === 'past') return {k, d: 1 + r.int(200)};
+  if(k === 'year') return {k, back: 1 + r.int(3), m: 1 + r.int(12), d: 1 + r.int(28)};
+  return {k};
+}
+const whenDesc = w => ({today: 'today', ahead: `today+${w.d}d`, past: `today-${w.d}d`, year: `${w.back} year(s) back, ${p2(w.m)}-${p2(w.d)}`, jan1: 'Jan 1 this year', dec31: 'Dec 31 last year'})[w.k];
+function whenDate(w){
+  const t = new Date(), y = t.getFullYear();
+  if(w.k === 'today') return ymd(t);
+  if(w.k === 'ahead' || w.k === 'past') return ymd(new Date(y, t.getMonth(), t.getDate() + (w.k === 'ahead' ? w.d : -w.d)));
+  if(w.k === 'year') return `${y - w.back}-${p2(w.m)}-${p2(w.d)}`;
+  return w.k === 'jan1' ? `${y}-01-01` : `${y - 1}-12-31`;
+}
+
 /* ---------- small UI helpers ---------- */
 async function until(fn, ms = 5000, what = 'condition'){
   const end = Date.now() + ms; let v;
@@ -158,16 +241,69 @@ async function setShowArch(s, on){
   if((await b.isChecked()) !== on) await b.setChecked(on);
   await s.page.waitForFunction(on => !!([...document.querySelectorAll('#libList h2')].find(h => h.textContent === 'Archived')) === on, on, {timeout: 5000});
 }
+/* ---------- the fill-in from names ----------
+   Once per tablet (localStorage ss-gig-fill, which a wipe of the database leaves alone): the first time the Setlists list draws
+   while a setlist with no gig date has a name that clearly holds one, ONE dialog lists them all (newest made first), each ticked.
+   Fill in writes the ticked ones (their `updated` moves, nothing else on them, no other record); Not now and Escape write
+   nothing; either way it never comes back. Which setlists it lists comes from the model's own parser (nameDate). */
+const fillCands = M => liveSets(M).filter(st => !st.gig).sort((a, b) => b.n - a.n).map(st => ({st, gig: nameDate(st.name)})).filter(c => c.gig);
+const fillWanted = M => !M.fillDone && fillCands(M).length > 0;
+function planFill(M, r){
+  const how = r.pick(['fill', 'fill', 'fill', 'notnow', 'escape']), n = fillCands(M).length;
+  return {how, untick: how === 'fill' ? Array.from({length: n}, (_, i) => i).filter(() => r.chance(.3)) : []};
+}
+const fillDesc = f => f.how === 'fill' ? `Fill in${f.untick.length ? ` with row(s) ${f.untick.map(i => i + 1).join(', ')} unticked` : ''}` : f.how === 'notnow' ? 'Not now' : 'Escape';
+async function answerFill(s, M, ans){
+  const page = s.page, cands = fillCands(M);
+  await page.locator('.modal h2', {hasText: 'Fill in gig dates?'}).waitFor({timeout: 5000})
+    .catch(async () => { throw new Error(`the fill-in dialog did not come up over the Setlists list (the model expects it for ${cands.map(c => c.st.label + ' "' + c.st.name + '"').join(', ')}; a dialog shown: ${fmt(await page.locator('.modal h2').allTextContents())})`); });
+  const rows = await page.evaluate(() => [...document.querySelectorAll('.modal label.opt')].map(l => ({t: l.textContent, on: l.querySelector('input').checked})));
+  const want = cands.map(c => ({t: `${c.st.name} → ${dateWords(M, c.gig, true)}`, on: true}));
+  if(JSON.stringify(rows) !== JSON.stringify(want)) throw new Error(`the fill-in dialog lists ${fmt(rows)}, expected ${fmt(want)}`);
+  const before = await idbAll(page, 'sets');
+  await clearToast(page);
+  if(ans.how === 'fill'){
+    for(const i of ans.untick) await page.locator('.modal label.opt input').nth(i).setChecked(false);
+    await page.click('.modal [data-ok]');
+  } else if(ans.how === 'notnow') await page.click('.modal [data-x]');
+  else await page.keyboard.press('Escape');
+  await noModal(page);
+  M.fillDone = true;
+  M.said.push(`fill-in dialog (${cands.map(c => c.st.label).join(', ')}): ${fillDesc(ans)}`);
+  const picked = ans.how === 'fill' ? cands.filter((c, i) => !ans.untick.includes(i)) : [];
+  if(picked.length) await waitToast(page, picked.length === 1 ? /^Gig date filled in\.$/ : new RegExp(`^${picked.length} gig dates filled in\\.$`), 5000);
+  for(const c of picked) c.st.gig = c.gig;
+  if(!(await page.evaluate(() => localStorage.getItem('ss-gig-fill')))) throw new Error('the fill-in was answered but ss-gig-fill is not set (it would be offered again)');
+  /* only the setlists filled in changed, and their `updated` moved */
+  const moved = new Set(picked.map(c => c.st.id));
+  const bad = await settle(async () => {
+    const after = await idbAll(page, 'sets'), out = [];
+    for(const [id, was] of Object.entries(before)){
+      const r = after[id];
+      if(moved.has(id) ? !(r && r.updated > was.updated && r.gig === picked.find(c => c.st.id === id).gig) : JSON.stringify(r) !== JSON.stringify(was))
+        out.push(`${M.sets.find(x => x.id === id)?.label || id}: ${fmt(was).slice(0, 140)} -> ${fmt(r).slice(0, 140)} (${moved.has(id) ? 'filled in: gig set and updated moved' : 'not filled in: unchanged'})`);
+    }
+    return out;
+  });
+  if(bad.length) throw new Error(`after the fill-in (${fillDesc(ans)}):\n    ${bad.join('\n    ')}`);
+}
 async function toSets(s, M, keep = false){
   await closeViewer(s, M);
   await s.page.click('#tSets');
   await s.page.waitForSelector('#view [data-newset]');
+  if(fillWanted(M)){                   // the fill-in comes up over the list: the 'fill-in' action's answer, else one from the case's own fill RNG
+    const ans = M.fillPlan || planFill(M, M.fr);
+    M.fillPlan = null;
+    await answerFill(s, M, ans);
+  } else if(await s.page.locator('.modal').count())
+    throw new Error(`a dialog came up over the Setlists list: ${fmt(await s.page.locator('.modal h2').allTextContents())} (the model expects none${M.fillDone ? '; the fill-in was answered already' : ''})`);
   if(!keep && M.shown){ await s.page.click('.collbar [data-collpick="all"]'); M.shown = null; }
   M.ui = {screen: 'sets'};
 }
 async function openSetUI(s, M, set, keep = false){
   if(M.ui.screen === 'set' && M.ui.set === set.label && !M.viewer) return;
   await toSets(s, M, keep);
+  await revealSet(s, M, set);
   await s.page.click(`#view [data-set="${set.id}"]`);
   await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n && !!document.querySelector('#view [data-addto]'), set.name, {timeout: 5000});
   M.ui = {screen: 'set', set: set.label};
@@ -195,14 +331,33 @@ function checkLib(M, got, showArch){
   if(got.archHead !== showArch) out.push(`"Archived" heading shown=${got.archHead}, Show archived=${showArch}`);
   return out;
 }
-const readSets = page => page.evaluate(() => [...document.querySelectorAll('#view li.row')].map(li => ({id: li.querySelector('.main').dataset.set,
-  t: li.querySelector('.t').textContent, s: li.querySelector('.s').textContent, play: !li.querySelector('[data-play]').disabled})));
+/* the list as it reads top to bottom: group headers ({h, exp}) and rows, in page order */
+const readSets = page => page.evaluate(() => [...document.querySelectorAll('#view h3.grp > button, #view li.row')].map(e => e.matches('button')
+  ? {h: e.textContent, exp: e.getAttribute('aria-expanded'), grp: e.dataset.grp}
+  : {id: e.querySelector('.main').dataset.set, t: e.querySelector('.t').textContent, s: e.querySelector('.s').textContent, play: !e.querySelector('[data-play]').disabled}));
 const songCountOf = (M, set) => set.items.filter(it => it.type === 'song').length;
 function checkSets(M, got){
-  const want = liveSets(M).filter(st => inShownM(M, st)).sort((a, b) => b.n - a.n).map(st => { const n = songCountOf(M, st); return {id: st.id, t: st.name, s: `${n} song${n == 1 ? '' : 's'}`, play: n > 0}; });
-  return JSON.stringify(got) === JSON.stringify(want) ? [] : [`setlist list:\n      shown    ${fmt(got)}\n      expected ${fmt(want)}`];
+  const shown = liveSets(M).filter(st => inShownM(M, st));
+  const row = st => { const n = songCountOf(M, st); return {id: st.id, t: st.name, s: (st.gig ? dateWords(M, st.gig) + ' · ' : '') + `${n} song${n == 1 ? '' : 's'}`, play: n > 0}; };
+  const gs = groupsM(shown, todayM()), want = [];
+  if(!gs) want.push(...shown.sort((a, b) => b.n - a.n).map(row));        // no dated setlist: the flat list, newest first, no headers
+  else for(const g of gs){
+    const open = openM(M, g);
+    want.push({h: (open ? '▾' : '▸') + g.label + (open ? '' : ` (${g.sets.length})`), exp: String(open), grp: g.id});
+    if(open) want.push(...g.sets.map(row));
+  }
+  const lab = e => e.h ? `[${e.h}${e.exp === 'true' ? '' : ', closed'}]` : `${M.sets.find(x => x.id === e.id)?.label || '?'} "${e.t}" (${e.s})`;
+  return JSON.stringify(got) === JSON.stringify(want) ? [] : [`setlist list (today ${todayM()}):\n      shown    ${got.map(lab).join(' | ')}\n      expected ${want.map(lab).join(' | ')}`];
 }
-const readSet = page => page.evaluate(() => ({h2: document.querySelector('#view h2')?.textContent, empty: !!document.querySelector('#view .empty'),
+/* On the Setlists list: a setlist in a closed group is out of sight; tap its group's header first (the model notes it open). */
+async function revealSet(s, M, st){
+  const gs = groupsM(liveSets(M).filter(x => inShownM(M, x)), todayM()), g = gs && gs.find(x => x.sets.includes(st));
+  if(!g || openM(M, g)) return;
+  await s.page.click(`#view [data-grp="${g.id}"]`);
+  M.open.set(g.id, true);
+  await s.page.waitForSelector(`#view [data-set="${st.id}"]`, {timeout: 5000});
+}
+const readSet = page => page.evaluate(() => ({h2: document.querySelector('#view h2')?.textContent, gig: document.querySelector('#view .gigline')?.textContent ?? null, empty: !!document.querySelector('#view .empty'),
   play: !document.querySelector('#view [data-play]').disabled,
   rows: [...document.querySelectorAll('#items > li.row')].map(li => ({brk: li.classList.contains('brk'), num: li.querySelector('.num').textContent,
     t: li.querySelector('.t').firstChild.textContent, tag: li.querySelector('.tag')?.textContent || null, s: li.querySelector('.s').textContent,
@@ -214,7 +369,7 @@ function checkSet(M, set, got){
     const s = songOf(M, it.label); k++;
     return {brk: false, num: String(k), t: titleOf(s), tag: s.archived ? 'Archived' : null, s: pagesText(s.pages), handle: true};
   });
-  const want = {h2: set.name, empty: !set.items.length, play: k > 0, rows};
+  const want = {h2: set.name, gig: set.gig ? dateWords(M, set.gig, true) : null, empty: !set.items.length, play: k > 0, rows};
   return JSON.stringify(got) === JSON.stringify(want) ? [] : [`setlist ${set.label} "${set.name}":\n      shown    ${fmt(got)}\n      expected ${fmt(want)}`];
 }
 
@@ -279,8 +434,9 @@ function checkDb(M, db){
       if(!(keysAre(r, ['id', 'deleted', 'updated']) && r.deleted === true && r.updated > 0)) P(`sets: ${st.label} should be a deletion marker, is ${fmt(r).slice(0, 160)}`);
       continue;
     }
-    if(!keysAre(r, ['id', 'name', 'items', 'colls', 'created', 'updated'])) P(`sets: ${st.label} fields ${Object.keys(r).sort().join(',')}`);
+    if(!keysAre(r, ['id', 'name', 'items', 'colls', 'created', 'updated', ...(st.gig ? ['gig'] : [])])) P(`sets: ${st.label} fields ${Object.keys(r).sort().join(',')}${st.gig ? '' : ' (no gig date in the model: the field must be absent)'}`);
     if(r.name !== st.name) P(`sets: ${st.label} name ${fmt(r.name)} != ${fmt(st.name)}`);
+    if(st.gig && r.gig !== st.gig) P(`sets: ${st.label} gig ${fmt(r.gig)} != ${fmt(st.gig)}`);
     if(fmt(sortedIds(r.colls)) !== fmt(idsOf(M, st.colls))) P(`sets: ${st.label} collections ${fmt(r.colls)}, model ${fmt(idsOf(M, st.colls))}`);
     const want = st.items.map(it => it.type === 'break' ? {type: 'break', id: it.id, name: it.name} : {type: 'song', id: songOf(M, it.label).id});
     const d = diff(want, r.items);
@@ -613,18 +769,81 @@ A.copySong = {w: 1.5, plan: (M, r) => {
 A.backup = {w: 3, plan: M => liveSongs(M).length || liveSets(M).length ? {} : null,
   desc: () => 'Back up everything (a download); the reminder goes',
   async run(s, M){ await toLib(s, M); await backupNow(s.page); }};
-A.newSet = {w: 1.5, plan: (M, r) => ({name: r.pick(SET_NAMES)}),
-  desc: a => `new setlist "${a.name}"`,
+A.newSet = {w: 2, plan: (M, r) => ({name: r.pick(SET_NAMES), when: r.chance(.5) ? pickWhen(r) : null}),
+  desc: a => `new setlist "${a.name}"${a.when ? `, gig date ${whenDesc(a.when)}` : ''}`,
   async run(s, M, a){
     await toSets(s, M, true);                // a new setlist joins the collection that is shown (or the default when All is shown)
     await s.page.click('#view [data-newset]');
-    await askFill(s.page, a.name);
+    const m = s.page.locator('.modal');
+    await m.locator('input[type=text]').waitFor({timeout: 5000});
+    if(await m.locator('input[type=date]').inputValue() !== '') throw new Error('the New setlist dialog starts with a gig date filled in');
+    await m.locator('input[type=text]').fill(a.name);
+    const gig = a.when && whenDate(a.when);
+    if(gig) await m.locator('input[type=date]').fill(gig);
+    await m.locator('[data-ok]').click();
+    await noModal(s.page);
     await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, a.name, {timeout: 5000});
     const known = new Set(M.sets.map(x => x.id));
     const rec = await until(async () => Object.values(await idbAll(s.page, 'sets')).find(x => !known.has(x.id)), 4000, 'the new set record');
     const st = {label: 'L' + (++M.nSet), n: M.nSet, id: rec.id, name: a.name, items: [], colls: joinM(M), deleted: false};
+    if(gig) st.gig = gig;
     M.sets.push(st); M.ui = {screen: 'set', set: st.label};
     a.got = st.label;
+  }};
+/* The Gig date button of an open setlist: the dialog shows the date it has (Clear only when there is one); Save or Enter in the
+   date box sets it; Clear, or an emptied box and Save, takes it away. Each changes the record in place and moves `updated`. */
+async function gigDialogUI(s, M, st){
+  const page = s.page;
+  await openSetUI(s, M, st);
+  const before = (await idbAll(page, 'sets'))[st.id];
+  await page.click('#view [data-gig]');
+  const m = page.locator('.modal'), box = m.locator('input[type=date]');
+  await box.waitFor({timeout: 5000});
+  if(await box.inputValue() !== (st.gig || '')) throw new Error(`the Gig date dialog of ${st.label} shows "${await box.inputValue()}", model ${fmt(st.gig || '')}`);
+  if(await m.locator('[data-clear]').isDisabled() !== !st.gig) throw new Error(`Clear is ${st.gig ? 'off' : 'on'} in the Gig date dialog of ${st.label} (model gig ${fmt(st.gig || null)})`);
+  return {m, box, before};
+}
+async function gigSaved(s, M, st, before){
+  const p = await settle(async () => { const r = (await idbAll(s.page, 'sets'))[st.id];
+    return r && r.gig === st.gig && (st.gig || !('gig' in r)) && r.updated > before.updated ? [] : [`${st.label} stored ${fmt(r).slice(0, 200)}; model gig ${fmt(st.gig || null)}, updated must move past ${before.updated}`]; });
+  if(p.length) throw new Error(p[0]);
+}
+A.setDate = {w: 4, plan: (M, r) => { const st = setPick(M, r, () => true); return st ? {set: st.label, when: pickWhen(r), enter: r.chance(.3)} : null; },
+  desc: a => `${a.set}: Gig date -> ${whenDesc(a.when)} (${a.enter ? 'Enter' : 'Save'})`,
+  async run(s, M, a){
+    const st = M.sets.find(x => x.label === a.set), gig = whenDate(a.when);
+    const {m, box, before} = await gigDialogUI(s, M, st);
+    await box.fill(gig);
+    if(a.enter) await box.press('Enter'); else await m.locator('[data-ok]').click();
+    await noModal(s.page);
+    st.gig = gig;
+    await gigSaved(s, M, st, before);
+  }};
+A.clearDate = {w: 1.5, plan: (M, r) => { const st = setPick(M, r, x => !!x.gig); return st ? {set: st.label, how: r.pick(['clear', 'empty'])} : null; },
+  desc: a => `${a.set}: Gig date -> ${a.how === 'clear' ? 'Clear' : 'empty the box, Save'}`,
+  async run(s, M, a){
+    const st = M.sets.find(x => x.label === a.set);
+    const {m, box, before} = await gigDialogUI(s, M, st);
+    if(a.how === 'clear') await m.locator('[data-clear]').click();
+    else { await box.fill(''); await m.locator('[data-ok]').click(); }
+    await noModal(s.page);
+    delete st.gig;
+    await gigSaved(s, M, st, before);
+  }};
+A.fillIn = {w: 4, plan: (M, r) => fillWanted(M) ? planFill(M, r) : null,
+  desc: a => `open the Setlists list; the fill-in dialog: ${fillDesc(a)}`,
+  async run(s, M, a){ M.fillPlan = a; await toSets(s, M); if(M.fillPlan) throw new Error('the fill-in was not offered'); }};
+A.toggleGroup = {w: 3, plan: (M, r) => {
+    if(fillWanted(M)) return null;          // the fill-in would change the groups before the tap
+    const gs = groupsM(liveSets(M), todayM());
+    return gs ? {grp: r.pick(gs).label} : null;
+  },
+  desc: a => `tap the "${a.grp}" group header (All shown)`,
+  async run(s, M, a){
+    await toSets(s, M);
+    const g = groupsM(liveSets(M), todayM()).find(x => x.label === a.grp);
+    await s.page.click(`#view [data-grp="${g.id}"]`);
+    M.open.set(g.id, !openM(M, g));
   }};
 const setPick = (M, r, ok) => { const c = liveSets(M).filter(ok); return c.length ? r.pick(c) : null; };
 A.addSongs = {w: 4, plan: (M, r) => {
@@ -726,7 +945,7 @@ A.dupSet = {w: 1.2, plan: (M, r) => { const st = setPick(M, r, () => true); retu
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
     if(a.inside){ await openSetUI(s, M, st); await s.page.click('#view [data-dup]'); }
-    else { await toSets(s, M); await s.page.click(`#view [data-dupset="${st.id}"]`); }
+    else { await toSets(s, M); await revealSet(s, M, st); await s.page.click(`#view [data-dupset="${st.id}"]`); }
     await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, st.name + ' copy', {timeout: 5000});
     const known = new Set(M.sets.map(x => x.id));
     const rec = await until(async () => Object.values(await idbAll(s.page, 'sets')).find(x => !known.has(x.id)), 4000, 'the copy');
@@ -737,7 +956,7 @@ A.dupSet = {w: 1.2, plan: (M, r) => { const st = setPick(M, r, () => true); retu
       if(!id || id === it.id) throw new Error(`break ${i + 1} of the copy: id ${id} (source ${it.id}); a copied break needs its own id`);
       return {type: 'break', id, name: it.name};
     });
-    const c = {label: 'L' + (++M.nSet), n: M.nSet, id: rec.id, name: st.name + ' copy', items, colls: [...st.colls], deleted: false};
+    const c = {label: 'L' + (++M.nSet), n: M.nSet, id: rec.id, name: st.name + ' copy', items, colls: [...st.colls], deleted: false};   // no gig date: a copy is usually for another gig
     M.sets.push(c); M.ui = {screen: 'set', set: c.label};
     a.got = c.label;
   }};
@@ -756,6 +975,7 @@ A.deleteSet = {w: 0.8, plan: (M, r) => { const st = setPick(M, r, () => true); r
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
     await toSets(s, M);
+    await revealSet(s, M, st);
     const b = s.page.locator(`#view [data-delset="${st.id}"]`);
     await b.click();
     if(await b.textContent() !== 'Tap again') throw new Error(`first tap on Delete shows "${await b.textContent()}"`);
@@ -1071,6 +1291,7 @@ A.reload = {w: 0.7, plan: () => ({}), desc: () => 'reload the page', async run(s
 async function afterLoad(s, M){
   await s.page.waitForSelector('#libList');
   M.ui = {screen: 'lib'}; M.viewer = null;
+  M.open = new Map();                    // which groups of the Setlists list are open is kept in memory only: past years start closed again
   M.shown = M.def && collOf(M, M.def) && !collOf(M, M.def).deleted ? M.def : null;      // the app opens on the default collection, or on All
 }
 
@@ -1134,7 +1355,8 @@ async function openCase(ctx){
 }
 async function runCase(ctx, seed, c, log){
   const r = rng(hash32(`model:${seed}:${c}`));
-  const M = {songs: [], sets: [], colls: [], nSong: 0, nSet: 0, nColl: 0, def: null, shown: null, ui: {screen: 'lib'}, viewer: null};
+  const M = {songs: [], sets: [], colls: [], nSong: 0, nSet: 0, nColl: 0, def: null, shown: null, ui: {screen: 'lib'}, viewer: null,
+    open: new Map(), fillDone: false, fillPlan: null, fr: rng(hash32(`model-fill:${seed}:${c}`)), said: [], locale: null};
   const s = await openCase(ctx);
   const where = {step: 'start'};
   let nActions = 0;
@@ -1152,6 +1374,7 @@ async function runCase(ctx, seed, c, log){
   try{
     await s.goto();
     await afterLoad(s, M);
+    M.locale = await s.page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().locale);     // dates in words are in the tablet's language
     const names = Object.keys(A);
     for(let i = 1; i <= ACTIONS; i++){
       /* pick an action by weight among those whose precondition holds (the first is always an import) */
@@ -1177,8 +1400,9 @@ async function runCase(ctx, seed, c, log){
       await act.run(s, M, args);
       const t1 = Date.now();
       nActions++;
-      log(`  #${i} ${act.desc(args)}${args.got ? ' -> ' + args.got : ''}`);
+      log(`  #${i} ${act.desc(args)}${args.got ? ' -> ' + args.got : ''}${M.said.length ? ` [${M.said.join('; ')}]` : ''}`); M.said = [];
       await check(`#${i} ${name}`, i % FULL_EVERY === 0 || name === 'reload');
+      if(M.said.length){ log(`     (during the check: ${M.said.join('; ')})`); M.said = []; }
       if(process.env.SS_MODEL_PROFILE) console.error(`    [${name}: action ${t1 - t0} ms, check ${Date.now() - t1} ms]`);
     }
     where.step = 'reload at the end';
