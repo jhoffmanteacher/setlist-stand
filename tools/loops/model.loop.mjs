@@ -610,7 +610,7 @@ A.copySong = {w: 1.5, plan: (M, r) => {
       pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, colls: [...song.colls], deleted: false});
     a.got = 'copy ' + M.songs[M.songs.length - 1].label;
   }};
-A.backup = {w: 1.2, plan: M => liveSongs(M).length || liveSets(M).length ? {} : null,
+A.backup = {w: 3, plan: M => liveSongs(M).length || liveSets(M).length ? {} : null,
   desc: () => 'Back up everything (a download); the reminder goes',
   async run(s, M){ await toLib(s, M); await backupNow(s.page); }};
 A.newSet = {w: 1.5, plan: (M, r) => ({name: r.pick(SET_NAMES)}),

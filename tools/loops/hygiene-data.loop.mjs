@@ -38,6 +38,7 @@ export const loops = [
 {name: 'hygiene: the backup reminder shows when something changed since the last backup (not by days), on Library and Setlists, and goes after a backup or a restore', async run(ctx){
   const s = await ctx.session(), page = s.page;
   const tab = async t => { await page.click(t === 'lib' ? '#tLib' : '#tSets'); await page.waitForSelector(t === 'lib' ? '#libList' : '#view [data-newset]'); };
+  const waitFor = async (fn, what, ms = 5000) => { const end = Date.now() + ms; let v; while(Date.now() < end){ v = await fn(); if(v) return v; await sleep(100); } throw new Error(what); };
   const gone = async what => page.waitForFunction(() => !document.querySelector('#libNudge .nudge'), null, {timeout: 5000})
     .catch(async () => { throw new Error(what + ': the reminder is still shown: ' + await nudgeText(page)); });
   const shown = async (what, re) => { await page.waitForFunction(() => !!document.querySelector('#libNudge .nudge'), null, {timeout: 5000}).catch(async () => { throw new Error(what + ': no reminder'); });
@@ -90,6 +91,18 @@ export const loops = [
     await waitToast(page, /^Restored/, 30000);
     await gone('after a restore');
     await tab('sets'); await gone('Setlists tab after a restore'); await tab('lib');
+    /* the ONLY change since the restore is one pen stroke (an ink page, saved on its own): the reminder must still come */
+    await page.click('#libList [data-open]');
+    await page.waitForSelector('#viewer.on #stage .sheet canvas');
+    await page.click('#vAnn');
+    const b = await page.locator('#stage .sheet').first().boundingBox();
+    await page.mouse.move(b.x + b.width * .3, b.y + b.height * .4); await page.mouse.down();
+    for(let i = 1; i <= 8; i++) await page.mouse.move(b.x + b.width * (.3 + i * .04), b.y + b.height * (.4 + i * .01));
+    await page.mouse.up();
+    await page.click('#tDone');
+    await waitFor(async () => Object.values(await idbAll(page, 'ink')).some(v => (v.strokes || []).some(x => !x.deleted)), 'the stroke was not saved');
+    await page.click('#vBack');
+    await shown('after one stroke', /^Changes since your last backup \(today\)\./);
     noErrors(s);
   } finally { await s.close(); }
 }},
