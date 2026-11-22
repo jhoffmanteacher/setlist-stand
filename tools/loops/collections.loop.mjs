@@ -129,6 +129,60 @@ async function loopBlocked(ctx){
   } finally { await s.close(); }
 }
 
+
+/* A full tablet at the first start must not stop the app; a library made by a NEWER version is never read into memory. */
+async function loopStartup(ctx){
+  const lib = oldLibrary();
+  /* ---- the upgrade write fails (a full tablet): the app still starts, shows the library, and writes on a later start ---- */
+  let s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.context.addInitScript(() => {
+      window.__failPuts = /index\.html$/.test(location.pathname) && !!sessionStorage.getItem('fail-puts');
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function(...a){ if(window.__failPuts && this.name === 'songs') throw new DOMException('full', 'QuotaExceededError'); return put.apply(this, a); };
+    });
+    await page.goto(s.base + 'css/app.css');
+    await writeV1(page, lib);
+    await page.evaluate(() => sessionStorage.setItem('fail-puts', '1'));
+    await page.goto(s.base + 'index.html');
+    await page.waitForSelector('#libList [data-open]', {timeout: 15000}).catch(() => { throw new Error('the app did not start when the upgrade write failed: ' + s.errors.join(' | ')); });
+    assert(await page.locator('#libList [data-open]').count() === 1, 'the library is not listed when the upgrade write failed');
+    assert((await normaliseSongs(page)).every(x => x.colls === undefined), 'the failed write changed a song record');
+    await page.evaluate(() => sessionStorage.removeItem('fail-puts'));
+    await page.reload(); await page.waitForSelector('#libList [data-open]');
+    assert((await normaliseSongs(page)).every(x => Array.isArray(x.colls)), 'the next start did not finish the upgrade');
+  } finally { await s.close(); }
+
+  /* ---- a database at a higher version than this app knows: no memory fallback, a plain message, nothing changed ---- */
+  s = await ctx.session();
+  try{
+    const {page} = s;
+    await page.goto(s.base + 'css/app.css');
+    await page.evaluate(() => new Promise((res, rej) => {
+      const r = indexedDB.open('setlist-stand', 3);
+      r.onupgradeneeded = () => { for(const n of ['songs', 'files', 'sets', 'ink', 'colls']) r.result.createObjectStore(n); r.transaction.objectStore('songs').put({id: 'n1', title: 'Newer', song: 'Newer', artist: '', version: '', archived: false, pages: 1, added: 1, updated: 1}, 'n1'); };
+      r.onsuccess = () => { r.result.close(); res(); }; r.onerror = () => rej(r.error);
+    }));
+    await page.goto(s.base + 'index.html', {waitUntil: 'domcontentloaded'});
+    await page.waitForSelector('#warn .warn', {timeout: 10000});
+    const msg = await page.locator('#warn').innerText();
+    assert(/newer version of Setlist Stand/.test(msg) && !/blocked on-device storage/.test(msg), 'the message for a newer library: ' + msg);
+    assert(await page.locator('[data-add]').count() === 0, 'the app drew a library over a database it cannot open');
+    const info = await dbInfo(page);
+    assert(info.version === 3, 'the newer database was changed: ' + JSON.stringify(info));
+  } finally { await s.close(); }
+
+  /* ---- ids in `colls` are held to the plain set backup.js allows ---- */
+  s = await ctx.session();
+  try{
+    await s.goto();
+    const got = await s.page.evaluate(async () => { const st = await import('./js/store.js'); return st.cleanColls(['ok', 'ok', 'a b', 'x'.repeat(65), 5, '', null, '<b>', 'fine-2']); });
+    assert(JSON.stringify(got) === '["ok","fine-2"]', 'cleanColls: ' + JSON.stringify(got));
+  } finally { await s.close(); }
+}
+const normaliseSongs = async page => Object.values(await (await import('./harness.mjs')).idbAll(page, 'songs')).filter(x => !x.deleted);
+
 async function chooseColl(page, id){
   await page.click('#tLib');
   await page.click(`.collbar [data-collpick="${id}"]`);
@@ -226,5 +280,6 @@ async function loopShare(ctx){
 export const loops = [
   {name: 'collections 1: a version 1 database upgrades with every record, PDF and mark unchanged but `colls: []`, and a second load changes nothing', run: loopUpgrade},
   {name: 'collections 2: a tab on the old app blocks the upgrade, the page says so and goes on when it lets go; this version lets go when a newer one asks', run: loopBlocked},
+  {name: 'collections 3: a failed upgrade write does not stop the app, a newer database is never read into memory, and colls ids stay plain', run: loopStartup},
   {name: 'share 6: a package holds no collection; an import joins the shown (or default) collection and leaves a matched song as it was', run: loopShare},
 ];

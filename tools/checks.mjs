@@ -369,4 +369,18 @@ const precache = parsePrecache(swSrc);
   }
 }
 
+// ---------------------------------------------------------------- (f) DB_VERSION never goes down
+/* A tablet that has already upgraded its database cannot open it with an older number (VersionError), so reverting a commit that
+   raised DB_VERSION would hide every library (BREAK-GLASS.md, situation (a)). */
+{
+  const name = 'DB_VERSION not lower than on origin/main';
+  const num = (src) => { const m = /DB_VERSION\s*=\s*(\d+)/.exec(src || ''); return m ? Number(m[1]) : null; };
+  let mainStore = null;
+  try { mainStore = git('show', 'origin/main:js/store.js'); } catch { /* none yet */ }
+  const cur = num(read('js/store.js')), old = num(mainStore);
+  if (cur === null) fail(name, 'js/store.js has no DB_VERSION');
+  else if (old !== null && cur < old) fail(name, `DB_VERSION is ${cur} but origin/main has ${old}: keep the higher number (and its stores) when reverting`);
+  else pass(name);
+}
+
 process.exit(failures ? 1 : 0);

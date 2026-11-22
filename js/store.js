@@ -5,6 +5,8 @@ import {uid} from './util.js';
    memory fallback, backup, restore and the tests all read it, so a store added later is carried everywhere.
    Version 1 had songs, files, sets, ink; version 2 adds colls (collections). An upgrade only creates the stores that are
    missing, so a version 1 library keeps every record. */
+/* Ids end up in the page's HTML and in storage keys, so they are held to a plain set of characters (js/backup.js checks every id with it). */
+export const ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 export const STORE_NAMES = ['songs', 'files', 'sets', 'ink', 'colls'];
 export const DB_VERSION = 2;
 export let MEM = null;
@@ -99,7 +101,12 @@ export async function update(store, key, fn){
 /* Returns true when on-device storage works, false when it fell back to memory. */
 export async function openStore(){
   try{ await db(); return true; }
-  catch(e){ MEM = Object.fromEntries(STORE_NAMES.map(n => [n, new Map()])); return false; }
+  catch(e){
+    /* A database made by a NEWER version of the app (this code was rolled back): never fall back to memory, where whatever is
+       added or restored is lost on reload. main.js says so and stops; a reload after the next update opens it. */
+    if(e && e.name === 'VersionError') throw e;
+    MEM = Object.fromEntries(STORE_NAMES.map(n => [n, new Map()])); return false;
+  }
 }
 
 /* ---------- records ----------
@@ -138,7 +145,7 @@ export function upgradeSet(st){
 /* A record's `colls`: a list of collection ids (strings, each once). Anything else (missing, not a list) is []. Ids of
    collections that are gone or unknown are left in the record (another tablet's collection may not have arrived yet) and
    ignored when a list is drawn (collsOf in js/collections.js). */
-export const cleanColls = v => Array.isArray(v) ? [...new Set(v.filter(x => typeof x === 'string' && x))] : [];
+export const cleanColls = v => Array.isArray(v) ? [...new Set(v.filter(x => typeof x === 'string' && ID_RE.test(x)))] : [];
 /* A set's items minus songs that no longer exist. Breaks always stay. */
 export const liveItems = st => st.items.filter(it => it.type === 'break' || songById(it.id));
 export async function load(){
@@ -148,7 +155,9 @@ export async function load(){
   const ops = [];
   for(const s of songs) if(upgradeSong(s)) ops.push({store:'songs', key:s.id, value:s});
   for(const st of sets) if(upgradeSet(st)) ops.push({store:'sets', key:st.id, value:st});
-  if(ops.length) await putAll(ops);
+  /* A failed write here (a full tablet) must not stop the app from starting: the records are already upgraded in memory and the
+     write is tried again on the next load. */
+  if(ops.length) await putAll(ops).catch(() => {});
   state.songs = songs.filter(s => !s.deleted).sort(compareSongs);     // the lists sort again when they are drawn (compareSongs in js/names.js)
   state.sets = sets.filter(s => !s.deleted).sort((a, b) => b.created - a.created);
   state.colls = colls.filter(c => c && !c.deleted && typeof c.name === 'string').sort(compareColls);

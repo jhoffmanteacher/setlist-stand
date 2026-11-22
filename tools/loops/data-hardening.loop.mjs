@@ -208,6 +208,7 @@ print(json.dumps(out))`;
       ['collections that are not a list', {version: 3, colls: {a: 1}}],
       ['a collection that is not a record', {version: 3, colls: ['a']}],
       ['a collection id with a space', {version: 3, colls: [{id: 'a b', name: 'Band', created: 1, updated: 1}]}],
+      ['a collection with the id "all" (the picker\'s own button)', {version: 3, colls: [{id: 'all', name: 'X', created: 1, updated: 1}]}],
       ['a collection id of 65 characters', {version: 3, colls: [{id: 'a'.repeat(65), name: 'Band', created: 1, updated: 1}]}],
       ['a collection id twice', {version: 3, colls: [{id: 'c', name: 'A', created: 1, updated: 1}, {id: 'c', deleted: true, updated: 2}]}],
       ['a 10000-character collection name', {version: 3, colls: [{id: 'c', name: 'x'.repeat(10000), created: 1, updated: 1}]}],
@@ -514,7 +515,7 @@ print(json.dumps(out))`;
       await S.put('songs', keep, {...await S.get('songs', keep), updated: 5000});
       await S.putInk(keep, 1, [a]);
       await S.putInk(mix, 1, [b]); await S.putInk(mix, 2, [c]);
-      await S.put('sets', 'gig', {id: 'gig', name: 'Gig', items: [{type: 'song', id: keep}], created: 1, updated: 5000});
+      await S.put('sets', 'gig', {id: 'gig', name: 'Gig', items: [{type: 'song', id: keep}], colls: [], created: 1, updated: 5000});
     }, [keep, mix, pen('a'), pen('b'), pen('c')]);
     const before = await snapshot(page);
     const two = fs.readFileSync(path.join(FIX, 'two-page.pdf'));

@@ -9,6 +9,9 @@ The app lives at https://jhoffmanteacher.github.io/setlist-stand/ and keeps a co
 Most problems. The fix is to undo the push; every tablet then updates as usual ("Updated. Tap to reload").
 1. `git fetch` and `git log --oneline -5 origin/main`; find the commit that broke it (ask Jonathan if unsure).
 2. `git revert --no-edit <sha>` (one revert per bad commit, newest first).
+   **Never revert a commit that raised `DB_VERSION` in `js/store.js` (2026-11-21, Collections: version 2)** and never lower it: a
+   tablet that has opened its library with the higher number cannot open it with a lower one, so the app would not see the library.
+   Fix forward instead, or revert everything else and keep `DB_VERSION` and its stores. `node tools/checks.mjs` fails if it goes down.
 3. If the revert conflicts ONLY on the `VERSION` line of `sw.js`: keep either side, `git add sw.js`,
    `git revert --continue`. Any other conflict: stop and ask. Never type a VERSION by hand.
 4. `node tools/checks.mjs --bump`, then `node tools/checks.mjs` (all PASS), then commit the bump.
@@ -57,3 +60,10 @@ above, goes back, then starts with no network).
 - Library → "Restore from backup", pick the latest backup zip. It is all or nothing: a damaged zip changes nothing.
 - Without a backup nothing can be recovered: the songs lived only on that tablet. That is why the Library
   nags about backups; back up after every change to the library.
+
+## (e) After an update the page says to close the other Setlist Stand tab
+The update from 2026-11-21 (Collections) changes how the library is stored (database version 2). If Setlist Stand is also open
+in another tab or window that is still running the old version, the new one waits for it and says "Close the other Setlist Stand
+tab". Close that tab (or the other window); the page carries on by itself and nothing is lost. If it never goes: close every
+Setlist Stand tab and the Home Screen app, then open it once. A tab left open on the new version says "Reload this page" when
+a still newer update is installed elsewhere: reload it before changing anything.

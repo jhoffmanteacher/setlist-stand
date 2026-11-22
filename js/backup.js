@@ -1,6 +1,6 @@
 import {toast, saveBlob, hooks, busy} from './util.js';
 import {explainError} from './errors.js';
-import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, ensureHashes, putAll, sha256} from './store.js';
+import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, ensureHashes, putAll, sha256, ID_RE} from './store.js';
 
 /* Backup version 3: library.json has songs, sets, colls (collections) and ink (with their deletion markers); files/<id>.pdf holds
    each live song's PDF. Version 2 (no colls) and version 1 (the prototype and the MobileSheets converter) are still read, and
@@ -137,7 +137,7 @@ const marker = r => ({id:r.id, deleted:true, updated:Number(r.updated) || 0});
 /* ---------- what a backup may hold ----------
    Checked before anything is written. Returns null when the backup is fine, else a short reason (shown to the user).
    Ids end up in the page's HTML and in storage keys, so they are held to a plain set of characters. */
-export const ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+export {ID_RE};                  // defined in js/store.js (cleanColls needs it too)
 export const LIMITS = {songs:100000, sets:100000, colls:10000, collRefs:1000, items:20000, text:2000, pages:5000, strokes:50000, points:200000};
 const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 export const okId = id => typeof id === 'string' && ID_RE.test(id);
@@ -208,7 +208,7 @@ export function validateBackup(data){
   }
   for(const c of data.colls || []){
     if(!isObj(c)) return 'a collection that is not a record';
-    if(!okId(c.id)) return 'a collection id ' + cut(c.id);
+    if(!okId(c.id) || c.id === 'all') return 'a collection id ' + cut(c.id);       // "all" is the picker's own button
     if(c.deleted){
       if(c.deleted !== true) return 'a deleted collection marked ' + cut(c.deleted);
       continue;

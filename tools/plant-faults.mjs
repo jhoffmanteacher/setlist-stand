@@ -472,6 +472,14 @@ const FAULTS = [
     loop: 'collections 2', why: 'an update blocked by an old tab leaves a blank page with no word about what to do'},
   {id: 'coll-version-change-not-closed', file: 'js/store.js', find: "d.onversionchange = () => { d.close(); dbp = null; dispatchEvent(new Event('ss-db-changed')); };", replace: "",
     loop: 'collections 2', why: 'a tab on this version holds the database open, so the next version\'s upgrade is blocked'},
+  {id: 'coll-upgrade-write-unguarded', file: 'js/store.js', find: "if(ops.length) await putAll(ops).catch(() => {});", replace: "if(ops.length) await putAll(ops);",
+    loop: 'collections 3', why: 'a full tablet at the first start after the update makes load() throw, so the app never opens'},
+  {id: 'coll-newer-db-falls-to-memory', file: 'js/store.js', find: "if(e && e.name === 'VersionError') throw e;", replace: "",
+    loop: 'collections 3', why: 'after a rollback the app opens an empty in-memory library over the real one, and whatever is added is lost on reload'},
+  {id: 'coll-clean-keeps-bad-ids', file: 'js/store.js', find: "typeof x === 'string' && ID_RE.test(x)", replace: "typeof x === 'string' && x",
+    loop: 'collections 3', why: 'a collection id with a space is kept on a song, so the next backup cannot be restored'},
+  {id: 'coll-all-id-accepted', file: 'js/backup.js', find: " || c.id === 'all')", replace: ")",
+    loop: 'restore refuses a backup it cannot read', why: 'a collection called "all" clashes with the All button and cannot be picked'},
 ];
 
 const args = process.argv.slice(2);

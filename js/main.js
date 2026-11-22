@@ -114,7 +114,12 @@ async function applyResume(){
 
 /* ---------- start ---------- */
 (async () => {
-  const persistent = await openStore();
+  let persistent;
+  try{ persistent = await openStore(); }
+  catch(e){      // the library was made by a newer version of the app (this one was rolled back): nothing is read or written
+    $('#warn').innerHTML = '<p class="warn" role="alert">Your library was saved by a newer version of Setlist Stand than this copy. Nothing was changed. Reload this page (with internet) to get the newer version.</p>';
+    return;
+  }
   if(!persistent) $('#warn').innerHTML = '<p class="warn">This browser blocked on-device storage, so music you add here disappears when you close the page.</p>';
   try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
   if(!window.pdfjsLib) $('#warn').innerHTML += '<p class="warn">The PDF reader did not load. Reload the page.</p>';
