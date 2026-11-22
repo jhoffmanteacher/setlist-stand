@@ -2104,6 +2104,74 @@ async function stepDownloads(t){
   assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
 }
 
+/* The back gesture (page.goBack is the same traversal): one layer at a time, then the song, then the app. Taps are touch taps.
+   The walk starts on about:blank so "left the app" is the browser being on about:blank; the app is opened again at the end. */
+async function stepBackSwipe(t){
+  const {page, base} = t, errs = t.errors.length;
+  const st = () => page.evaluate(() => ({url: location.href, len: history.length, mark: history.state && history.state.ss || null,
+    viewer: !!document.querySelector('#viewer.on'), annot: document.querySelector('#vAnn').getAttribute('aria-pressed') === 'true',
+    crop: !document.querySelector('#cropper').hidden, modals: document.querySelectorAll('.modal').length, set: document.querySelector('#view h2')?.textContent || null}));
+  const back = async () => { await page.goBack({timeout: 10000}).catch(e => { if(!/ERR_ABORTED/.test(e.message)) throw e; }); await page.waitForTimeout(250); return page.url() === 'about:blank' ? {url: 'about:blank'} : st(); };
+  const open = async () => {
+    await page.tap('#tLib');
+    await page.locator('#libList [data-open]').first().tap();
+    await page.waitForSelector('#viewer.on #stage .sheet canvas');
+    await page.evaluate(() => document.querySelector('#viewer').classList.remove('hide'));
+    const s = await st(); assert(s.mark === 'viewer', 'opening a song added no history entry: ' + JSON.stringify(s));
+  };
+  const closed = (s, what) => assert(s.url.startsWith(base) && !s.viewer && s.mark === null, `${what}: ` + JSON.stringify(s));
+  const leaves = async what => { const s = await back(); assert(s.url === 'about:blank', `${what}: one Back from the list did not leave the app: ` + JSON.stringify(s)); };
+  await page.goto('about:blank');
+  await page.goto(base + 'index.html'); await page.waitForSelector('#libList [data-open]');
+  const len0 = (await st()).len;
+
+  await open();
+  await page.tap('#vNext'); await page.waitForTimeout(200);
+  closed(await back(), 'Back from a song (after a page turn)');
+  await leaves('after Back closed the song');
+
+  await page.goto(base + 'index.html'); await page.waitForSelector('#libList [data-open]');
+  await open();
+  await page.tap('#vAnn');
+  let s = await back();
+  assert(s.viewer && !s.annot && s.mark === 'viewer', 'Back with Annotate on did not just turn it off: ' + JSON.stringify(s));
+  await page.tap('#vCrop');
+  await page.waitForFunction(() => /Page \d+ of/.test(document.querySelector('#cropHint').textContent));
+  s = await back();
+  assert(s.viewer && !s.crop && s.mark === 'viewer', 'Back on the Crop screen did not just close it: ' + JSON.stringify(s));
+  await page.evaluate(() => { import('./js/util.js').then(u => u.ask('A question over the song', '')); });
+  await page.locator('.modal input[type=text]').waitFor();
+  s = await back();
+  assert(s.viewer && s.modals === 0 && s.mark === 'viewer', 'Back with a dialog open did not just close it: ' + JSON.stringify(s));
+  closed(await back(), 'Back after the layers');
+
+  /* a setlist: Back returns to its screen; the app's own Back button leaves no entry */
+  await page.tap('#tSets');
+  if(await page.locator('#view [data-allsets]').count()) await page.tap('#view [data-allsets]');
+  await page.tap('#view [data-newset]');
+  await page.locator('.modal input[type=text]').fill('Back swipe');
+  await page.tap('.modal [data-ok]');
+  await page.waitForSelector('#view [data-addto]');
+  await page.tap('#view [data-addto]');
+  await page.locator('.modal .pick input').first().check();
+  await page.tap('.modal [data-ok]');
+  await page.waitForSelector('#items [data-playat]');
+  await page.tap('#items [data-playat]');
+  await page.waitForSelector('#viewer.on #stage .sheet canvas');
+  s = await back(); closed(s, 'Back from a setlist song');
+  assert(s.set === 'Back swipe', 'Back did not return to the setlist: ' + JSON.stringify(s));
+  await page.tap('#items [data-playat]');
+  await page.waitForSelector('#viewer.on #stage .sheet canvas');
+  await page.evaluate(() => document.querySelector('#viewer').classList.remove('hide'));
+  await page.tap('#vBack');
+  await page.waitForFunction(() => !document.querySelector('#viewer.on') && !history.state);
+  assert((await st()).len <= len0 + 1, 'the history grew: ' + JSON.stringify(await st()));
+  await leaves('after the app\'s Back button');
+
+  await page.goto(base + 'index.html'); await page.waitForSelector('#libList');
+  assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -2143,6 +2211,7 @@ const STEPS = [
   ['30d Backup reminder: after a backup none; a stroke or a rename brings it back on Library and Setlists, never in the viewer; a restore clears it', stepBackupReminder],
   ['30e Gig dates: Upcoming, this year, No date, last year closed; set, change, clear; kept on reload; the fill-in from a name, once', stepGigDates],
   ['30f Downloads: Download PDF names the file with the gig date; Download all zips each chart once (Songs/) and a list per setlist with songs (Setlists/, " (2)" on a clash); Stop part-way and the size refusal download nothing; the library is unchanged', stepDownloads],
+  ['30g Back swipe: closes Annotate, the Crop screen, a dialog, then the song (back to the Library or the setlist); then leaves the app', stepBackSwipe],
   ['31 no request left localhost during the run', stepNoExternal],
 ];
 

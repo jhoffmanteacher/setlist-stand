@@ -645,6 +645,9 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     assert(await page.locator('#viewer.on').count() === 1, 'the song is no longer open');
     /* and the same while the songbook splitter is open: marking a book takes minutes and must not be lost to a reload */
     await page.click('#vBack'); await page.waitForSelector('#libList');
+    /* Back takes the song's history entry off (history.back(), a same-page step that Playwright also reports as framenavigated):
+       wait for it, then count again from zero, so only a real reload counts below (window.__ssStay checks that too) */
+    await page.waitForFunction(() => !history.state); await sleep(300); navs = 0;
     await page.setInputFiles('#splitFile', path.join(FIX, 'songbook.pdf'));
     await page.waitForSelector('#splitter:not([hidden])', {timeout: 15000});
     assert(await page.evaluate(() => document.body.classList.contains('splitting')), 'test setup: body.splitting not set');

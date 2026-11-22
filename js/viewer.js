@@ -3,7 +3,8 @@ import {get, getInkPages, songById, cropOf} from './store.js';
 import {openCropper} from './crop.js';
 import {awakeOpen, awakeClose, initAwake} from './awake.js';
 import {PageCache, release} from './pagecache.js';
-import {paint, setAnnot, inkBusy, inkReset, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
+import {initBackNav} from './backnav.js';
+import {paint, setAnnot, widthMenu, inkBusy, inkReset, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
 /* cache: rendered pages (js/pagecache.js). prep: queue index -> {id, p: Promise of an open pdf.js document} for the songs
@@ -11,6 +12,8 @@ export const stage = $('#stage'), viewer = $('#viewer');
 export const V = {queue:[], qi:0, brk:null, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
   tool:'pen', color:'#1a1a1a', tok:0, dt:0, busy:false, cache:new PageCache(), prep:new Map(), ink:new Map(), hist:[]};
 try{ V.two = localStorage.getItem('ss-two') !== '0'; }catch(e){}
+
+/* The back gesture (one history entry per layer, back means Escape) is js/backnav.js. */
 
 /* entries: [{type:'song', id} | {type:'break', id, name}] */
 export async function openViewer(entries, qi, page = 1){
@@ -276,6 +279,7 @@ stage.addEventListener('pointercancel', e => {
 
 export function initViewer(){
   $('#vBack').onclick = closeViewer;
+  initBackNav();
   initAwake();
   $('#vCrop').onclick = () => openCropper();
   $('#vPrev').onclick = prev;
@@ -299,7 +303,7 @@ export function initViewer(){
     const k = e.key;
     if(['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)){ e.preventDefault(); next(); }
     else if(['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)){ e.preventDefault(); prev(); }
-    else if(k === 'Escape'){ V.annot ? setAnnot(false) : closeViewer(); }
+    else if(k === 'Escape'){ if(!$('#wdMenu').hidden) widthMenu(false); else if(V.annot) setAnnot(false); else closeViewer(); }   // one layer at a time (back means this too: js/backnav.js)
   });
   let rt;
   addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if(viewer.classList.contains('on')){ V.cache.clear(); draw(); } }, 150); });

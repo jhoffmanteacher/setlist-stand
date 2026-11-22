@@ -65,7 +65,7 @@ export function initCrop(){
     else { st.rect = {x:0, y:0, w:1, h:1}; place(); toast('This page has no crop'); return; }
     await saveSong(song); close(); V.cache.clear(); draw(); toast(msg);
   };
-  addEventListener('keydown', e => { if(st && e.key === 'Escape') close(); });
+  addEventListener('keydown', e => { if(e.key === 'Escape' && !$('#cropper').hidden) close(); });   // also while the page is still being drawn (st not set yet): Escape and back close it
 
   /* dragging: a handle resizes, the box body moves */
   let drag = null;

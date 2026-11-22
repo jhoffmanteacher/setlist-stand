@@ -251,7 +251,7 @@ function markTool(){
   if(tw.disabled) widthMenu(false);
 }
 /* the small row of three thicknesses that opens above the thickness button */
-function widthMenu(open){
+export function widthMenu(open){
   const m = $('#wdMenu'), tw = $('#tWidth');
   m.hidden = !open; tw.setAttribute('aria-expanded', open);
 }

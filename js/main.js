@@ -5,6 +5,7 @@ import {renderLibrary, onClick as libraryClick, addFiles, newVersion} from './li
 import {renderSetlists, onClick as setlistClick, closeSet, initSetlists} from './setlists.js';
 import {backupNow, restoreFrom} from './backup.js';
 import {initViewer, openViewer, resumeState} from './viewer.js';
+import {dropLeftover, sync as syncHistory} from './backnav.js';
 import {initInk} from './ink.js';
 import {initCrop} from './crop.js';
 import {startSplit, initSplit} from './split.js';
@@ -112,11 +113,15 @@ async function applyResume(){
   if(!r || !Array.isArray(r.queue)) return;
   const ok = r.queue.filter(e => e.type === 'break' || songById(e.id));
   if(ok.length !== r.queue.length || !ok.some(e => e.type === 'song')) return;   // the library changed: do not guess
-  await openViewer(r.queue, r.qi, r.page);
+  await openViewer(r.queue, r.qi, r.page);     // no tap here, so no new history entry: the one from before the reload is reused (js/backnav.js)
 }
 
 /* ---------- start ---------- */
 (async () => {
+  /* A song's history entry left from before a reload goes before anything is read or drawn; an update reload that puts the
+     song back reuses it (js/backnav.js). */
+  let resuming = false; try{ resuming = !!sessionStorage.getItem(RESUME); }catch(e){}
+  await dropLeftover(resuming);
   let persistent;
   try{ persistent = await openStore(); }
   catch(e){      // nothing is read or written: either the library was made by a newer version (this copy was rolled back), or the upgrade could not be saved
@@ -135,5 +140,6 @@ async function applyResume(){
   initChanged().catch(() => {});             // after the first draw: the newest change among the ink pages, for the backup reminder
   announceSignIn(signIn).catch(() => {});      // only when the page came back from a sign-in the person started
   await applyResume();
+  syncHistory();                               // a resume that could not put the song back drops the entry it would have reused
   ensureHashes().catch(() => {});
 })();

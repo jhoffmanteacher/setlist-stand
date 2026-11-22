@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-22: The back swipe closes the open song, not the app
+- With a song open, the Android back gesture (and the iPad edge swipe) now takes you back **one step at a time**: a message box first, then the Crop screen, then Annotate, then the song itself, back to the list you opened it from. From the list, back leaves the app as it always did.
+- Opening, closing and turning pages do not pile up history, and an update reload does not trap you in the app.
+
 ## 2026-11-22: Your pen marks and notes now follow you between tablets
 - **Marks in Sync:** tap **Sync** and the pen, highlighter and text notes on every page go to your own Google Drive and to your other tablet, along with your songs, setlists and collections. Draw on the same page on both tablets and both sets of marks are kept. An erase or an edit on one tablet reaches the other.
 - **The report** says how many pages of marks were sent and received. A page that cannot be used (damaged, or too big) is listed by song and page, and the rest still syncs.
