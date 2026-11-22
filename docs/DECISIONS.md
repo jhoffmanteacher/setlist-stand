@@ -25,6 +25,7 @@ Running list of what the app must do. Source for the work orders.
 - **Crop** margins, with a choice of one crop for the whole song or a crop per page
 - **Split import** (done, WO2): one big PDF (songbook/fake book) becomes separate songs, using the PDF's bookmarks when present and hand-marked page ranges
 - **New version** (was Replace chart; Jonathan, 2026-11-21): swap in a new PDF; the song keeps its place in every setlist and starts with fresh marks; the old chart, its marks and its crop are kept in Archived as "<song> (old YYYY-MM-DD)"
+- **Copy song** (Jonathan, 2026-11-21): Copy on a library row makes a second version of a chart (the same PDF marked up another way, say for another band). The person types the version name; the copy keeps the original's details, crop and marks (the marks are copied, not shared) and is in no setlist until it is added. Setlists keep using the original. Known limit: two songs with one PDF hash are two songs, so a share package holding both carries only one of them, and Add PDFs calls the second "already in your library".
 - **Archive songs**: hidden from the library, still shown and playable in old setlists
 - Print a setlist as one combined PDF (annotations optional); cropped songs print cropped
 - Back up everything to one .zip; restore from it

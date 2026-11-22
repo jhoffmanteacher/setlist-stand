@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-21: Copy a song to make a second version
+- **Copy:** each song in the Library has a new **Copy** button. Tap it, type a name for the new version (for example "for the wedding band") and Save. The copy is its own song with the same chart, the same details and crop, and **the same pen marks and text notes** as the original.
+- Marking up the copy never changes the original, and the other way round. Setlists keep using the original: the copy is in no setlist until you add it.
+- The version name has to be different from the original's. A full tablet saves nothing and says so.
+
 ## 2026-11-21: Connect the app to your Google Drive (nothing is copied yet)
 - **Connect Google Drive:** the Library has a new "Connect Google Drive" button. It takes you to Google to sign in and to let Setlist Stand use its own folder in your Drive, then brings you back to the app. The app can see only the files it makes itself, never the rest of your Drive.
 - **Test connection:** makes (or finds) a folder called "Setlist Stand" in your Drive and says how many files are in it. This is only a first step: your songs, setlists and marks are not copied anywhere yet, and nothing in your library changes.

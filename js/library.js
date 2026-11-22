@@ -7,6 +7,7 @@ import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
 import {unique} from './shareimport.js';
 import {renderDrive} from './syncui.js';
+import {copySong} from './copysong.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
 
@@ -30,7 +31,7 @@ function renderLib(){
   const live = sorted.filter(s => !s.archived), arch = sorted.filter(s => s.archived);
   const list = live.filter(matches), alist = arch.filter(matches);
   let html = live.length
-    ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button><div class="acts"><button data-edit="${id}">Edit</button><button data-archive="${id}">Archive</button><button data-newversion="${id}">New version</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
+    ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button><div class="acts"><button data-edit="${id}">Edit</button><button data-copy="${id}">Copy</button><button data-archive="${id}">Archive</button><button data-newversion="${id}">New version</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
     : `<div class="empty"><h2>No music yet</h2><p>Add PDF charts from your tablet's files or Drive. They're saved on this device.</p></div>`;
   if(showArchived){
     html += `<h2 style="margin-top:28px;font-size:26px">Archived</h2>` + (alist.length
@@ -208,6 +209,7 @@ export async function onClick(b, d){
     if(r && r.song){ s.song = r.song; s.artist = r.artist; s.version = r.version; await saveSong(s); await load(); hooks.render(); }
     return true;
   }
+  if(d.copy){ await copySong(d.copy); return true; }
   if(d.archive || d.restoresong){
     const s = songById(d.archive || d.restoresong); s.archived = !!d.archive;
     await saveSong(s); await load(); hooks.render(); return true;

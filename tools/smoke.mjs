@@ -567,6 +567,76 @@ async function stepNewVersion(t){
   assert((await songRec(page, s => s.id === old.id)).deleted === true, 'the old copy is not a deletion marker after Delete');
 }
 
+async function stepCopySong(t){
+  const {page} = t;
+  /* Three-page has the stroke drawn in step 5; ED_TITLE (edited in step 9) has version "live take" and no live marks since step 11. */
+  const orig = await songRec(page, s => !s.deleted && s.song === 'Three-page');
+  assert(orig, 'no Three-page song to copy');
+  const known = new Set(Object.keys(await idbAll(page, 'songs')));
+  const inkOf = async id => Object.fromEntries(Object.entries(await idbAll(page, 'ink')).filter(([k]) => k.startsWith(id + ':')));
+  const before = {song: JSON.stringify(orig), ink: JSON.stringify(await inkOf(orig.id)), file: (await idbAll(page, 'files'))[orig.id], sets: JSON.stringify(await idbAll(page, 'sets'))};
+  const origLive = Object.values(await inkOf(orig.id)).flatMap(liveOf);
+  assert(origLive.length >= 1, 'Three-page has no marks to copy');
+  await toLibrary(page);
+  assert(await rowFor(page, '#libList', 'Three-page').locator('[data-copy]').textContent() === 'Copy', 'the library row has no Copy button');
+
+  /* the dialog: shows the original, Save waits for a name, the original's own version is refused (ED_TITLE has "live take") */
+  await rowFor(page, '#libList', ED_TITLE).locator('[data-copy]').click();
+  let m = page.locator('.modal.copyask');
+  await m.waitFor();
+  assert((await m.locator('p').first().textContent()) === 'Copy of ' + ED_TITLE, 'dialog line: ' + await m.locator('p').first().textContent());
+  assert(await m.locator('[data-ok]').isDisabled(), 'Save is on with an empty version name');
+  await m.locator('input').fill('  LIVE   Take ');
+  assert(await m.locator('[data-err]').isVisible() && await m.locator('[data-ok]').isDisabled(), 'the original\'s own version is not refused');
+  await m.locator('input').press('Enter');
+  assert(await m.count() === 1, 'Enter closed the dialog on a refused version name');
+  await m.locator('[data-x]').click();
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  assert(Object.keys(await idbAll(page, 'songs')).length === known.size, 'a cancelled or refused Copy made a song');
+
+  await rowFor(page, '#libList', 'Three-page').locator('[data-copy]').click();
+  m = page.locator('.modal.copyask');
+  await m.waitFor();
+  await m.locator('input').fill('copy test');
+  await m.locator('[data-ok]').click();
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  const title = 'Three-page (copy test)';
+  await rowFor(page, '#libList', title).waitFor({timeout: 5000});
+  assert(/^Copied\. The new version has the same marks\.$/.test(await page.locator('#toast').textContent()), 'toast: ' + await page.locator('#toast').textContent());
+  const fresh = Object.values(await idbAll(page, 'songs')).filter(s => !known.has(s.id));
+  assert(fresh.length === 1, 'Copy made ' + fresh.length + ' songs');
+  const copy = fresh[0];
+  assert(copy.id !== orig.id && copy.title === title && copy.version === 'copy test' && copy.archived === false && copy.pages === orig.pages && copy.hash === orig.hash,
+    'the copy: ' + JSON.stringify(copy));
+
+  /* the PDF bytes are the original's (same size here; the hash above is the app's hash of them) and no stroke id is shared */
+  const files = await idbAll(page, 'files');
+  assert(files[copy.id] === files[orig.id], `copy PDF ${files[copy.id]} is not the original's ${files[orig.id]}`);
+  const copyLive = Object.values(await inkOf(copy.id)).flatMap(liveOf), origIds = new Set(origLive.map(x => x.id));
+  assert(copyLive.length === origLive.length && copyLive.every(x => !origIds.has(x.id)), 'the copy has the same stroke ids as the original, or a different number of marks');
+  assert(JSON.stringify(copyLive.map(x => x.p)) === JSON.stringify(origLive.map(x => x.p)), 'the copy\'s strokes are not the original\'s');
+  assert(before.song === JSON.stringify(await songRec(page, s => s.id === orig.id)) && before.ink === JSON.stringify(await inkOf(orig.id)) && before.sets === JSON.stringify(await idbAll(page, 'sets')),
+    'Copy changed the original song, its marks or a setlist');
+  assert(!Object.values(await idbAll(page, 'sets')).some(st => !st.deleted && songIds(st).includes(copy.id)), 'the copy is in a setlist');
+
+  /* open the copy: the same marks show; one more stroke on the copy; after a reload the original has its strokes only */
+  await openSong(page, title);
+  await waitFor(() => canvasHasMarks(page, '#stage .ink', 'ink'), 'the copy opens without its marks');
+  await page.click('#vAnn');
+  await drawOn(page, page.locator('#stage .sheet').first());
+  await page.click('#tDone');
+  await waitFor(async () => Object.values(await inkOf(copy.id)).flatMap(liveOf).length === origLive.length + 1, 'the stroke drawn on the copy was not saved');
+  await page.reload();
+  await page.waitForSelector('#libList [data-open]');
+  assert(JSON.stringify(await inkOf(orig.id)) === before.ink, 'drawing on the copy changed the original\'s marks');
+  assert(Object.values(await inkOf(copy.id)).flatMap(liveOf).length === origLive.length + 1, 'the copy lost a mark after reload');
+  await rowFor(page, '#libList', title).waitFor({timeout: 5000});
+  /* leave the library as it was for the steps after this one: the copy goes (two taps) */
+  const del = page.locator(`#libList [data-del="${copy.id}"]`);
+  await del.click(); await del.click();
+  await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), copy.id, {timeout: 5000});
+}
+
 async function stepDelete(t){
   const {page} = t;
   const id = t.data.edId;
@@ -1611,6 +1681,7 @@ const STEPS = [
   ['9 edit song details; persists; search by artist and version', stepEditSong],
   ['10 archive a song in a setlist; still plays; Show archived; restore', stepArchive],
   ['11 New version: same id and setlist place, notes cleared, new hash; the old chart and its marks kept in Archived', stepNewVersion],
+  ['11b Copy a song: a second version with the same marks, its own stroke ids and the same PDF; the original is untouched', stepCopySong],
   ['12 delete leaves a marker in IndexedDB and in the backup', stepDelete],
   ['13 restore a version 1 backup', stepRestoreV1],
   ['14 setlist items: break, rename, print skips it, remove keeps song, duplicate', stepSetItems],

@@ -512,6 +512,42 @@ A.newVersion = {w: 1.5, plan: (M, r) => { const c = libSongs(M); return c.length
     }
     song.pages = fx.pages; song.hash = fx.hash;
   }};
+/* Copy song: a NEW song with the original's details and crop, the version typed, the same PDF bytes (so the same hash) and
+   every live mark and note of the original under fresh ids; it is in no setlist and the original is untouched. */
+const COPY_VERSIONS = ['copy', 'take 2', 'for the band', 'in B♭', 'live'];
+A.copySong = {w: 1.5, plan: (M, r) => {
+    const c = libSongs(M); if(!c.length) return null;
+    const song = r.pick(c), ok = COPY_VERSIONS.filter(v => v.toLowerCase() !== song.version.trim().toLowerCase());
+    return {song: song.label, version: r.pick(ok)};
+  },
+  desc: a => `Copy ${a.song} as version "${a.version}"`,
+  async run(s, M, a){
+    const song = songOf(M, a.song), page = s.page;
+    await toLib(s, M);
+    await clearToast(page);
+    const known = new Set(M.songs.map(x => x.id));
+    await page.click(`#libList [data-copy="${song.id}"]`);
+    const m = page.locator('.modal.copyask');
+    await m.waitFor({timeout: 5000});
+    if(!(await m.locator('[data-ok]').isDisabled())) throw new Error('Save is on while the version name is empty');
+    await m.locator('input').fill(a.version);
+    await m.locator('[data-ok]').click();
+    await noModal(page);
+    await waitToast(page, /^Copied\. The new version has the same marks\./);
+    const rec = await until(async () => Object.values(await idbAll(page, 'songs')).find(x => !known.has(x.id)), 4000, 'the copy\'s record');
+    if(rec.hash !== song.hash) throw new Error(`the copy's hash ${rec.hash} is not the original's ${song.hash}`);
+    const ink = new Map(), db = await idbAll(page, 'ink');
+    for(const [pn, items] of song.ink){
+      const live = clone(items.filter(i => !i.deleted)); if(!live.length) continue;
+      const got = (db[rec.id + ':' + pn] || {strokes: []}).strokes.filter(x => !x.deleted);
+      if(got.length !== live.length) throw new Error(`the copy has ${got.length} marks on page ${pn}, the original has ${live.length}`);
+      live.forEach((i, k) => { i.id = got[k].id; });          // the copy's marks have fresh ids, in the original's order
+      ink.set(pn, live);
+    }
+    M.songs.push({label: 'S' + (++M.nSong), n: M.nSong, id: rec.id, song: song.song, artist: song.artist, version: a.version, archived: false,
+      pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, deleted: false});
+    a.got = 'copy ' + M.songs[M.songs.length - 1].label;
+  }};
 A.newSet = {w: 1.5, plan: (M, r) => ({name: r.pick(SET_NAMES)}),
   desc: a => `new setlist "${a.name}"`,
   async run(s, M, a){
