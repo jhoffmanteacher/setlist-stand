@@ -176,7 +176,7 @@ export async function restoreZip(page, file, timeout = 180000){
 }
 export async function backupNow(page){
   await page.click('#tLib');
-  return download(page, () => page.click('[data-backup]'));
+  return download(page, () => openBackupMenu(page, 'backup'));       // Back up / Sync -> Back up everything
 }
 /* Wipe the app's database (as a fresh install would be). */
 export const wipe = async page => {
@@ -214,4 +214,53 @@ export async function onScreen(page, sel){
     await sleep(250);
   }
   throw new Error('the screen kept changing under ' + sel + ' while it was being checked (three tries)');
+}
+
+/* A Library menu box (Share / Import, and the others): tap the menu button whose text is `buttonText`, wait for the box,
+   and return {box, title, items} (Playwright locators; items are its [data-item] buttons, in order). */
+export async function openMenu(page, buttonText){
+  await page.locator('#view').getByRole('button', {name: buttonText, exact: true}).click();
+  const box = page.locator('.modal.menubox'); await box.waitFor();
+  return {box, title: box.locator('h2'), items: box.locator('[data-item]')};
+}
+/* The Share / Import box: open it and tap one item ('split', 'import' or 'share'). */
+export async function openShareMenu(page, item){
+  const m = await openMenu(page, 'Share / Import');
+  await m.box.locator(`[data-item="${item}"]`).click();
+}
+/* The Back up / Sync box: open it and tap one item ('backup', 'restore', 'sync' or 'drive'). */
+export async function openBackupMenu(page, item){
+  const m = await openMenu(page, 'Back up / Sync');
+  await m.box.locator(`[data-item="${item}"]`).click();
+}
+/* The Google Drive box (Back up / Sync -> Google Drive settings), which holds what the Library's Drive control used to: its
+   status sentence and its buttons. Opened if it is not open yet (the Library must be showing); returns its locator. */
+export async function driveBox(page){
+  const box = page.locator('.modal.drivebox');
+  if(!(await box.count())){ await openBackupMenu(page, 'drive'); await box.waitFor({timeout: 8000}); }
+  return box;
+}
+export async function closeDriveBox(page){
+  const box = page.locator('.modal.drivebox');
+  if(await box.count()){ await box.locator(':scope > [role=dialog] > .btns [data-x]').click(); await box.waitFor({state: 'detached', timeout: 8000}); }
+}
+/* Taps a button of the Google Drive box ('driveconnect', 'drivetest', 'drivedisconnect', 'syncnow'), opening the box first. */
+export async function driveTap(page, what){
+  const box = await driveBox(page);
+  await box.locator(`#driveCtl [data-${what}]`).click();
+}
+/* What the Drive control says: {box: the Google Drive box's whole text (sentence and buttons, as the old Library control read),
+   status: the box's sentence, line: the read-only line at the bottom of the Library, count(what): how many [data-<what>] buttons
+   the box holds}. The box is opened to read it and left as it was found. */
+export async function driveState(page){
+  const was = await page.locator('.modal.drivebox').count();
+  const box = await driveBox(page);
+  const out = await box.evaluate(m => {
+    const c = m.querySelector('#driveCtl'), st = c.querySelector('[data-drivestatus]'), l = document.querySelector('#libDriveLine');
+    return {box: c.textContent, status: st ? st.textContent : null, line: l ? l.textContent : null,
+      buttons: [...c.querySelectorAll('button')].map(b => Object.keys(b.dataset)[0])};
+  });
+  if(!was) await closeDriveBox(page);
+  out.count = what => out.buttons.filter(b => b === what).length;
+  return out;
 }

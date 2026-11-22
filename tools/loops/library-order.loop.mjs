@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, TMP, assert, sleep, sha256, idbAll, snapshot, diff, restoreZip, JSZip} from './harness.mjs';
+import {FIX, TMP, assert, sleep, sha256, idbAll, snapshot, diff, restoreZip, JSZip, openShareMenu} from './harness.mjs';
 
 /* [song, artist, version, archived]; the title shown is "Song (version) - Artist". The ids follow this order, which is made the OPPOSITE of
    the expected order for the same-name songs (Beta before Alpha, version b before a), so a missing tie-break cannot pass by luck. */
@@ -85,7 +85,7 @@ async function loopOrder(ctx){
     same((await lists(page))[0], LIVE, 'library order after its in-memory order was turned around (the list must be sorted when it is drawn)');
 
     /* the pickers */
-    await page.click('[data-sharesongs]');
+    await openShareMenu(page, 'share');
     await page.locator('.modal .pick').waitFor();
     same(await pickerLabels(page), SHARE_ALL, 'Share songs picker order');
     await page.click('.modal [data-x]');

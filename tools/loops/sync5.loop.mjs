@@ -195,7 +195,7 @@ async function loopStoredAhead(ctx){
     const st = await A.page.evaluate(async () => ({sync: (await import('./js/sync.js')).lastSync(), backup: (await import('./js/nudge.js')).lastBackup()}));
     assert(st.sync === 0 && st.backup === null, 'a time stored 3 days ahead is still trusted: ' + JSON.stringify(st));
     assert(/You have not backed up yet/.test(await A.page.locator('#libNudge').textContent()), 'with a backup time 3 days ahead the reminder does not say there is no backup: ' + await A.page.locator('#libNudge').textContent());
-    assert(/Not synced on this tablet yet/.test(await A.page.locator('#libDrive').textContent()), 'with a sync time 3 days ahead the Library still says when it last synced');
+    assert(/Not synced on this tablet yet/.test(await A.page.locator('#libDriveLine').textContent()), 'with a sync time 3 days ahead the Library still says when it last synced');
     const id = live(await libraryOf(A))[0].id;
     await saveSong(A, id, {version: 'a change after the clock was fixed'});
     assert(await shows(A, '[data-backupnow]'), 'a change after the clock was fixed is hidden by the backup time stored ahead');

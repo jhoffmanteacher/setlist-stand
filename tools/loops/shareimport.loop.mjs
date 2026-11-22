@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomBytes} from 'node:crypto';
-import {FIX, JSZip, PDFDocument, assert, sleep, sha256, idbAll, fileHashes, snapshot, normalise, diff, download, backupNow, wipe, restoreZip} from './harness.mjs';
+import {FIX, JSZip, PDFDocument, assert, sleep, sha256, idbAll, fileHashes, snapshot, normalise, diff, download, backupNow, wipe, restoreZip, openShareMenu} from './harness.mjs';
 import {CROPS, songsOf, importFixtures, buildLibrary, closeDone} from './share-lib.mjs';
 
 /* Wraps IDBDatabase.prototype.transaction before the app starts: every call is recorded in window.__tx as
@@ -67,7 +67,7 @@ async function loopRoundTrip(ctx){
     aSet = Object.values(await idbAll(page, 'sets')).find(x => !x.deleted);
     await page.click('#tSets'); await page.click('#view [data-set]'); await page.waitForSelector('#view [data-shareset]');
     setPkg = (await download(page, () => page.click('#view [data-shareset]'))).file; await closeDone(page);
-    await page.click('#tLib'); await page.click('[data-sharesongs]');
+    await page.click('#tLib'); await openShareMenu(page, 'share');
     await page.locator('.modal .pick label', {hasText: 'Fixture Alpha'}).locator('input').check();
     await page.locator('.modal .pick label', {hasText: 'Two-page'}).locator('input').check();
     songsPkg = (await download(page, () => page.click('.modal [data-ok]'))).file; await closeDone(page);

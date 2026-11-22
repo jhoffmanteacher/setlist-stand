@@ -285,7 +285,7 @@ async function loopWalk(ctx){
     assert(s1.r.sent.song === 4 && s1.r.sent.set === 1 && s1.r.sent.coll === 1, 'the model sent ' + JSON.stringify(s1.r.sent));
     assert(A.watch.songWrites >= 4, `the order watcher saw ${A.watch.songWrites} song record writes (4 expected): it is not looking at the uploads`);
     assert(drive.pdfs.has(a.id) && drive.pdfs.has(cp.id) && drive.pdfs.get(a.id).fileId !== drive.pdfs.get(cp.id).fileId, 'two songs with the same PDF do not have one PDF file each on Drive');
-    assert(/Last synced/.test(await A.page.locator('#libDrive [data-drivestatus]').textContent()) && Number((await ls(A))['ss-last-sync']) > 0, 'the Library does not say when this tablet last synced, or ss-last-sync is not set');
+    assert(/Last synced/.test(await A.page.locator('#libDriveLine [data-drivestatus]').textContent()) && Number((await ls(A))['ss-last-sync']) > 0, 'the Library does not say when this tablet last synced, or ss-last-sync is not set');
     nothingPrivate(A.google, [NOTE, PROBLEM, '"strokes"']);
     const seeded = seedForeign(A.google, drive);
 

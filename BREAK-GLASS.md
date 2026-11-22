@@ -51,13 +51,13 @@ above, goes back, then starts with no network).
 
 ## (c) GitHub Pages is down, or the repo is gone
 - The installed app keeps working offline on every tablet. Do not clear the browser's data or uninstall it.
-- Make a backup now on each tablet: Library → "Back up everything" (save the zip somewhere safe, e.g. Drive).
+- Make a backup now on each tablet: Library → "Back up / Sync" → "Back up everything" (save the zip somewhere safe, e.g. Drive).
 - The app is plain files with relative paths: any static web host can serve a copy of the repo files
   (`index.html`, `sw.js`, `manifest.webmanifest`, `css/`, `js/`, `vendor/`, `icons/`) from any folder.
-  A new address is a new app on the tablet: install it there and use Library → "Restore from backup".
+  A new address is a new app on the tablet: install it there and use Library → "Back up / Sync" → "Restore from backup".
 
 ## (d) A tablet lost its data
-- Library → "Restore from backup", pick the latest backup zip. It is all or nothing: a damaged zip changes nothing.
+- Library → "Back up / Sync" → "Restore from backup", pick the latest backup zip. It is all or nothing: a damaged zip changes nothing.
 - Without a backup nothing can be recovered: the songs lived only on that tablet. That is why the Library
   nags about backups; back up after every change to the library.
 

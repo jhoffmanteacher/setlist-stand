@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-import {FIX, TMP, PDFLib, PDFDocument, PDFDict, PDFName, assert, sleep, sha256, idbAll, fileHashes} from './harness.mjs';
+import {FIX, TMP, PDFLib, PDFDocument, PDFDict, PDFName, assert, sleep, sha256, idbAll, fileHashes, openShareMenu} from './harness.mjs';
 import {KINDS, makeVariant, hiddenLayersBook, damagedTreeBook} from './book-variants.mjs';
 
 const BOOK = path.join(FIX, 'songbook.pdf');
@@ -40,7 +40,7 @@ const clearToast = page => page.evaluate(() => { document.querySelector('#toast'
 /* the Split button, then the file chooser it opens (the real wiring), then wait for the screen */
 async function openBook(page, file){
   await page.click('#tLib');
-  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-split]')]);
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), openShareMenu(page, 'split')]);
   await fc.setFiles(file);
   await page.waitForSelector('#splitter:not([hidden])', {timeout: 20000});
   await page.waitForFunction(() => document.querySelectorAll('#splitPages .pg').length > 0);
@@ -185,7 +185,7 @@ async function loopTapping(ctx){
     await s.goto();
     const buffer = await plainBook();
     await page.click('#tLib');
-    const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-split]')]);
+    const [fc] = await Promise.all([page.waitForEvent('filechooser'), openShareMenu(page, 'split')]);
     await fc.setFiles({name: 'plain book.pdf', mimeType: 'application/pdf', buffer});
     await page.waitForSelector('#splitter:not([hidden])', {timeout: 20000});
     await page.waitForFunction(() => document.querySelectorAll('#splitPages .pg').length === 12);
@@ -237,7 +237,7 @@ async function loopTapping(ctx){
 
     /* two songs on one page are the same bytes, and both are added (only the library counts as "already here") */
     await page.click('#tLib');
-    const [fc2] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-split]')]);
+    const [fc2] = await Promise.all([page.waitForEvent('filechooser'), openShareMenu(page, 'split')]);
     await fc2.setFiles({name: 'plain book.pdf', mimeType: 'application/pdf', buffer});
     await page.waitForFunction(() => document.querySelectorAll('#splitPages .pg').length === 12);
     await page.click('#splitPages .pg[data-p="11"]'); await page.keyboard.type('Twin A');
@@ -293,7 +293,7 @@ async function loopRefusals(ctx){
     ];
     for(const [file, re] of cases){
       await page.click('#tLib');
-      const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-split]')]);
+      const [fc] = await Promise.all([page.waitForEvent('filechooser'), openShareMenu(page, 'split')]);
       await fc.setFiles(file);
       const dlg = page.locator('.modal [role=dialog]', {hasText: "Can't split this PDF"});
       await dlg.waitFor({timeout: 20000});

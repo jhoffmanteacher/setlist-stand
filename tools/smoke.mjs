@@ -123,6 +123,11 @@ async function openSong(page, title){
   await page.waitForFunction(t => document.querySelector('#vTitle').textContent === t, title);
 }
 async function stageTap(page, fx){ await page.mouse.click(Math.round(1280 * fx), 420); }
+/* Back up everything sits in the Library's Back up / Sync box (Jonathan, 2026-11-22). */
+async function tapBackup(page){
+  await page.click('#view [data-backupmenu]');
+  await page.click('.modal.menubox [data-item="backup"]');
+}
 async function download(page, action){
   const [dl] = await Promise.all([page.waitForEvent('download', {timeout: 20000}), action()]);
   const f = path.join(TMP, `${Date.now()}-${dl.suggestedFilename()}`);
@@ -328,7 +333,7 @@ async function stepSetlist(t){
 async function stepBackup(t){
   const {page} = t;
   await toLibrary(page);
-  const dl = await download(page, () => page.click('#view [data-backup]'));
+  const dl = await download(page, () => tapBackup(page));
   assert(/\.zip$/.test(dl.name), 'backup name ' + dl.name);
   const zip = await JSZip.loadAsync(await fsp.readFile(dl.file));
   const lj = zip.file('library.json'); assert(lj, 'zip has no library.json');
@@ -661,7 +666,7 @@ async function stepDelete(t){
   assert(/1 song\b/.test(await page.locator('#view [data-set]', {hasText: 'Gig'}).innerText()), 'set row does not say 1 song');
 
   await toLibrary(page);
-  const dl = await download(page, () => page.click('#view [data-backup]'));
+  const dl = await download(page, () => tapBackup(page));
   const zip = await JSZip.loadAsync(await fsp.readFile(dl.file));
   const data = JSON.parse(await zip.file('library.json').async('string'));
   assert(data.version === 3, 'backup version ' + data.version);
@@ -1425,7 +1430,7 @@ async function stepCropBackup(t){
   const notes = {1: await notesOf(page, id, 1), 2: await notesOf(page, id, 2)};
   assert(crop && crop.all && notes[1].length && notes[2].length, 'nothing to check: crop ' + fmt(crop) + ', notes ' + notes[1].length + '/' + notes[2].length);
   await toLibrary(page);
-  const dl = await download(page, () => page.click('#view [data-backup]'));
+  const dl = await download(page, () => tapBackup(page));
   const data = JSON.parse(await (await JSZip.loadAsync(await fsp.readFile(dl.file))).file('library.json').async('string'));
   assert(JSON.stringify(data.songs.find(s => s.id === id)?.crop) === JSON.stringify(crop), 'backup song crop ' + fmt(data.songs.find(s => s.id === id)?.crop));
   assert(JSON.stringify(data.songs.find(s => s.id === t.data.cropId2)?.crop) === JSON.stringify((await songRec(page, s => s.id === t.data.cropId2)).crop), 'backup lacks the per-page crop');
@@ -1617,7 +1622,7 @@ async function stepShare(t){
      one copy of a PDF, so the next step would rightly count them as one song. */
   const tick = async (...names) => { for(const n of names) await page.locator('.modal .pick label', {hasText: new RegExp('^' + n)}).locator('input').check(); };
   await toLibrary(page);
-  await page.click('#view [data-sharesongs]');
+  await page.click('#view [data-sharemenu]'); await page.click('.modal.menubox [data-item="share"]');
   await page.locator('.modal .pick input[type=checkbox]').first().waitFor();
   await tick('Three-page', 'Two-page');
   const a = await download(page, () => page.click('.modal [data-ok]'));
@@ -1809,7 +1814,7 @@ async function stepBackupReminder(t){
   const wantNudge = async what => { await waitFor(async () => (await nudge()) !== null, what + ': no reminder'); assert(/^Changes since your last backup \(today\)\.$/.test(await nudge()), what + ': ' + await nudge()); };
   const noNudge = async what => { await page.waitForFunction(() => !document.querySelector('#libNudge .nudge'), null, {timeout: 5000}).catch(() => { throw new Error(what + ': the reminder is still shown: ' + '' ); }); };
   await toLibrary(page);
-  await download(page, () => page.click('#view [data-backup]'));
+  await download(page, () => tapBackup(page));
   await noNudge('after a backup');
   /* one stroke is a change: the reminder shows on the Library and on Setlists, never in the viewer */
   await openSong(page, 'Pick A');

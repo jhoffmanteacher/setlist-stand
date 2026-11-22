@@ -50,7 +50,10 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 .empty{padding:56px 0;text-align:center;color:var(--mute)}
 .empty h2{color:var(--ink);font-size:36px;margin-bottom:8px}
 .hint{color:var(--mute);font-size:14px;margin:0}
-#libDrive{margin-top:12px}
+#libBackupHint{margin-top:12px}
+#libDriveLine{margin-top:8px}
+#libDriveLine:empty{display:none}
+#driveCtl{display:flex;flex-direction:column;gap:12px;margin:4px 0 18px}
 .box label.opt{display:flex;gap:12px;align-items:center;min-height:48px;cursor:pointer}
 .box label.opt input{width:22px;height:22px}
 .warn{background:var(--acc);color:#fff;padding:10px 14px;border-radius:10px;margin:8px 0}
@@ -191,6 +194,10 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
 .box ul.locked{margin:0;padding-left:20px;overflow-wrap:anywhere}
 .duplist{margin:0;padding-left:20px;max-height:40vh;overflow:auto;overflow-wrap:anywhere}
 .syncrep p{margin:0 0 10px}
+.menulist{display:flex;flex-direction:column;gap:10px}
+.menuitem{white-space:normal;display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:64px;padding:10px 16px;text-align:left}
+.menuitem b{font-size:20px}
+.menuitem span{font-size:16px;color:var(--mute);font-weight:400}
 .syncdel{list-style:none;margin:0;padding:0;max-height:45vh;overflow:auto;overflow-wrap:anywhere}
 
 /* songbook splitter: the list of songs on the left, the book's pages on the right (stacked in portrait) */

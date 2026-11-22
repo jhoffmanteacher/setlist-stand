@@ -9,7 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, assert, sha256, fileHashes, snapshot, normalise, diff, download} from './harness.mjs';
+import {FIX, assert, sha256, fileHashes, snapshot, normalise, diff, download, openShareMenu} from './harness.mjs';
 import {CROPS, songsOf, importFixtures, buildLibrary, closeDone, readPackage} from './share-lib.mjs';
 
 /* what one package song must equal: the library's record, and the fixture file its PDF came from */
@@ -64,7 +64,7 @@ async function loopExport(ctx){
     /* ---- chosen songs, from the Library ---- */
     await page.click('#tLib');
     await page.click('#libList').catch(() => {});
-    await page.click('[data-sharesongs]');
+    await openShareMenu(page, 'share');
     const dlg = page.locator('.modal [role=dialog]');
     await dlg.waitFor();
     assert(/^Share songs/.test((await dlg.textContent()).trim()) && await page.locator('.modal [data-ok]').textContent() === 'Share', 'the checklist is titled and labelled for sharing: ' + await dlg.textContent());
@@ -87,7 +87,7 @@ async function loopExport(ctx){
     /* a song whose PDF is gone is left out, and the dialog says so (the library keeps the song) */
     const two = Object.values(lib).find(x => /^two-page/i.test(x.title));
     await page.evaluate(id => new Promise(res => { const r = indexedDB.open('setlist-stand'); r.onsuccess = () => { const t = r.result.transaction('files', 'readwrite'); t.objectStore('files').delete(id); t.oncomplete = () => { r.result.close(); res(); }; }; }), two.id);
-    await page.click('[data-sharesongs]');
+    await openShareMenu(page, 'share');
     await page.locator('.modal .pick label', {hasText: 'Fixture Alpha'}).locator('input').check();
     await page.locator('.modal .pick label', {hasText: 'Two-page'}).locator('input').check();
     const pk3 = await readPackage((await download(page, () => page.click('.modal [data-ok]'))).file);

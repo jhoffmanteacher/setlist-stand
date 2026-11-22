@@ -1,8 +1,9 @@
-/* The Google Drive control in the Library: Sync, Connect, "Connected until ...", Test connection, Disconnect, "Last synced", and
-   what the app says when it comes back from Google. Everything here happens only when a button is tapped (or when the page
-   returns from a sign-in the person started, to carry on with what they had tapped). Sync itself is js/sync.js; its boxes are
-   js/syncdialogs.js. The sign-in is kept in memory only (js/googleauth.js), so after a reload, an app update or a closed app the
-   person taps Sync (or Connect) and signs in again. */
+/* The Google Drive control (Jonathan, 2026-11-22: it lives in the Library's Back up / Sync menu): "Google Drive settings" opens
+   the Google Drive box (Sync, Connect, "Connected until ...", Test connection, Disconnect, "Last synced"), and the bottom of the
+   Library keeps one read-only line with the same status sentence. Also what the app says when it comes back from Google.
+   Everything here happens only when a button is tapped (or when the page returns from a sign-in the person started, to carry
+   on with what they had tapped). Sync itself is js/sync.js; its boxes are js/syncdialogs.js. The sign-in is kept in memory only
+   (js/googleauth.js), so after a reload, an app update or a closed app the person taps Sync (or Connect) and signs in again. */
 import {$, esc, toast, modal, busy, hooks} from './util.js';
 import {explainError, logProblem} from './errors.js';
 import {FOLDER_NAME} from './driveconfig.js';
@@ -25,26 +26,51 @@ function notice(title, text){
   m.querySelector('[data-ok]').onclick = () => { m.remove(); refocus(); };
   return m;
 }
-/* A dialog gives focus back to the button that opened it; when the Library line was redrawn meanwhile that button is gone,
-   so put focus on the line's first button instead of leaving it on the page. */
+/* A dialog gives focus back to the button that opened it; when the Google Drive box was redrawn meanwhile that button is gone,
+   so put focus on the box's first button (or, with the box closed, on the Library's Back up / Sync button) instead of leaving
+   it on the page. */
 function refocus(){
   const a = document.activeElement;
   if(a && a !== document.body && a.isConnected) return;
-  const b = $('#libDrive button'); if(b) b.focus();
+  const b = $('#driveCtl button') || $('#libMenus [data-backupmenu]'); if(b) b.focus();
 }
 
-export function renderDrive(){
-  const el = $('#libDrive'); if(!el) return;
+/* The state in words, and the buttons that go with it. The status sentence is drawn twice: alone (no buttons) in the read-only
+   line at the bottom of the Library (#libDriveLine), and with the buttons in the Google Drive box (#driveCtl) while it is open. */
+function driveParts(){
   const s = signInState(), t = lastSync();
   const last = t ? `Last synced ${esc(clock(t))}.` : 'Not synced on this tablet yet.';
-  const html = s.state === 'connected'
-    ? `<p class="hint" data-drivestatus>Connected to Google Drive until ${esc(clock(s.until))}. ${last}</p><div class="bar"><button class="pri" data-syncnow>Sync</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button></div>`
-    : s.state === 'expired'
-    ? `<p class="hint warnline" data-drivestatus>Your Google sign-in ran out at ${esc(clock(s.until))}. Tap Sync or Connect again. ${last}</p><div class="bar"><button class="pri" data-syncnow>Sync</button><button data-driveconnect>Connect again</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button></div>`
-    : `<div class="bar"><button class="pri" data-syncnow>Sync</button><button data-driveconnect>Connect Google Drive</button></div><p class="hint" data-drivestatus>Sync keeps your songs, setlists and collections the same on your tablets, through your own Google Drive. ${last} Sync is not a backup.</p>`;
-  /* only when something changed: a dialog gives focus back to the button that opened it, so that button must still be there */
-  if(el.dataset.shown === html) return;
+  if(s.state === 'connected') return {cls:'hint', text:`Connected to Google Drive until ${esc(clock(s.until))}. ${last}`,
+    buttons:'<button class="pri" data-syncnow>Sync</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button>'};
+  if(s.state === 'expired') return {cls:'hint warnline', text:`Your Google sign-in ran out at ${esc(clock(s.until))}. Tap Sync or Connect again. ${last}`,
+    buttons:'<button class="pri" data-syncnow>Sync</button><button data-driveconnect>Connect again</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button>'};
+  return {cls:'hint', first:true, text:`Sync keeps your songs, setlists and collections the same on your tablets, through your own Google Drive. ${last} Sync is not a backup.`,
+    buttons:'<button class="pri" data-syncnow>Sync</button><button data-driveconnect>Connect Google Drive</button>'};
+}
+/* Drawn only when something changed: a dialog gives focus back to the button that opened it, so that button must still be there. */
+function draw(el, html){
+  if(!el || el.dataset.shown === html) return;
   el.dataset.shown = html; el.innerHTML = html;
+}
+export function renderDrive(){
+  const p = driveParts(), line = `<p class="${p.cls}" data-drivestatus>${p.text}</p>`, bar = `<div class="bar">${p.buttons}</div>`;
+  draw($('#libDriveLine'), line);
+  draw($('#driveCtl'), p.first ? bar + line : line + bar);
+}
+/* True when Drive has been used on this tablet: signed in now (or earlier in this visit), or synced here before. The Back up /
+   Sync menu's "Sync with Google Drive" says "Connect Google Drive first" otherwise. */
+export function driveSetUp(){
+  return signInState().state !== 'none' || lastSync() > 0;
+}
+/* The Google Drive box: what the Library's Drive control held, in one dialog with Close. It is redrawn in place while it is open
+   (a test result, a Disconnect, the sign-in running out), and its buttons act exactly as the old control's did. */
+export function openDriveBox(){
+  if(document.querySelector('.modal.drivebox')) return;
+  const m = modal('<h2>Google Drive</h2><div id="driveCtl"></div><div class="btns"><button data-x>Close</button></div>');
+  m.classList.add('drivebox');
+  m.querySelector('[data-x]').onclick = () => { m.remove(); refocus(); };
+  m.addEventListener('click', e => { const b = e.target.closest('#driveCtl button'); if(b) driveClick(b, b.dataset); });
+  renderDrive();
 }
 /* The line says when the sign-in ends: bring it up to date when the tablet is picked up again. */
 document.addEventListener('visibilitychange', () => { if(!document.hidden) renderDrive(); });
@@ -108,7 +134,7 @@ async function runTest(){
 const INTRO = 'ss-sync-intro';          // localStorage: the first-time note was read (this tablet only)
 const seenIntro = () => { try{ return localStorage.getItem(INTRO) === '1'; }catch(e){ return false; } };
 let syncing = false;                    // one run at a time
-async function syncNow(){
+export async function syncNow(){
   if(syncing) return;
   if(!seenIntro()){ if(!(await introDialog())) return; try{ localStorage.setItem(INTRO, '1'); }catch(e){} }
   if(!getToken()){ renderDrive(); return signedOutDialog('sync'); }         // sign in first; the sync carries on by itself when the page comes back
@@ -129,13 +155,13 @@ async function syncNow(){
   try{ await load(); }catch(e){}
   hooks.render(); renderDrive();
   const m = reportDialog(rep, state, failure), ok = m.querySelector('[data-ok]'), closeIt = ok.onclick;
-  ok.onclick = () => { closeIt(); refocus(); };            // the Sync button that opened it was redrawn meanwhile: focus goes to the Drive line
+  ok.onclick = () => { closeIt(); refocus(); };            // the Sync button that opened it was redrawn meanwhile: focus goes to the Google Drive box, or the Back up / Sync button
 }
 
 function disconnectDialog(){
   const m = modal(`<h2>Disconnect Google Drive?</h2><p>This tablet forgets the sign-in. Your songs on this tablet and the "${esc(FOLDER_NAME)}" folder in your Drive are not touched. To take the app's access away completely, use the security page of your Google account.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Disconnect</button></div>`);
   m.querySelector('[data-x]').onclick = () => m.remove();
-  m.querySelector('[data-ok]').onclick = () => { disconnect(); m.remove(); toast('Disconnected from Google Drive.'); renderDrive(); const b = $('#libDrive button'); if(b) b.focus(); };
+  m.querySelector('[data-ok]').onclick = () => { disconnect(); m.remove(); toast('Disconnected from Google Drive.'); renderDrive(); const b = $('#driveCtl button'); if(b) b.focus(); else refocus(); };
 }
 
 /* Returns true when the click was for the Drive control. */

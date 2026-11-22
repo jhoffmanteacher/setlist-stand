@@ -25,7 +25,7 @@ A short report when it finishes:
 ## Load it into the app
 
 1. Get `setlist-stand-from-mobilesheets.zip` onto your tablet (Drive, AirDrop, email, USB).
-2. Open Setlist Stand, go to the Library, tap **Restore from backup**, and pick the zip.
+2. Open Setlist Stand, go to the Library, tap **Back up / Sync**, then **Restore from backup**, and pick the zip.
 
 ## Keep your music private
 

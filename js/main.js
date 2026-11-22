@@ -55,8 +55,7 @@ $('#restoreFile').onchange = async e => { if(!ready){ e.target.value = ''; retur
 $('#view').addEventListener('click', async e => {
   const b = e.target.closest('button'); if(!b) return;
   const d = b.dataset;
-  if('restore' in d) return $('#restoreFile').click();
-  if('backup' in d || 'backupnow' in d) return backupNow(b);
+  if('backupnow' in d) return backupNow(b);          // the reminder's Back up now (the Library's Back up / Sync menu is js/library.js)
   if(await driveClick(b, d)) return;
   if(await collClick(b, d)) return;
   if(await libraryClick(b, d)) return;

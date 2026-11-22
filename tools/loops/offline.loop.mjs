@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, TMP, assert, sleep, idbAll, PDFDocument, JSZip, restoreZip} from './harness.mjs';
+import {FIX, TMP, assert, sleep, idbAll, PDFDocument, JSZip, restoreZip, openBackupMenu} from './harness.mjs';
 import {cacheName, precachePaths, waitInstalled, navCounter, goOffline, throttleProxy, until} from './site-copy.mjs';
 
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
@@ -63,7 +63,7 @@ async function songId(page, title){
 const sheetBox = page => page.locator('#stage .sheet').first().boundingBox();
 async function backupAndRead(page){
   await toLibrary(page);
-  const dl = await download(page, () => page.click('#view [data-backup]'));
+  const dl = await download(page, () => openBackupMenu(page, 'backup'));
   assert(/\.zip$/.test(dl.name), 'backup name ' + dl.name);
   const zip = await JSZip.loadAsync(fs.readFileSync(dl.file));
   const lj = zip.file('library.json'); assert(lj, 'backup zip has no library.json');

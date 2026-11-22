@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-22: Two menus on the Library
+- **Share / Import:** Split a songbook, Import a share package and Share songs are now in one menu, under the search box.
+- **Back up / Sync:** Back up everything, Restore from backup and everything for Google Drive (Sync, Test connection, Connect, Disconnect) are in one menu too. The bottom of the Library now keeps only Show archived, one line about Google Drive and the storage lines. The reminder at the top still has its own Back up now and Sync buttons.
+- Nothing about how any of these work has changed.
+
 ## 2026-11-22: Gig dates on setlists
 - **Gig dates:** each setlist can have a gig date. Set it when you make the setlist, or with the new **Gig date** button on an open setlist (you can change or clear it there). The date shows under the setlist's name, and in the list before the song count. The Setlists list now shows upcoming gigs first, then this year's past gigs, then setlists with no date; earlier years are folded away until you tap their year. With no dated setlists the list looks as it always did.
 - **Names that already hold a date:** the first time you open Setlists after this update, setlists whose name clearly holds a full date (like "Sf October 18 2026") are offered as gig dates, each with a tick box. Nothing is filled in unless you tap **Fill in**, and names never change. Names with no year, no day, or a day that does not exist ("February 31") are left alone.

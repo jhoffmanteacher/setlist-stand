@@ -105,7 +105,7 @@ function closeSplit(){
   try{ mine.doc.destroy(); }catch(e){}
   $('#splitRows').innerHTML = ''; $('#splitPages').innerHTML = '';
   $('#splitter').hidden = true; $('.app').inert = false; document.body.classList.remove('splitting');
-  const b = $('[data-split]'); if(b) b.focus();
+  const b = $('[data-sharemenu]'); if(b) b.focus();
 }
 
 /* ---------- the list of songs ---------- */

@@ -4,7 +4,8 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, download, backupNow, wipe, restoreZip, PDFDocument} from './harness.mjs';
+import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, download, backupNow, wipe, restoreZip, PDFDocument, openShareMenu, openBackupMenu, driveBox, WEBKIT} from './harness.mjs';
+import {installFakeGoogle} from './fake-google.mjs';
 
 const FIXTURES = ['one-page.pdf', 'two-page.pdf', 'three-page.pdf'];
 const ALLOWED_SOURCES = new Set(["'self'", "'none'", "'unsafe-inline'", 'data:', 'blob:']);
@@ -262,12 +263,13 @@ async function dialogLoop(ctx){
     await page.click('#tLib');
 
     /* library Share songs (checklist), then the package-saved dialog */
-    const sh = '#view [data-sharesongs]';
-    await page.focus(sh); await page.keyboard.press('Enter');
+    const sh = '#view [data-sharemenu]';                                     // Share songs sits in the Share / Import box; the dialogs it opens give focus back to this button
+    const openShareSongs = async () => { await page.focus(sh); await page.keyboard.press('Enter'); await page.locator('.modal.menubox [data-item=share]').click(); };
+    await openShareSongs();
     await page.locator('.modal .pick').waitFor();
     await checkDialog(page, 'Share songs dialog');
     await escapeBack(page, sh, 'Share songs dialog');
-    await page.focus(sh); await page.keyboard.press('Enter');
+    await openShareSongs();
     await page.locator('.modal .pick input').first().check();
     await download(page, () => page.click('.modal [data-ok]'));
     await page.locator('.modal [role=dialog]', {hasText: 'Package saved'}).waitFor();
@@ -569,10 +571,218 @@ async function reorderLoop(ctx){
   } finally { await s.close(); }
 }
 
+/* ---------- (e) the Library's menu boxes (Share / Import now; reused for the others) ---------- */
+/* Any menu box: the heading and the items with their one-line hints are exactly `want`, the tap targets are big, the box
+   fits the screen, focus is inside and Tab / Shift+Tab never leave it, Escape and Cancel close it and put the focus back
+   on the button that opened it. `sel` finds the menu button, `buttonText` is its text. */
+async function checkMenuBox(page, sel, buttonText, title, want, at){
+  const btn = page.locator(sel);
+  const back = async how => assert(await btn.evaluate(b => b === document.activeElement), `${at}: ${how} did not give the focus back to ${buttonText}`);
+  for(const how of ['Escape', 'Cancel']){
+    await btn.focus(); await page.keyboard.press('Enter');
+    await page.locator('.modal.menubox').waitFor();
+    if(how === 'Escape'){
+      await checkDialog(page, `${at} ${buttonText} box`);
+      const d = await page.evaluate(() => {
+        const m = document.querySelector('.modal.menubox'), r = m.querySelector('[role=dialog]').getBoundingClientRect();
+        return {title: m.querySelector('h2').textContent,
+          items: [...m.querySelectorAll('[data-item]')].map(x => ({id: x.dataset.item, label: x.querySelector('b').textContent, hint: x.querySelector('span').textContent, h: x.getBoundingClientRect().height})),
+          buttons: [...m.querySelectorAll('button')].map(x => x.textContent.replace(/\s+/g, ' ').trim()), cancelH: m.querySelector('[data-x]').getBoundingClientRect().height,
+          fits: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight};
+      });
+      assert(d.title === title, `${at}: the box is titled ${d.title}`);
+      assert(JSON.stringify(d.items.map(({id, label, hint}) => [id, label, hint])) === JSON.stringify(want), `${at}: the items are ${JSON.stringify(d.items)}`);
+      assert(d.buttons.length === want.length + 1 && d.buttons[want.length] === 'Cancel', `${at}: the box holds ${JSON.stringify(d.buttons)}`);
+      assert(d.items.every(x => x.h >= 44) && d.cancelH >= 44, `${at}: a tap target is under 44 px: ${JSON.stringify(d.items.map(x => x.h))} ${d.cancelH}`);
+      assert(d.fits, `${at}: the box does not fit the screen`);
+      await escapeBack(page, sel, `${at} ${buttonText} box`);
+    }else{
+      await page.click('.modal.menubox [data-x]'); await noModal(page);
+      await back('Cancel');
+    }
+  }
+}
+async function shareMenuLoop(ctx){
+  for(const [w, h] of [[1280, 800], [800, 1280]]){
+    const s = await ctx.session({viewport: {width: w, height: h}});
+    const at = `${w}x${h}`;
+    try{
+      const {page} = s;
+      await s.goto();
+      await importFixtures(page);
+
+      /* the top: row 1 is the search box and Add PDFs; row 2 (#libMenus) holds the menu buttons; the three old buttons are gone */
+      for(const gone of ['[data-split]', '[data-sharesongs]', '[data-shareimport]']) assert(await page.locator('#view ' + gone).count() === 0, `${at}: the Library still has ${gone}`);
+      const row1 = await page.locator('#view .bar').first().locator('button').allTextContents();
+      assert(JSON.stringify(row1) === JSON.stringify(['Add PDFs']), `${at}: row 1 holds ${JSON.stringify(row1)}`);
+      const row2 = await page.locator('#view #libMenus button').allTextContents();
+      assert(row2[0] === 'Share / Import' && await page.locator('#view [data-sharemenu]').count() === 1, `${at}: row 2 holds ${JSON.stringify(row2)}`);
+      assert(await page.evaluate(() => document.querySelector('#libMenus').previousElementSibling === document.querySelector('#view .bar')), `${at}: row 2 is not right under row 1`);
+
+      await checkMenuBox(page, '#view [data-sharemenu]', 'Share / Import', 'Share / Import', [
+        ['split', 'Split a songbook', 'Cut one big PDF into separate songs'],
+        ['import', 'Import a share package', 'Add songs from a file someone sent you'],
+        ['share', 'Share songs', 'Pick songs, or send a setlist, as one file']], at);
+      assert(await page.locator('#splitter:not([hidden])').count() === 0 && await page.locator('.modal').count() === 0, `${at}: Cancel started something`);
+
+      /* each item starts its own action, and the box is gone */
+      for(const [item, id] of [['split', 'splitFile'], ['import', 'shareFile']]){
+        const [fc] = await Promise.all([page.waitForEvent('filechooser', {timeout: 8000}), openShareMenu(page, item)]);
+        assert(await fc.element().evaluate(e => e.id) === id, `${at}: ${item} opened the wrong file chooser`);
+        await noModal(page);
+      }
+      await openShareMenu(page, 'share');
+      await page.locator('.modal .pick').waitFor();
+      assert(await page.locator('.modal.menubox').count() === 0, `${at}: the Share / Import box is still open behind the Share songs list`);
+      assert((await page.locator('.modal [role=dialog] h2').first().textContent()).startsWith('Share songs'), `${at}: Share songs did not open its list`);
+      await escapeBack(page, '#view [data-sharemenu]', `${at} Share songs from the box`);
+    } finally { await s.close(); }
+  }
+}
+
+/* ---------- (f) the Back up / Sync box and the Google Drive box ---------- */
+const NOT_SET_UP = 'Sync keeps your songs, setlists and collections the same on your tablets, through your own Google Drive. Not synced on this tablet yet. Sync is not a backup.';
+/* The Google Drive box as it is drawn: its heading, the status sentence, the buttons (data name and text) and their heights, the
+   read-only line at the bottom of the Library, and whether the box fits the screen. */
+const driveDrawn = page => page.evaluate(() => {
+  const m = document.querySelector('.modal.drivebox'); if(!m) return null;
+  const c = m.querySelector('#driveCtl'), st = c.querySelector('[data-drivestatus]'), line = document.querySelector('#libDriveLine'), r = m.querySelector('[role=dialog]').getBoundingClientRect();
+  return {title: m.querySelector('h2').textContent, status: st ? st.textContent : null, warn: !!(st && st.classList.contains('warnline')),
+    buttons: [...c.querySelectorAll('button')].map(b => [Object.keys(b.dataset)[0], b.textContent]), close: m.querySelector(':scope > [role=dialog] > .btns').textContent.trim(),
+    heights: [...m.querySelectorAll('button')].map(b => b.getBoundingClientRect().height),
+    line: line ? line.textContent : null, lineButtons: line ? line.querySelectorAll('button').length : -1, lineWarn: !!(line && line.querySelector('.warnline')),
+    fits: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, focusIn: m.contains(document.activeElement)};
+});
+async function driveBoxIs(page, at, what, status, buttons, warn = false){
+  const d = await driveDrawn(page);
+  assert(d, `${at} ${what}: the Google Drive box is not open`);
+  assert(d.title === 'Google Drive' && d.close === 'Close', `${at} ${what}: the box is titled "${d.title}" with "${d.close}"`);
+  assert(status.test(d.status), `${at} ${what}: the box says "${d.status}"`);
+  assert(JSON.stringify(d.buttons) === JSON.stringify(buttons), `${at} ${what}: the box holds ${JSON.stringify(d.buttons)}`);
+  assert(d.warn === warn && d.lineWarn === warn, `${at} ${what}: the sentence is${d.warn ? '' : ' not'} drawn as a warning (the bottom line: ${d.lineWarn})`);
+  assert(d.line === d.status && d.lineButtons === 0, `${at} ${what}: the Library's bottom line says "${d.line}" (${d.lineButtons} buttons), the box "${d.status}"`);
+  assert(d.heights.every(h => h >= 44), `${at} ${what}: a tap target is under 44 px: ${JSON.stringify(d.heights)}`);
+  assert(d.fits, `${at} ${what}: the box does not fit the screen`);
+  return d;
+}
+const BACKUP_ITEMS = hintSync => [
+  ['backup', 'Back up everything', 'Save one file with every PDF, setlist and note'],
+  ['restore', 'Restore from backup', 'Bring your library back from a backup file'],
+  ['sync', 'Sync with Google Drive', hintSync],
+  ['drive', 'Google Drive settings', 'Connect, test or disconnect']];
+async function backupMenuLoop(ctx){
+  for(const [w, h] of [[1280, 800], [800, 1280]]){
+    /* Playwright's WebKit cannot intercept a request made by a page a service worker controls (see sync.loop.mjs): off there */
+    const s = await ctx.session({viewport: {width: w, height: h}, serviceWorkers: WEBKIT ? 'block' : 'allow'});
+    const at = `${w}x${h}`, opener = '#view [data-backupmenu]';
+    try{
+      const {page} = s;
+      const google = await installFakeGoogle(s.context, {appBase: ctx.base});
+      await s.goto();
+      await importFixtures(page);
+
+      /* row 2 holds both menu buttons; the old bottom buttons and the old Drive control are gone */
+      const row2 = await page.locator('#view #libMenus button').allTextContents();
+      assert(JSON.stringify(row2) === JSON.stringify(['Share / Import', 'Back up / Sync']), `${at}: row 2 holds ${JSON.stringify(row2)}`);
+      for(const gone of ['[data-backup]', '[data-restore]', '#libDrive', '[data-drivetest]', '[data-driveconnect]', '[data-drivedisconnect]', '[data-syncnow]'])
+        assert(await page.evaluate(sel => [...document.querySelectorAll('#view ' + sel)].filter(e => !e.closest('#libNudge')).length, gone) === 0, `${at}: the Library still has ${gone}`);
+      /* the bottom: Show archived, the backup hint, ONE read-only Drive line, then the status lines; nothing else */
+      const bottom = await page.evaluate(() => {
+        const list = document.querySelector('#libList'), out = [];
+        for(let e = list.nextElementSibling; e; e = e.nextElementSibling) out.push(e.id || e.className);
+        const line = document.querySelector('#libDriveLine');
+        return {out, line: line && line.textContent, buttons: line ? line.querySelectorAll('button').length : -1,
+          hint: document.querySelector('#libBackupHint')?.textContent};
+      });
+      assert(JSON.stringify(bottom.out) === JSON.stringify(['sw-row', 'libBackupHint', 'libDriveLine', 'libSafety']), `${at}: the bottom of the Library holds ${JSON.stringify(bottom.out)}`);
+      assert(bottom.line === NOT_SET_UP && bottom.buttons === 0, `${at}: the Drive line at the bottom says "${bottom.line}" with ${bottom.buttons} buttons`);
+      assert(/one \.zip file with every PDF, setlist and annotation.*Google Drive.*another tablet/.test(bottom.hint || ''), `${at}: the backup hint is "${bottom.hint}"`);
+
+      /* the box itself: exact items and hints, focus, Escape and Cancel; Drive not used here yet */
+      await checkMenuBox(page, opener, 'Back up / Sync', 'Back up / Sync', BACKUP_ITEMS('Connect Google Drive first'), at);
+      assert(await page.locator('.modal').count() === 0, `${at}: Cancel started something`);
+
+      /* each item starts its own action, and the box is gone */
+      const dl = await download(page, () => openBackupMenu(page, 'backup'));
+      assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d\.zip$/.test(dl.name) && (await JSZip.loadAsync(await fsp.readFile(dl.file))).file('library.json'), `${at}: Back up everything gave ${dl.name}`);
+      await noModal(page);
+      assert(await page.locator(opener).textContent() === 'Back up / Sync' && await page.locator(opener).isEnabled(), `${at}: the Back up / Sync button was not given back after the backup`);
+      const [fc] = await Promise.all([page.waitForEvent('filechooser', {timeout: 8000}), openBackupMenu(page, 'restore')]);
+      assert(await fc.element().evaluate(e => e.id) === 'restoreFile', `${at}: Restore from backup opened the wrong file chooser`);
+      await noModal(page);
+      await openBackupMenu(page, 'sync');
+      await page.locator('.modal [role=dialog]', {hasText: 'Sync your tablets'}).waitFor({timeout: 8000});
+      assert(await page.locator('.modal.menubox').count() === 0 && await page.locator('.modal').count() === 1, `${at}: Sync with Google Drive did not open the first-time note alone`);
+      await checkDialog(page, `${at} Sync from the box`);
+      await escapeBack(page, opener, `${at} Sync from the box`);
+      assert(google.requests.length === 0, `${at}: Google was called before anyone said Continue`);
+
+      /* Google Drive settings: the box, not connected */
+      await openBackupMenu(page, 'drive');
+      await page.locator('.modal.drivebox').waitFor({timeout: 8000});
+      assert(await page.locator('.modal').count() === 1, `${at}: the Back up / Sync box is still open behind the Google Drive box`);
+      await driveBoxIs(page, at, 'not connected', new RegExp('^' + NOT_SET_UP.replace(/\./g, '\\.') + '$'), [['syncnow', 'Sync'], ['driveconnect', 'Connect Google Drive']]);
+      await checkDialog(page, `${at} Google Drive box`);
+      await escapeBack(page, opener, `${at} Google Drive box (Escape)`);
+      await driveBox(page);
+      await page.click('.modal.drivebox > [role=dialog] > .btns [data-x]'); await noModal(page);
+      assert(await page.evaluate(sel => document.activeElement === document.querySelector(sel), opener), `${at}: Close on the Google Drive box did not give the focus back to Back up / Sync`);
+
+      /* connected: Connect in the box goes to Google and comes back */
+      Object.assign(google.auth, {mode: 'ok', expiresIn: 3599});
+      await driveBox(page);
+      await page.click('.modal.drivebox [data-driveconnect]');
+      await page.click('.modal [data-ok]');
+      await waitFor(() => page.evaluate(() => document.readyState === 'complete' && /Connected to Google Drive until/.test(document.querySelector('#libDriveLine')?.textContent || '')).catch(() => false), `${at}: not connected after the sign-in`, 20000);
+      await sleep(300);
+      if(await page.locator('.modal').count()) throw new Error(`${at}: a box after signing in: ` + await page.locator('.modal').last().textContent());
+      await checkMenuBox(page, opener, 'Back up / Sync', 'Back up / Sync', BACKUP_ITEMS('Keep your tablets the same'), `${at} connected`);
+      await driveBox(page);
+      await driveBoxIs(page, at, 'connected', /^Connected to Google Drive until .+\. Not synced on this tablet yet\.$/, [['syncnow', 'Sync'], ['drivetest', 'Test connection'], ['drivedisconnect', 'Disconnect']]);
+      /* Test connection: the result comes over the box; OK gives the focus back inside the box, which is still right */
+      await page.click('.modal.drivebox [data-drivetest]');
+      await page.locator('.modal [role=dialog]', {hasText: "Folder 'Setlist Stand' is ready"}).waitFor({timeout: 15000});
+      await checkDialog(page, `${at} Test connection result`);
+      await page.locator('.modal').last().locator('[data-ok]').click();
+      await waitFor(() => page.evaluate(() => document.querySelectorAll('.modal').length === 1), `${at}: the test result did not close`);
+      assert((await driveDrawn(page)).focusIn, `${at}: after the test result focus is not in the Google Drive box`);
+      /* Google takes the token back during a Test: the box must show the new state at once (Connect, no Test) */
+      google.expire();
+      await page.click('.modal.drivebox [data-drivetest]');
+      await page.locator('.modal [role=dialog]', {hasText: 'Sign in again'}).waitFor({timeout: 15000});
+      await page.locator('.modal').last().locator('[data-x]').click();
+      await waitFor(() => page.evaluate(() => document.querySelectorAll('.modal').length === 1), `${at}: Sign in again did not close`);
+      const after = await driveBoxIs(page, at, 'after a refused token', new RegExp('^' + NOT_SET_UP.replace(/\./g, '\\.') + '$'), [['syncnow', 'Sync'], ['driveconnect', 'Connect Google Drive']]);
+      assert(after.focusIn, `${at}: after Cancel on Sign in again focus is not in the Google Drive box`);
+      /* connect again, then the sign-in runs out while the box is open: it is redrawn in place */
+      await page.click('.modal.drivebox [data-driveconnect]');
+      await page.click('.modal [data-ok]');
+      await waitFor(() => page.evaluate(() => document.readyState === 'complete' && /Connected to Google Drive until/.test(document.querySelector('#libDriveLine')?.textContent || '')).catch(() => false), `${at}: not connected after signing in again`, 20000);
+      await sleep(300);
+      await driveBox(page);
+      await page.clock.setFixedTime(Date.now() + 4000e3);
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));          // the tablet is picked up again
+      await driveBoxIs(page, at, 'sign-in ended', /^Your Google sign-in ran out at .+\. Tap Sync or Connect again\. Not synced on this tablet yet\.$/,
+        [['syncnow', 'Sync'], ['driveconnect', 'Connect again'], ['drivetest', 'Test connection'], ['drivedisconnect', 'Disconnect']], true);
+      /* Disconnect from the box: the box shows Connect at once, the focus stays in it, Close gives it back to the menu button */
+      await page.click('.modal.drivebox [data-drivedisconnect]');
+      await page.locator('.modal').last().locator('[data-ok]').click();
+      await waitFor(() => page.evaluate(() => document.querySelectorAll('.modal').length === 1), `${at}: the Disconnect dialog did not close`);
+      const off = await driveBoxIs(page, at, 'after Disconnect', new RegExp('^' + NOT_SET_UP.replace(/\./g, '\\.') + '$'), [['syncnow', 'Sync'], ['driveconnect', 'Connect Google Drive']]);
+      assert(off.focusIn, `${at}: after Disconnect focus is not in the Google Drive box`);
+      await escapeBack(page, opener, `${at} Google Drive box after Disconnect`);
+      const errs = s.errors.filter(e => e.startsWith('pageerror'));                              // (the 401 of the refused token is logged by the browser on purpose)
+      assert(!errs.length, `${at}: page errors: ` + errs.join(' | '));
+    } finally { await s.close(); }
+  }
+}
+
 export const loops = [
   {name: 'hygiene: CSP holds for import, view, ink, notes, crop, print, backup, restore, service worker, fonts', run: cspLoop},
   {name: 'hygiene: dialogs trap focus, Escape cancels, focus returns, page behind is inert', run: dialogLoop},
   {name: 'hygiene: gig-date dialogs (New setlist with a date, Gig date, the fill-in) trap focus; Escape and Cancel change nothing; Enter in the name saves', run: gigDialogLoop},
   {name: 'hygiene: download dialogs (Download <name>, Download all, its busy box) trap focus; Escape cancels or stops and downloads nothing', run: downloadDialogLoop},
+  {name: 'hygiene-ui share menu: the Library bar has one Share / Import button; its box lists three items, traps focus, closes on Escape and Cancel, and each item starts its action (also on a portrait tablet)', run: shareMenuLoop},
+  {name: 'hygiene-ui backup menu: the Library bar has a Back up / Sync button and its bottom only a read-only Drive line; the box lists four items, traps focus, closes on Escape and Cancel, each item starts its action, and the Google Drive box shows not connected, connected and sign-in ended and stays right while open (also on a portrait tablet)', run: backupMenuLoop},
   {name: 'hygiene: setlist rows reorder with arrow keys; tablet CSS (overscroll, touch-action, safe areas)', run: reorderLoop},
 ];

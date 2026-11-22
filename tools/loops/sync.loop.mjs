@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {assert, sleep, snapshot, normalise, diff, download, JSZip, WEBKIT} from './harness.mjs';
+import {assert, sleep, snapshot, normalise, diff, download, JSZip, WEBKIT, openBackupMenu, driveBox, closeDriveBox, driveTap, driveState} from './harness.mjs';
 import {goOffline, until as untilRaw} from './site-copy.mjs';
 import {importFixtures} from './share-lib.mjs';
 import {installFakeGoogle} from './fake-google.mjs';
@@ -36,16 +36,24 @@ async function open(ctx, {fixtures = false} = {}){
   return {s, page: s.page, google, base: ctx.base};
 }
 const ls = page => page.evaluate(() => Object.fromEntries(Object.keys(localStorage).map(k => [k, localStorage.getItem(k)])));
-const dialogText = async page => (await page.locator('.modal [role=dialog]').first().textContent()).replace(/\s+/g, ' ').trim();
-const noModal = page => page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 8000});
-async function closeDialog(page){ await page.click('.modal [data-x]'); await noModal(page); }
+/* The Drive buttons sit in the Google Drive box (Back up / Sync -> Google Drive settings), which stays open under the dialogs its
+   buttons open: a dialog is the TOP one, and "no dialog" means none besides that box. */
+const dialogText = async page => (await page.locator('.modal [role=dialog]').last().textContent()).replace(/\s+/g, ' ').trim();
+const noModal = page => page.waitForFunction(() => !document.querySelector('.modal:not(.drivebox)'), null, {timeout: 8000});
+async function closeDialog(page){ await page.locator('.modal').last().locator('[data-x]').first().click(); await noModal(page); }
 /* the page is loaded again after a trip to Google: wait for the Library's Drive line */
-const settled = (page, what = 'the Library did not come back') => until(() => page.evaluate(() => document.readyState === 'complete' && !!document.querySelector('#libDrive [data-drivestatus]')), what, 15000);
+const settled = (page, what = 'the Library did not come back') => until(() => page.evaluate(() => document.readyState === 'complete' && !!document.querySelector('#libDriveLine [data-drivestatus]')), what, 15000);
 const authCount = g => g.requests.filter(r => r.kind === 'auth').length;
 const driveCalls = g => g.requests.filter(r => r.kind === 'drive');
 const pageErrors = s => s.errors.filter(e => e.startsWith('pageerror'));
-/* The sign-in is kept in memory only, so "connected" is read from the screen (the Library's Drive line), never from storage. */
-const driveLine = page => page.locator('#libDrive').textContent();
+/* The sign-in is kept in memory only, so "connected" is read from the screen, never from storage: the Google Drive box (its
+   sentence and buttons, what the Library's Drive control showed), and every read also checks that the read-only line at the
+   bottom of the Library says the same sentence. */
+async function driveLine(page){
+  const d = await driveState(page);
+  assert(d.line === d.status && d.status, `the Library's Drive line says "${d.line}" but the Google Drive box says "${d.status}"`);
+  return d.box;
+}
 const isConnected = async page => /Connected to Google Drive until/.test(await driveLine(page));
 const offersConnect = async page => /Connect Google Drive/.test(await driveLine(page)) && !/Connected to Google Drive|ran out/.test(await driveLine(page));
 /* Time passing, without touching any storage: the page's own clock (Date.now, new Date) is held at the real time plus `ms`; timers keep
@@ -74,15 +82,15 @@ async function trip(h, auth = {}){
   const {page, google} = h;
   Object.assign(google.auth, {mode: 'ok', errorCode: 'server_error', expiresIn: 3599}, auth);
   const n0 = authCount(google);
-  if(!(await page.locator('.modal').count())) await page.click('[data-driveconnect]');
+  if(!(await page.locator('.modal:not(.drivebox)').count())) await driveTap(page, 'driveconnect');
   await page.click('.modal [data-ok]');
   await until(() => authCount(google) > n0, 'the app never went to the sign-in address', 15000);
   await sleep(300);
   await settled(page);
 }
-const connectOk = async h => { await trip(h); assert(/Connected to Google Drive until/.test(await h.page.locator('#libDrive').textContent()), 'not connected after a good sign-in: ' + await h.page.locator('#libDrive').textContent()); };
+const connectOk = async h => { await trip(h); const t = await driveLine(h.page); assert(/Connected to Google Drive until/.test(t), 'not connected after a good sign-in: ' + t); };
 async function runTest(page){
-  await page.click('[data-drivetest]');
+  await driveTap(page, 'drivetest');
   const t = await until(async () => { const x = await dialogText(page).catch(() => null); return x && !/^Testing the connection/.test(x) ? x : null; }, 'the test never gave a result', 20000);
   await closeDialog(page);
   return t;
@@ -98,25 +106,25 @@ async function loopConnect(ctx){
     assert(google.requests.length === 0, 'the app talked to Google while a song was open');
     await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
     const before = normalise(await snapshot(page));
-    assert(/Connect Google Drive/.test(await page.locator('#libDrive').textContent()), 'no Connect button on a clean library');
+    assert(/Connect Google Drive/.test(await driveLine(page)), 'no Connect button on a clean library');
 
     /* Cancel and Escape leave nothing behind and do not leave the app */
-    await page.click('[data-driveconnect]');
+    await driveTap(page, 'driveconnect');
     assert(/can see only the files it makes itself/.test(await dialogText(page)), 'the Connect dialog does not explain what Google will ask');
     await closeDialog(page);
-    await page.click('[data-driveconnect]'); await page.keyboard.press('Escape'); await noModal(page);
+    await driveTap(page, 'driveconnect'); await page.keyboard.press('Escape'); await noModal(page);
     assert(!('ss-google-pending' in await ls(page)) && google.requests.length === 0, 'Cancel left a note or went to Google');
     /* Cancel AFTER Continue, while Google is slow to answer: the trip must really stop (window.stop), or Google's page replaces the app a moment later */
     const slow = async r => { await sleep(1500); await r.fallback().catch(() => {}); };
     await s.context.route('https://accounts.google.com/**', slow);
     await page.evaluate(() => { window.__stayed = true; });                              // a marker: a page that was left and reloaded loses it
     const navs = s.navs.length;
-    await page.click('[data-driveconnect]');
+    await driveTap(page, 'driveconnect');
     /* Continue, then Cancel 300 ms later, both scheduled inside the page: while a navigation is pending, Playwright holds back any
        call of its own (click, evaluate) until the navigation is over, which a real finger does not have to wait for */
     await page.evaluate(() => {
       const ok = document.querySelector('.modal [data-ok]'); ok.focus(); ok.click();                 // a finger on Continue
-      setTimeout(() => { window.__focusKept = !!document.activeElement && !!document.activeElement.closest('.modal'); document.querySelector('.modal [data-x]').click(); }, 300);
+      setTimeout(() => { window.__focusKept = !!document.activeElement && !!document.activeElement.closest('.modal'); [...document.querySelectorAll('.modal')].at(-1).querySelector('[data-x]').click(); }, 300);
     });
     await sleep(3000);
     let wentAnyway = false;
@@ -180,7 +188,8 @@ async function loopConnect(ctx){
     /* the opposite of "still connected after a reload": a reload (a closed and reopened app, or "Updated. Tap to reload") forgets the sign-in */
     await page.reload(); await settled(page); await sleep(400);
     assert(await offersConnect(page), 'after a reload the Library does not offer Connect: ' + await driveLine(page));
-    assert(!(await page.locator('[data-drivetest]').count()) && !(await page.locator('[data-drivedisconnect]').count()), 'after a reload the Library still offers Test connection or Disconnect');
+    const reloaded = await driveState(page);
+    assert(!reloaded.count('drivetest') && !reloaded.count('drivedisconnect'), 'after a reload the Library still offers Test connection or Disconnect');
     assert(driveCalls(google).length === 0, 'Drive was called by opening the app (only a button may do that)');
     assert(!holdsText(await everyStore(page), tok1), 'the token is in storage after a reload');
     /* a token an older version of the app left in storage goes when the app opens, and is never used */
@@ -188,7 +197,7 @@ async function loopConnect(ctx){
     await page.reload(); await settled(page); await sleep(400);
     assert(!('ss-google' in await ls(page)), 'an old ss-google key was left in storage');
     assert(await offersConnect(page), 'an old ss-google key was taken as a sign-in: ' + await driveLine(page));
-    assert(driveCalls(google).length === 0 && !(await page.locator('[data-drivetest]').count()), 'an old ss-google key was used');
+    assert(driveCalls(google).length === 0 && !(await driveState(page)).count('drivetest'), 'an old ss-google key was used');
 
     /* sign in again, then the test, then the token is searched for everywhere it must never be */
     await trip(h);
@@ -205,7 +214,8 @@ async function loopConnect(ctx){
     assert(!used.ls.some(x => x.startsWith('ss-google=')) && !used.ss.some(x => x.startsWith('ss-google=')), 'a key ss-google exists after the token was used');
     assert(!JSON.stringify(await snapshot(page)).includes(tok), 'the token is in the library database');
     assert(!(await page.evaluate(() => location.href)).includes(tok), 'the token is in the address');
-    const bk = await download(page, () => page.click('[data-backup]'));
+    await closeDriveBox(page);
+    const bk = await download(page, () => openBackupMenu(page, 'backup'));
     const zip = await JSZip.loadAsync(fs.readFileSync(bk.file));
     for(const n of Object.keys(zip.files)) if(!zip.files[n].dir) assert(!Buffer.from(await zip.file(n).async('uint8array')).includes(Buffer.from(tok)), `the token is in the backup (${n})`);
     assert(!(await problems(page)).length, 'the problem log has entries after a clean sign-in: ' + JSON.stringify(await problems(page)));
@@ -240,7 +250,7 @@ async function loopRefused(ctx){
       const kept = await ls(page);
       assert(!('ss-google' in kept) && !('ss-google-pending' in kept), `${r.name}: something was kept: ${Object.keys(kept)}`);
       assert(await page.evaluate(() => location.hash === ''), `${r.name}: the answer is still in the address`);
-      assert(/Connect Google Drive/.test(await page.locator('#libDrive').textContent()), `${r.name}: the Library does not offer Connect`);
+      assert(/Connect Google Drive/.test(await driveLine(page)), `${r.name}: the Library does not offer Connect`);
       const after = normalise(await snapshot(page));
       assert(!diff(before, after).length, `${r.name}: the library changed: ` + diff(before, after).join(' | '));
     }
@@ -297,7 +307,7 @@ async function loopRefused(ctx){
 
     /* the trip that gets no answer at all: the note stays (the person may still be at Google), nothing else happens */
     await page.reload(); await settled(page);                                          // the Library is drawn again, with its Connect button
-    assert(await page.locator('[data-driveconnect]').count() === 1, 'no Connect button after a reload');
+    assert((await driveState(page)).count('driveconnect') === 1, 'no Connect button after a reload');
     await trip(h, {mode: 'nothing'});
     const quiet = await ls(page);
     assert(!('ss-google' in quiet) && !(await page.locator('.modal').count()) && await offersConnect(page), 'a sign-in with no answer connected or complained');
@@ -305,7 +315,7 @@ async function loopRefused(ctx){
     /* Back from Google with the Back button (the page comes back from the browser's cache; Playwright's Chromium switches that cache off,
        so the event is sent by hand): that trip was abandoned, and the open Connect dialog can be used again */
     await page.evaluate(() => { localStorage.setItem('ss-google-pending', JSON.stringify({state: 'b'.repeat(32), t: Date.now(), then: 'connect'})); });
-    await page.click('[data-driveconnect]');
+    await driveTap(page, 'driveconnect');
     await page.evaluate(() => { const ok = document.querySelector('.modal [data-ok]'); ok.disabled = true; });   // what Continue does while the page is leaving
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true})));
     assert(!('ss-google-pending' in await ls(page)), 'coming back with the Back button kept the note of the abandoned trip');
@@ -321,16 +331,17 @@ async function loopTokenLife(ctx){
     await trip(h, {expiresIn: 75});                       // good for a little over a minute
     assert(await isConnected(page), 'a token with 75 seconds left was not accepted');
     /* time passes (the page's clock moves; no storage is touched): with 25 seconds left (under the minute kept in hand) the token is not used */
-    await clockAhead(page, 50e3, {redraw: false});        // the Library line is not redrawn yet, so Test connection is still on screen: the request itself must refuse the token
+    await driveBox(page);                                 // the Google Drive box is open, drawn while the token was good
+    await clockAhead(page, 50e3, {redraw: false});        // the box is not redrawn yet, so Test connection is still on screen: the request itself must refuse the token
     google.clearLog();
-    await page.click('[data-drivetest]');
+    await driveTap(page, 'drivetest');
     const text = await dialogText(page);
     assert(/Your Google sign-in has run out\. Tap Connect again/.test(text), 'Test connection with an ending token: ' + text);
     assert(google.requests.length === 0, 'an ending token was used for a request');
     await closeDialog(page);
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     assert(/ran out.*Connect again/.test(await driveLine(page)), 'an ending token is still shown as connected: ' + await driveLine(page));
-    await page.click('[data-drivetest]');
+    await driveTap(page, 'drivetest');
     /* Connect again from this dialog: the test the person asked for runs by itself when they are back */
     await trip(h);
     const res = await until(async () => { const x = await dialogText(page).catch(() => null); return x && /Connected\./.test(x) ? x : null; }, 'the test did not carry on after signing in again', 20000);
@@ -338,9 +349,10 @@ async function loopTokenLife(ctx){
     await closeDialog(page);
     assert(await isConnected(page), 'not connected after signing in again');
     /* an hour later the new token has ended too: said so, with the time, and not used */
+    await driveBox(page);
     await clockAhead(page, 4000e3, {redraw: false});
     google.clearLog();
-    await page.click('[data-drivetest]');
+    await driveTap(page, 'drivetest');
     assert(/Your Google sign-in has run out/.test(await dialogText(page)) && google.requests.length === 0, 'an ended token was used, or Test connection did not say so');
     await closeDialog(page);
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -437,12 +449,12 @@ async function loopFailures(ctx){
     const url = page.url();
     await s.context.setOffline(false); await page.reload(); await settled(page); await s.context.setOffline(true);        // a reload forgets the sign-in: the Library offers Connect
     assert(await offersConnect(page), 'after a reload the Library does not offer Connect: ' + await driveLine(page));
-    await page.click('[data-driveconnect]'); await page.click('.modal [data-ok]');
+    await driveTap(page, 'driveconnect'); await page.click('.modal [data-ok]');
     await until(async () => /You are offline/.test(await dialogText(page).catch(() => '')), 'Connect while offline did not say so', 10000);
     assert(page.url() === url && authCount(google) === 0 && !('ss-google-pending' in await ls(page)), 'Connect while offline left the app or left a note');
     await closeDialog(page); await s.context.setOffline(false);
     await trip(h);                                                  // back to a good sign-in for the cases below
-    await page.waitForSelector('#libDrive [data-drivetest]');
+    await driveBox(page); await page.waitForSelector('#driveCtl [data-drivetest]');
     /* online but Google unreachable */
     google.clearLog(); google.offline = true; plain(await say(), /Cannot reach Google/, 'unreachable'); google.offline = false;
     assert(google.requests.filter(r => r.status === 'aborted').length >= 2, 'a request that got no answer was not tried again before giving up');
@@ -496,25 +508,25 @@ async function loopFailures(ctx){
     /* Cancel while Google is slow: no result, no error, the page is fine */
     const logged = (await problems(page)).length;
     google.latency = 1500; google.clearLog();
-    await page.click('[data-drivetest]');
+    await driveTap(page, 'drivetest');
     await until(() => driveCalls(google).length >= 1, 'the test sent no request', 8000);
     const sent = driveCalls(google).length;
-    await page.click('.modal [data-x]'); await noModal(page);
+    await page.locator('.modal').last().locator('[data-x]').click(); await noModal(page);
     await sleep(2400);
-    assert(!(await page.locator('.modal').count()) && (await problems(page)).length === logged, 'Cancel was followed by a result or an error');
+    assert(!(await page.locator('.modal:not(.drivebox)').count()) && (await problems(page)).length === logged, 'Cancel was followed by a result or an error');
     assert(driveCalls(google).length === sent && !google.requests.some(r => r.method === 'POST'), `Cancel did not stop the work: ${driveCalls(google).length - sent} more request(s) after it`);
     google.latency = 0;
 
     /* Google takes the token back: the app says so and forgets it. Cancel leaves focus on the Library line (the button that was
        tapped is gone, redrawn as Connect), not on the page behind */
     google.expire();
-    await page.click('[data-drivetest]');
+    await driveTap(page, 'drivetest');
     await until(async () => /Sign in again/.test(await dialogText(page).catch(() => '')), 'a refused token did not ask to sign in again', 15000);
     await closeDialog(page);
-    assert(await offersConnect(page) && !(await page.locator('[data-drivetest]').count()), 'a token Google refused is still kept: the Library says ' + await driveLine(page));
-    assert(await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest('#libDrive')), 'after Cancel on "Sign in again" focus is not in the Drive line');
+    assert(await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest('.modal.drivebox #driveCtl')), 'after Cancel on "Sign in again" focus is not in the Google Drive box');
+    assert(await offersConnect(page) && !(await driveState(page)).count('drivetest'), 'a token Google refused is still kept: the Library says ' + await driveLine(page));
     /* and Connect again carries on with the test */
-    await trip(h); google.expire(); await page.click('[data-drivetest]');
+    await trip(h); google.expire(); await driveTap(page, 'drivetest');
     await until(async () => /Sign in again/.test(await dialogText(page).catch(() => '')), 'a second refused token did not ask to sign in again', 15000);
     await trip(h);
     assert(await until(async () => { const x = await dialogText(page).catch(() => null); return x && /Connected\./.test(x) ? x : null; }, 'no test after signing in again', 20000));
@@ -539,18 +551,18 @@ async function loopDisconnect(ctx){
   try{
     await connectOk(h);
     const before = normalise(await snapshot(page));
-    await page.click('[data-drivedisconnect]');
+    await driveTap(page, 'drivedisconnect');
     assert(/forgets the sign-in/.test(await dialogText(page)) && /not touched/.test(await dialogText(page)), 'the Disconnect dialog does not say what happens');
     await closeDialog(page);
     assert(await isConnected(page), 'Cancel disconnected');
-    await page.click('[data-drivedisconnect]'); await page.keyboard.press('Escape'); await noModal(page);
+    await driveTap(page, 'drivedisconnect'); await page.keyboard.press('Escape'); await noModal(page);
     assert(await isConnected(page), 'Escape disconnected');
     assert(/Connected\./.test(await runTest(page)), 'after Cancel and Escape the sign-in no longer works');
     const n = google.requests.length;
-    await page.click('[data-drivedisconnect]'); await page.click('.modal [data-ok]'); await noModal(page);
+    await driveTap(page, 'drivedisconnect'); await page.click('.modal [data-ok]'); await noModal(page);
     const kept = await ls(page);
     assert(!('ss-google' in kept) && !('ss-google-pending' in kept), 'Disconnect left the sign-in: ' + Object.keys(kept));
-    assert(await offersConnect(page) && !(await page.locator('[data-drivetest]').count()), 'the Library does not offer Connect after Disconnect: ' + await driveLine(page));
+    assert(await offersConnect(page) && !(await driveState(page)).count('drivetest'), 'the Library does not offer Connect after Disconnect: ' + await driveLine(page));
     /* the token is really forgotten, not just hidden: a redrawn Library (the tablet picked up again) does not bring the sign-in back */
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     assert(await offersConnect(page), 'a redrawn Library shows the sign-in again after Disconnect: ' + await driveLine(page));
@@ -624,7 +636,7 @@ async function loopOffline(ctx){
         assert(!s.requests.slice(n).some(toGoogle), 'a request to Google left while a song was open');
         await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
       }
-      await page.click('[data-drivetest]');
+      await driveTap(page, 'drivetest');
       assert(/Cannot reach Google/.test(await until(async () => { const x = await dialogText(page).catch(() => null); return x && !/^Testing/.test(x) ? x : null; }, 'no answer offline', 15000)), 'offline test message');
       await closeDialog(page);
       /* reopened offline (a reload forgets the sign-in): the app opens and plays, offers Connect, and sends nothing to Google */
@@ -637,7 +649,7 @@ async function loopOffline(ctx){
         await page.click('#vNext').catch(() => {}); await sleep(600);
         assert(await page.locator('#stage canvas').count() > 0, 'a song did not open offline after a reload');
         await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
-        await page.click('[data-driveconnect]'); await page.click('.modal [data-ok]');
+        await driveTap(page, 'driveconnect'); await page.click('.modal [data-ok]');
         assert(/You are offline/.test(await until(async () => { const x = await dialogText(page).catch(() => null); return x && /offline/.test(x) ? x : null; }, 'Connect while offline did not say so', 10000)), 'Connect offline message');
         await closeDialog(page);
         assert(!s.requests.slice(m).some(toGoogle), 'a request to Google left while the app was reopened offline');

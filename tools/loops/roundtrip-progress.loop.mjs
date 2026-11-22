@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, TMP, assert, sleep, sha256, snapshot, diff, JSZip} from './harness.mjs';
+import {FIX, TMP, assert, sleep, sha256, snapshot, diff, JSZip, openBackupMenu} from './harness.mjs';
 
 const SONGS = 100, KB = 400;
 async function bigBackup(){
@@ -122,13 +122,13 @@ async function loopBackupProgress(ctx){
     const A = await snapshot(page);
     assert(/^\d+$/.test(await page.evaluate(() => localStorage.getItem('ss-last-backup')) || ''), 'a restore does not count as a backup (the restored library would be reported as changed)');
     await page.evaluate(() => localStorage.removeItem('ss-last-backup'));        // from here: no backup was ever made, to prove a stopped backup sets nothing
-    await page.click('#tLib'); await page.waitForSelector('[data-backup]');
+    await page.click('#tLib'); await page.waitForSelector('#view [data-backupmenu]');
     let downloads = 0; page.on('download', () => { downloads++; });
 
     /* Stop pressed when "Packing song 5 of N" shows: nothing is downloaded, the time is not set */
     await startWatch(page, /^Packing song 5 of/);
     await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
-    await page.click('[data-backup]');
+    await openBackupMenu(page, 'backup');
     await toastIs(page, /Backup stopped|Backup saved|failed/, 'the backup gave no answer');
     assert(await toastText(page) === 'Backup stopped. Nothing was saved.', 'after Stop the message is "' + await toastText(page) + '"');
     await sleep(1500);
@@ -143,7 +143,7 @@ async function loopBackupProgress(ctx){
     /* not stopped: the lines in order, then it downloads, and the time is set */
     await startWatch(page, null);
     await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
-    const [dl] = await Promise.all([page.waitForEvent('download', {timeout: 120000}), page.click('[data-backup]')]);
+    const [dl] = await Promise.all([page.waitForEvent('download', {timeout: 120000}), openBackupMenu(page, 'backup')]);
     assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d\.zip$/.test(dl.suggestedFilename()), 'file name ' + dl.suggestedFilename());
     await toastIs(page, /Backup saved|failed|stopped/, 'no answer after the backup');
     assert(await toastText(page) === 'Backup saved', 'message "' + await toastText(page) + '"');

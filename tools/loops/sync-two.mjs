@@ -22,7 +22,7 @@
  *   A.page, A.s (session: errors, requests), A.google (the stand-in view, requests tagged by: A.name), await A.close()
  */
 import crypto from 'node:crypto';
-import {sleep, snapshot, normalise, backupNow, restoreZip} from './harness.mjs';
+import {sleep, snapshot, normalise, backupNow, restoreZip, openBackupMenu, driveTap} from './harness.mjs';
 import {importFixtures} from './share-lib.mjs';
 import {installFakeGoogle} from './fake-google.mjs';
 import {parseMultipart} from './fake-google-query.mjs';
@@ -143,20 +143,21 @@ const press = (page, label) => page.locator('.modal').last().getByRole('button',
 const settled = async (page, ms = 20000) => {
   const end = Date.now() + ms;
   while(Date.now() < end){
-    if(await page.evaluate(() => document.readyState === 'complete' && !!document.querySelector('#libDrive [data-drivestatus]')).catch(() => false)) return;
+    if(await page.evaluate(() => document.readyState === 'complete' && !!document.querySelector('#libDriveLine [data-drivestatus]')).catch(() => false)) return;
     await sleep(150);
   }
   throw new Error('the Library did not come back after the sign-in');
 };
 const stamp = (t, what) => `${t.name}: ${what}`;
 
-/* Signs in from the Library's Connect button (Sync signs in by itself; this is for loops that want to be signed in first). */
+/* Signs in from Connect Google Drive in the Google Drive box (Back up / Sync -> Google Drive settings; Sync signs in by itself,
+   this is for loops that want to be signed in first). */
 export async function signIn(t){
   const {page, google} = t;
   Object.assign(google.auth, {mode: 'ok', expiresIn: 3599});
   const n0 = authCount(google);
   await page.click('#tLib');
-  await page.click('#libDrive [data-driveconnect]');
+  await driveTap(page, 'driveconnect');
   await page.click('.modal [data-ok]');
   const end = Date.now() + 20000;
   while(authCount(google) === n0){ if(Date.now() > end) throw new Error(stamp(t, 'the app never went to the sign-in address')); await sleep(100); }
@@ -165,13 +166,13 @@ export async function signIn(t){
   if(d) throw new Error(stamp(t, `a box after signing in: ${d.title}: ${d.text.slice(0, 200)}`));
 }
 
-/* Taps Sync and gets through the first-time note and the sign-in. Returns the first sync box ({title, text}). */
+/* Taps Sync (Back up / Sync -> Sync with Google Drive) and gets through the first-time note and the sign-in. Returns the first sync box ({title, text}). */
 export async function tapSync(t, {timeout = 40000} = {}){
   const {page, google} = t;
   Object.assign(google.auth, {mode: 'ok', expiresIn: 3599});
   await page.click('#tLib');
   if(await top(page)) throw new Error(stamp(t, 'a box is open before Sync was tapped: ' + (await top(page)).title));
-  await page.click('#libDrive [data-syncnow]');
+  await openBackupMenu(page, 'sync');
   const end = Date.now() + timeout;
   let intro = 0, trips = 0;
   for(;;){

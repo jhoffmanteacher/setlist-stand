@@ -5,21 +5,39 @@ import {displayName, compareSongs, songMatches} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
+import {menuBox} from './menubox.js';
 import {unique} from './shareimport.js';
 import {deleteOps} from './deleteops.js';
-import {renderDrive} from './syncui.js';
+import {renderDrive, driveSetUp, syncNow, openDriveBox} from './syncui.js';
+import {backupNow} from './backup.js';
 import {copySong} from './copysong.js';
 import {renderNudge} from './nudge.js';
 import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
 
+/* Row 2 of the Library's top: one button for each menu. A new menu is one more button here and one more case in onClick(). */
+function menusRowHtml(){
+  return '<div class="bar" id="libMenus"><button data-sharemenu>Share / Import</button><button data-backupmenu>Back up / Sync</button></div>';
+}
+const SHARE_ITEMS = [
+  {id: 'split', label: 'Split a songbook', hint: 'Cut one big PDF into separate songs'},
+  {id: 'import', label: 'Import a share package', hint: 'Add songs from a file someone sent you'},
+  {id: 'share', label: 'Share songs', hint: 'Pick songs, or send a setlist, as one file'},
+];
+/* Back up / Sync (Jonathan, 2026-11-22: these were at the bottom of the Library). The Sync hint depends on whether Drive has been used here. */
+const backupItems = () => [
+  {id: 'backup', label: 'Back up everything', hint: 'Save one file with every PDF, setlist and note'},
+  {id: 'restore', label: 'Restore from backup', hint: 'Bring your library back from a backup file'},
+  {id: 'sync', label: 'Sync with Google Drive', hint: driveSetUp() ? 'Keep your tablets the same' : 'Connect Google Drive first'},
+  {id: 'drive', label: 'Google Drive settings', hint: 'Connect, test or disconnect'},
+];
+
 export function renderLibrary(v){
-  v.innerHTML = `${pickerHtml()}<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button><button data-sharesongs>Share songs</button><button data-shareimport>Import a share package</button></div><div id="libNudge"></div><div id="libList"></div>
+  v.innerHTML = `${pickerHtml()}<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button></div>${menusRowHtml()}<div id="libNudge"></div><div id="libList"></div>
     <label class="sw-row"><input type="checkbox" id="showArch" ${showArchived ? 'checked' : ''}>Show archived</label>
-    <div class="bar" style="margin-top:12px"><button data-backup>Back up everything</button><button data-restore>Restore from backup</button></div>
-    <p class="hint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
-    <div id="libDrive"></div>
+    <p class="hint" id="libBackupHint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
+    <div id="libDriveLine"></div>
     <div id="libSafety"><p class="hint" id="libLastBackup"></p><div id="libStorage"></div><div id="libProblems"></div></div>`;
   $('#q').oninput = e => { q = e.target.value; renderLib(); };
   $('#showArch').onchange = e => { showArchived = e.target.checked; renderLib(); };
@@ -202,9 +220,25 @@ function askNewVersion(name, s, keeps){
 /* Returns true when the click was for the library. */
 export async function onClick(b, d){
   if('add' in d){ $('#file').click(); return true; }
-  if('split' in d){ $('#splitFile').click(); return true; }
-  if('sharesongs' in d){ await shareSongs(); return true; }
-  if('shareimport' in d){ $('#shareFile').click(); return true; }
+  if('sharemenu' in d){
+    b.focus();                                                  // Safari does not focus a button that was tapped: the box and the dialogs after it give focus back to it
+    await menuBox({title: 'Share / Import', items: SHARE_ITEMS, opener: b, run: name => {
+      if(name === 'split') $('#splitFile').click();             // runs inside the tap that chose it: a file chooser needs that
+      else if(name === 'import') $('#shareFile').click();
+      else return shareSongs();
+    }});
+    return true;
+  }
+  if('backupmenu' in d){
+    b.focus();
+    await menuBox({title: 'Back up / Sync', items: backupItems(), opener: b, run: name => {
+      if(name === 'restore') $('#restoreFile').click();         // inside the tap that chose it: a file chooser needs that
+      else if(name === 'backup') return backupNow(b);           // the same backup as the reminder's Back up now; this button says "Working…" meanwhile
+      else if(name === 'sync') return syncNow();                // what the old Sync button did: sync, or the sign-in dialog first
+      else openDriveBox();
+    }});
+    return true;
+  }
   if('persist' in d){ await askPersist(b); return true; }
   if('problems' in d){ showProblemLog(); return true; }
   if(d.open){ openViewer([{type:'song', id:d.open}], 0); return true; }
