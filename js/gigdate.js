@@ -44,15 +44,22 @@ export function gigShort(g){
    two date-shaped parts, one with no year or only two digits of year, or one that is not a real date is never a date. */
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const MON = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+/* No lookbehind (iPadOS 16.0 to 16.3 cannot parse one, and a module that fails to parse stops the whole app): what comes
+   before a match is checked in dateInName() instead. */
 const NAME_DATE = new RegExp([
-  '(?<![\\d-])(\\d{4})-(\\d{2})-(\\d{2})(?![\\d-])',                                 // 1 2 3: YYYY-MM-DD
-  '(?<![\\d/])(\\d{1,2})/(\\d{1,2})/(\\d{4})(?![\\d/])',                              // 4 5 6: M/D/YYYY
-  `(?<![a-z])${MON}\\.?\\s+(\\d{1,2}),?\\s+(\\d{4})(?!\\d)`,                  // 7 8 9: Month D YYYY
-  `(?<!\\d)(\\d{1,2})\\s+${MON}\\.?,?\\s+(\\d{4})(?!\\d)`,                            // 10 11 12: D Month YYYY
+  '(\\d{4})-(\\d{2})-(\\d{2})(?![\\d-])',                         // 1 2 3: YYYY-MM-DD
+  '(\\d{1,2})/(\\d{1,2})/(\\d{4})(?![\\d/])',                      // 4 5 6: M/D/YYYY
+  `${MON}\\.?\\s+(\\d{1,2}),?\\s+(\\d{4})(?!\\d)`,                    // 7 8 9: Month D YYYY
+  `(\\d{1,2})\\s+${MON}\\.?,?\\s+(\\d{4})(?!\\d)`,                    // 10 11 12: D Month YYYY
 ].join('|'), 'gi');
+/* The character before a match must not run into it: not a digit (or "-" or "/" for the numeric forms), not a letter before a month name. */
+const PREV_OK = [/^[\d-]$/, /^[\d/]$/, /^[a-z]$/i, /^\d$/];
 export function dateInName(name){
   if(typeof name !== 'string') return null;
-  const found = [...name.matchAll(NAME_DATE)];
+  const found = [...name.matchAll(NAME_DATE)].filter(m => {
+    const alt = m[1] ? 0 : m[4] ? 1 : m[7] ? 2 : 3, prev = m.index ? name[m.index - 1] : '';
+    return !PREV_OK[alt].test(prev);                            // "12026-10-18" or "Xoct 18 2026" is not a date
+  });
   if(found.length !== 1) return null;                           // none, or two dates: left blank
   const m = found[0];
   const mon = s => MONTHS.indexOf(s.slice(0, 3).toLowerCase()) + 1;

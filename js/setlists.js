@@ -71,7 +71,7 @@ export async function onClick(b, d){
     if(r){ const st = {id:uid(), name:r.name, items:[], colls:joinColls(), created:Date.now()}; if(r.gig) st.gig = r.gig; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
     return true;
   }
-  if(d.grp){ const g = groups.find(x => x.id === d.grp); if(g){ toggleGroup(g); hooks.render(); } return true; }
+  if(d.grp){ const g = groups.find(x => x.id === d.grp); if(g){ toggleGroup(g); hooks.render(); const h = document.querySelector(`[data-grp="${CSS.escape(g.id)}"]`); if(h) h.focus(); } return true; }
   if(d.set){ openSet = d.set; hooks.render(); return true; }
   if('allsets' in d){ openSet = null; hooks.render(); return true; }
   if(d.dupset){ await duplicate(sets.find(s => s.id === d.dupset)); return true; }
