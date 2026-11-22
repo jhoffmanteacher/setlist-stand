@@ -199,10 +199,21 @@ export function armed(btn, msg = 'Tap again'){
   return false;
 }
 
-/* A name safe to save a file under: slashes become '-' (a date such as 10/18/2026 stays readable), the other characters a file
-   system refuses are dropped, control characters are dropped, the letters are put in one composed form (so "Café" typed two ways
-   is one name), and it is cut to 150 characters (a file name is limited to 255 bytes, and an accented letter takes two or more). */
-export const fileName = s => String(s).normalize('NFC').replace(/[\\/]+/g, '-').replace(/[:*?"<>|\u0000-\u001f\u007f]+/g, '').trim().slice(0, 150).trim() || 'setlist';
+/* A name safe to save a file under: slashes become '-' (a date such as 10/18/2026 stays readable); the other characters a file system
+   refuses, control characters and the invisible direction marks (a name must not read backwards in a file list) are dropped; the
+   letters are put in one composed form (so "Café" typed two ways is one name); leading dots and spaces go (a leading dot makes a hidden
+   file) and trailing dots and spaces go (Windows); and it is cut to 150 characters AND 200 bytes of UTF-8, at a whole character
+   (a file name is limited to 255 bytes, and an accented or Japanese letter takes 2 or 3, which must still leave room for " (2).pdf"). */
+export const fileName = s => {
+  const n = String(s).normalize('NFC').replace(/[\\/]+/g, '-').replace(/[:*?"<>|\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g, '').replace(/^[.\s]+/, '');
+  let out = '', bytes = 0, chars = 0;
+  for(const ch of n){
+    const b = new TextEncoder().encode(ch).length;
+    if(chars + 1 > 150 || bytes + b > 200) break;
+    out += ch; bytes += b; chars++;
+  }
+  return out.replace(/[.\s]+$/, '') || 'setlist';
+};
 
 /* Downloads use a plain <a download>. */
 export function saveBlob(blob, name){

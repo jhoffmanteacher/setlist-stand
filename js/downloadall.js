@@ -19,7 +19,7 @@ export const limits = {maxBytes: 150e6};
 
 const songIdsOf = st => liveItems(st).filter(it => it.type === 'song').map(it => it.id);
 const titleOf = id => (songById(id) || {}).title || 'A song';
-const TOO_MUCH = ['Too much to make at once', 'That is too much to make at once on a tablet. Show one collection first, or download fewer setlists.'];
+const TOO_MUCH = ['Too much to make at once', 'That is too much to make at once on a tablet. Show one collection first.'];
 
 /* Names that are all different (case ignored): " (2)", " (3)" on a clash, before the extension. */
 export function uniqueNames(bases, ext){
@@ -83,6 +83,7 @@ async function run(list, coll){
     uniqueNames(list.map(setBaseName), '.txt').forEach((n, i) => zip.file('Setlists/' + n, listText(list[i], fileOf)));
     const left = [];
     for(const st of list) for(const id of new Set(songIdsOf(st))) if(!fileOf.has(id)) left.push({set:st.name, title:titleOf(id)});
+    if(job.stopped) return stopped();                                      // Stop on the last chart: do not build a zip that is then thrown away
     job.say('Making the zip file…');
     const blob = await zip.generateAsync({type:'blob', compression:'STORE'}, m => { if(!job.stopped) job.say(`Making the zip file… ${Math.round(m.percent)}%`); });
     if(job.stopped) return stopped();                                      // pressed during the last step, which cannot be interrupted: the file is thrown away
