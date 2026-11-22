@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-21: Faster turns into charts that are big photos
+- **Faster turns into photo charts:** charts that are scanned photos now turn as quickly as the others. The app used to start getting the next song ready only when you reached the last page of a song; a big photo page takes about four times as long to draw as a text page, so turning straight on from the last page waited. It now starts one page earlier. Nothing is stored in a smaller size and the pages are as sharp as before.
+
 ## 2026-11-21: A backup reminder after you change something
 - **Backup reminder:** the app now reminds you to back up when you have changed something since your last backup, instead of after 14 days. It says "Changes since your last backup (today)." with a **Back up now** button, on both Library and Setlists, and it appears as soon as you save a change (a mark, a rename, a new setlist...). After a backup it goes away. It never shows while you are playing a song.
 - A restored library counts as backed up until your next change. If you have songs and have never backed up, it still says "You have not backed up yet."
