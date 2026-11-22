@@ -14,6 +14,9 @@
  *             that carries a `gig` someone put in it) gives a setlist with none.
  * gigdates 4  a hostile backup: bad gig dates are dropped and counted at restore, the rest of each set kept.
  *             (Depends on the restore heal in js/backup.js restoreFrom: toast " k gig date(s) that were not real dates were left out.")
+ * gigdates 5  two tablets on the stand-in Drive (sync-two.mjs): a date set on A arrives on B; cleared on B (Gig date dialog) it
+ *             arrives on A as NO `gig` key (the newer whole record wins); a new date set on A arrives on B; an unknown field
+ *             survives, and no run reports "changed on both tablets".
  * The tablet's "today" is the browser's local date; the browser runs on this machine, so Node's local date is the same one.
  */
 import fs from 'node:fs';
@@ -21,6 +24,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, snapshot, diff, download, backupNow, restoreZip, wipe} from './harness.mjs';
 import {importFixtures, songsOf, closeDone, readPackage} from './share-lib.mjs';
+import {openTablet, syncTap, reportCounts} from './sync-two.mjs';
 import * as G from '../../js/gigdate.js';
 
 /* ---------- small helpers ---------- */
@@ -651,9 +655,76 @@ async function loopHostile(ctx){
   } finally { await s.close(); }
 }
 
+/* ---------- gigdates 5: a gig date synced both ways (set on A, cleared on B, set again on A) ---------- */
+async function loopSync(ctx){
+  const A = await openTablet(ctx, {name: 'A'});
+  let B = null;
+  try{
+    const st = setRec('Sync Five Show', {gig: '2026-12-05', zzz: 1});
+    await putSets(A.page, [st]);
+    await A.s.goto('');
+    const recOf = async t => (await idbAll(t.page, 'sets'))[st.id];
+    const sync = async (t, what, want) => {
+      const rep = await syncTap(t);
+      assert(rep.state === 'finished', `${what}: the sync did not finish: ${rep.title}: ${rep.text}`);
+      const c = reportCounts(rep.text);
+      assert(!c.both && !/changed on both tablets/i.test(rep.text), `${what}: a conflict was reported in a one-after-the-other flow: "${rep.text}"`);
+      if(want) assert(c[want.dir].set === 1, `${what}: the report does not say 1 setlist ${want.dir}: "${rep.text}"`);
+      return rep;
+    };
+    const both = async (what, gig) => {
+      const a = await recOf(A), b = await recOf(B);
+      assert(a && b, `${what}: the setlist is missing on ${a ? 'B' : 'A'}`);
+      for(const [n, r] of [['A', a], ['B', b]]){
+        if(gig) assert(r.gig === gig, `${what}: ${n} holds gig ${JSON.stringify(r.gig)}, expected ${gig}`);
+        else assert(!('gig' in r), `${what}: ${n}'s record still has a gig key: ${JSON.stringify(r.gig)}`);
+        assert(r.zzz === 1, `${what}: ${n} lost the unknown field zzz: ${JSON.stringify(r)}`);
+      }
+      expectSame(a, b, `${what}: A's record (left) vs B's (right)`);
+    };
+    /* opens the setlist on t, does act in the Gig date dialog, waits until the stored record moved */
+    const viaDialog = async (t, what, act) => {
+      const {page} = t, prev = await recOf(t);
+      await toSets(page);
+      await openSet(page, st.id);
+      await page.click('#view [data-gig]');
+      await page.locator('.modal input[type=date]').waitFor();
+      await act(page);
+      await noModal(page);
+      await waitFor(async () => { const x = await recOf(t); return x.updated > prev.updated; }, `${t.name}: ${what}: updated did not move`);
+      await page.click('#view [data-allsets]');
+    };
+
+    await sync(A, 'Sync A (first)', {dir: 'sent'});
+    B = await openTablet(ctx, {name: 'B', share: A});
+    await sync(B, 'Sync B (first)', {dir: 'got'});
+    await both('after A then B', '2026-12-05');
+
+    await viaDialog(B, 'clear', page => page.click('.modal [data-clear]'));
+    assert(!('gig' in await recOf(B)), 'B: Clear left a gig key');
+    await sync(B, 'Sync B (cleared)', {dir: 'sent'});
+    await sync(A, 'Sync A (gets the clear)', {dir: 'got'});
+    await both('after the clear synced B then A', null);
+
+    await viaDialog(A, 'set a new date', async page => { await page.locator('.modal input[type=date]').fill('2027-01-09'); await page.click('.modal [data-ok]'); });
+    assert((await recOf(A)).gig === '2027-01-09', 'A: the new date was not stored');
+    await sync(A, 'Sync A (new date)', {dir: 'sent'});
+    await sync(B, 'Sync B (gets the new date)', {dir: 'got'});
+    await both('after the new date synced A then B', '2027-01-09');
+
+    /* the screen agrees on B */
+    await toSets(B.page);
+    await openSet(B.page, st.id);
+    const lang = await B.page.evaluate(() => navigator.language);
+    assert(await gigline(B.page) === fmt(lang, true).format(localDate('2027-01-09')), 'B: the date line reads ' + await gigline(B.page));
+    for(const t of [A, B]) assert(!t.s.errors.filter(e => e.startsWith('pageerror')).length, `${t.name}: page errors: ` + t.s.errors.join(' | '));
+  } finally { await A.close(); if(B) await B.close(); }
+}
+
 export const loops = [
   {name: 'gigdates 1: parser table, validGig / cleanGig, and the groups in Node', run: loopNode},
   {name: 'gigdates 2: the list, dates and the fill-in', run: loopList},
   {name: 'gigdates 3: backups and share packages', run: loopBackups},
   {name: 'gigdates 4: a backup with bad gig dates restores with them dropped and counted, the rest of each set kept (needs the restore heal)', run: loopHostile},
+  {name: 'gigdates 5: a gig date set on one tablet, then changed and cleared on the other, syncs both ways', run: loopSync},
 ];
