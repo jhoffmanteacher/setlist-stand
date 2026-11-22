@@ -1,36 +1,34 @@
 import {esc, modal, busy, toast, fileName, saveBlob, canShareFile, shareBlob} from './util.js';
 import {get, liveItems, songById} from './store.js';
 import {explainError} from './errors.js';
-import {buildSetPdf, setFileName} from './print.js';
+import {gigOf, gigLong} from './gigdate.js';
+import {setBaseName} from './print.js';
 
-/* Download all: one PDF for each setlist the Setlists list shows, in one zip file (Jonathan, 2026-11-21).
-   Every PDF comes from buildSetPdf() in js/print.js, the same call Download PDF makes, so a setlist's PDF here equals the one it
-   downloads alone (pages, marks, notes, crops). Protected charts go in as pictures without asking; a chart that cannot be read
-   at all is left out and named at the end. Setlists with no songs are skipped. One setlist is built at a time and the zip is
-   stored without compression (PDFs barely shrink). Nothing is written to the library. Stop, at any point, downloads nothing. */
+/* Download all: one zip with every chart of the setlists the Setlists list shows, each chart ONCE (Songs/<title>.pdf, the stored
+   bytes exactly as they are, so a chart used in twelve setlists is in the zip once), and one small list file per setlist
+   (Setlists/<name>.txt: its name, gig date, and its songs and breaks in order) (Jonathan, 2026-11-22; this replaced "one PDF per
+   setlist", which copied every chart into every setlist and grew with the number of setlists). It is a way to keep the charts and
+   the lists outside the app. It carries no marks (they live apart from the PDF); to print a setlist with its marks use Download PDF
+   on the open setlist (js/print.js), which builds one PDF of its charts in order. Setlists with no songs are skipped. Nothing is
+   written to the library and no PDF is changed. Stop, at any point, downloads nothing. */
 
-/* The most the zip may hold, estimated from the stored size of every song in every setlist (a song used in two setlists counts twice,
-   because each setlist's PDF holds its own copy). A tablet's memory holds the zip whole, so above this it is refused before any work.
-   An object so a test can lower it. */
-export const limits = {maxBytes: 400e6};
+/* The most the zip may hold. The zip is held in memory whole, about three times over while it is made (the PDFs, the zip's own copy,
+   then the file; JSZip peak measured at 3.0x), so 150 MB is about 450 MB on a tablet that may have 2 or 3 GB. Checked before any
+   work, from the stored size of every distinct chart. An object so a test can lower it. */
+export const limits = {maxBytes: 150e6};
 
-const songIds = st => liveItems(st).filter(it => it.type === 'song').map(it => it.id);
-const WHY = {password:'needs a password', broken:'could not be read'};
+const songIdsOf = st => liveItems(st).filter(it => it.type === 'song').map(it => it.id);
+const titleOf = id => (songById(id) || {}).title || 'A song';
+const TOO_MUCH = ['Too much to make at once', 'That is too much to make at once on a tablet. Show one collection first, or download fewer setlists.'];
 
-async function estimate(list){
-  let n = 0;
-  for(const st of list) for(const id of songIds(st)){ const b = await get('files', id); if(b) n += b.size; }
-  return n;
-}
-/* The file names inside the zip: as a single download names them, and " (2)", " (3)" when two would be the same (case ignored). */
-export function zipNames(list){
+/* Names that are all different (case ignored): " (2)", " (3)" on a clash, before the extension. */
+export function uniqueNames(bases, ext){
   const used = new Set();
-  return list.map(st => {
-    const base = setFileName(st).replace(/\.pdf$/, '');
+  return bases.map(base => {
     let n = base, k = 1;
     while(used.has(n.toLowerCase())) n = `${base} (${++k})`;
     used.add(n.toLowerCase());
-    return n + '.pdf';
+    return n + ext;
   });
 }
 /* A message that stays until OK. */
@@ -41,52 +39,66 @@ function notice(title, text){
   });
 }
 
-export function downloadAll(sets, coll){
-  const list = sets.filter(st => songIds(st).length), skipped = sets.length - list.length;
-  if(!list.length){ toast('No setlists with songs to download'); return; }
-  const m = modal(`<h2>Download all setlists</h2><p class="hint">Makes one PDF for each of your ${list.length} setlist${list.length == 1 ? '' : 's'}, in one zip file. Protected charts are included as pictures.${skipped ? ` ${skipped} setlist${skipped == 1 ? ' has' : 's have'} no songs and ${skipped == 1 ? 'is' : 'are'} skipped.` : ''}</p>
-    <label class="opt"><input type="checkbox" id="dInk" checked>Include my annotations</label>
-    <div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Make zip</button></div>`);
-  m.querySelector('[data-x]').onclick = () => m.remove();
-  m.querySelector('[data-ok]').onclick = () => { const withInk = m.querySelector('#dInk').checked; m.remove(); run(list, coll, withInk); };
+/* The list file of one setlist: its name, its date in words, then the songs numbered and the breaks as they come. A song whose PDF
+   is not on this tablet is listed and says so. */
+export function listText(st, fileOf){
+  const lines = [st.name], g = gigOf(st);
+  if(g) lines.push(gigLong(g));
+  lines.push('');
+  let k = 0;
+  for(const it of liveItems(st)){
+    if(it.type === 'break') lines.push(`--- ${it.name} ---`);
+    else lines.push(`${++k}. ${titleOf(it.id)}${fileOf.has(it.id) ? '' : ' (no PDF on this tablet)'}`);
+  }
+  return lines.join('\n') + '\n';
 }
 
-async function run(list, coll, withInk){
+export function downloadAll(sets, coll){
+  const list = sets.filter(st => songIdsOf(st).length), skipped = sets.length - list.length;
+  if(!list.length){ toast('No setlists with songs to download'); return; }
+  const m = modal(`<h2>Download all setlists</h2><p class="hint">Makes one zip file with each chart once, and a list of songs for each of your ${list.length} setlist${list.length == 1 ? '' : 's'}.${skipped ? ` ${skipped} setlist${skipped == 1 ? ' has' : 's have'} no songs and ${skipped == 1 ? 'is' : 'are'} skipped.` : ''} Charts are saved as they are, without your marks. To print a setlist with your marks, open it and tap Download PDF.</p>
+    <div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Make zip</button></div>`);
+  m.querySelector('[data-x]').onclick = () => m.remove();
+  m.querySelector('[data-ok]').onclick = () => { m.remove(); run(list, coll); };
+}
+
+async function run(list, coll){
   const job = busy('Downloading setlists', 'Getting ready…');            // before the first await: Escape and Stop reach this box
   const stopped = () => { job.close(); toast('Stopped. Nothing was downloaded.'); };
   try{
-    if(await estimate(list) > limits.maxBytes){
-      job.close();
-      await notice('Too much to make at once', 'That is too much to make at once on a tablet. Download setlists one at a time, or show one collection first.');
-      return;
-    }
-    const zip = new JSZip(), names = zipNames(list), left = [];
-    let made = 0;
-    for(const [i, st] of list.entries()){
+    const ids = [...new Set(list.flatMap(songIdsOf))];
+    let size = 0; const have = [];
+    for(const id of ids){ const b = await get('files', id); if(b){ size += b.size; have.push(id); } }
+    if(size > limits.maxBytes){ job.close(); await notice(...TOO_MUCH); return; }
+    if(job.stopped) return stopped();
+    const zip = new JSZip(), fileOf = new Map();
+    uniqueNames(have.map(id => fileName(titleOf(id))), '.pdf').forEach((n, i) => fileOf.set(have[i], 'Songs/' + n));
+    for(const [i, id] of have.entries()){
       if(job.stopped) return stopped();
-      job.say(`Making setlist ${i + 1} of ${list.length}: ${st.name}…`);
-      const r = await buildSetPdf(songIds(st), withInk, {pictures:true, cancelled:() => job.stopped});
-      if(r.cancelled || job.stopped) return stopped();
-      for(const x of r.left) left.push({set:st.name, title:(songById(x.id) || {}).title || 'A song', why:WHY[x.why] || WHY.broken});
-      if(r.bytes){ zip.file(names[i], r.bytes, {binary:true}); made++; }
+      job.say(`Adding chart ${i + 1} of ${have.length}: ${titleOf(id)}…`);
+      const b = await get('files', id);
+      if(!b){ fileOf.delete(id); continue; }                              // deleted while this runs: listed as having no PDF
+      zip.file(fileOf.get(id), await b.arrayBuffer());                    // the bytes as they are; nothing is stored again
     }
-    if(!made){ job.close(); await notice('Nothing to download', 'None of the setlists could be made into a PDF.'); return; }
+    uniqueNames(list.map(setBaseName), '.txt').forEach((n, i) => zip.file('Setlists/' + n, listText(list[i], fileOf)));
+    const left = [];
+    for(const st of list) for(const id of new Set(songIdsOf(st))) if(!fileOf.has(id)) left.push({set:st.name, title:titleOf(id)});
     job.say('Making the zip file…');
-    const blob = await zip.generateAsync({type:'blob', compression:'STORE'}, m => job.say(`Making the zip file… ${Math.round(m.percent)}%`));
+    const blob = await zip.generateAsync({type:'blob', compression:'STORE'}, m => { if(!job.stopped) job.say(`Making the zip file… ${Math.round(m.percent)}%`); });
     if(job.stopped) return stopped();                                      // pressed during the last step, which cannot be interrupted: the file is thrown away
     job.close();
     const name = fileName(coll ? `Setlists - ${coll.name} - Setlist Stand` : 'Setlists - Setlist Stand') + '.zip';
     saveBlob(blob, name);
-    finish(blob, name, made, left);
+    finish(blob, name, fileOf.size, list.length, left);
   }catch(err){ job.close(); toast(explainError(err, 'Could not make the zip. Nothing was downloaded.')); }
 }
 
-/* After the save: a box that stays until OK when a chart was left out or the browser can share the file, else a toast. */
-function finish(blob, name, made, left){
+/* After the save: a box that stays until OK when a chart is missing or the browser can share the file, else a toast. */
+function finish(blob, name, charts, lists, left){
   const share = canShareFile(blob, name);
-  if(!left.length && !share){ toast(`Saved ${made} setlist PDF${made == 1 ? '' : 's'}`); return; }
-  const m = modal(`<h2>Zip saved</h2><p class="hint">${esc(made)} setlist PDF${made == 1 ? '' : 's'} in ${esc(name)}, in your downloads.</p>
-    ${left.length ? `<p class="hint">Left out:</p><ul class="locked left">${left.map(x => `<li>${esc(x.set)}: ${esc(x.title)} ${esc(x.why)}</li>`).join('')}</ul>` : ''}
+  if(!left.length && !share){ toast(`Saved ${charts} chart${charts == 1 ? '' : 's'} and ${lists} setlist${lists == 1 ? '' : 's'}`); return; }
+  const m = modal(`<h2>Zip saved</h2><p class="hint">${esc(charts)} chart${charts == 1 ? '' : 's'} and ${esc(lists)} setlist${lists == 1 ? '' : 's'} in ${esc(name)}, in your downloads.</p>
+    ${left.length ? `<p class="hint">Not in the zip:</p><ul class="locked left">${left.map(x => `<li>${esc(x.set)}: ${esc(x.title)} has no PDF on this tablet</li>`).join('')}</ul>` : ''}
     <div class="btns">${share ? '<button data-share>Share…</button>' : ''}<button class="pri" data-x>Done</button></div>`);
   m.querySelector('[data-x]').onclick = () => m.remove();
   if(share) m.querySelector('[data-share]').onclick = () => shareBlob(blob, name);

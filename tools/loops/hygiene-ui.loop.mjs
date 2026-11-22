@@ -452,6 +452,9 @@ async function downloadDialogLoop(ctx){
     await page.waitForSelector(da + ':not([disabled])');
     await page.focus(da); await page.keyboard.press('Enter');
     await page.locator('.modal h2', {hasText: 'Download all setlists'}).waitFor({timeout: 5000}).catch(() => { throw new Error('the Download all dialog did not open'); });
+    assert(!(await page.locator('.modal #dInk').count()), 'the Download all dialog still has an annotations tick box');
+    const btns = (await page.locator('.modal .btns button').allTextContents()).join('|');
+    assert(btns === 'Cancel|Make zip', 'the Download all buttons read ' + btns);
     await checkDialog(page, 'Download all dialog');
     await escapeBack(page, da, 'Download all dialog');
 

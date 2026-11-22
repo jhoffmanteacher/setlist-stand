@@ -1,5 +1,5 @@
 /*
- * Print loops: what the Print PDF button PRODUCES is rendered back with pdf.js (an independent path from pdf-lib,
+ * Print loops: what the Download PDF button (and Download all) PRODUCES is rendered back with pdf.js (an independent path from pdf-lib,
  * which wrote it), and the pixels and text are compared with what went in (set order, stored strokes and notes,
  * the crop, the viewer's own canvases, the source PDF).
  * Positions are compared in fractions of the shown page (or of the cropped area), never in absolute pixels.
@@ -371,30 +371,6 @@ async function downloadOne(page, withInk, how){
   await page.waitForFunction(() => !document.querySelector('.modal'));
   return {bytes: await fsp.readFile(dl.file), name: dl.name};
 }
-/* Download all through the real dialog. Returns the zip, its name, the first dialog's text, every busy line shown,
-   and the final dialog's text and list items (null when it closed with a toast). */
-async function downloadAll(page, withInk){
-  await toLibrary(page);
-  await page.click('#tSets');
-  await page.click('#view [data-dlall]');
-  const m = page.locator('.modal');
-  await m.locator('#dInk').waitFor();
-  const ask = (await m.textContent()).replace(/\s+/g, ' ');
-  await m.locator('#dInk').setChecked(withInk);
-  await page.evaluate(() => { window.__dl = []; window.__dlOb = new MutationObserver(() => {
-    const t = document.querySelector('.modal [role=status]')?.textContent;
-    if(t && window.__dl.at(-1) !== t) window.__dl.push(t); });
-    window.__dlOb.observe(document.body, {subtree: true, childList: true, characterData: true}); });
-  const dl = await download(page, () => m.locator('[data-ok]').click());
-  const statuses = await page.evaluate(() => { window.__dlOb.disconnect(); return window.__dl; });
-  let fin = null;
-  if(await page.waitForFunction(() => /Zip saved/.test(document.querySelector('.modal h2')?.textContent || ''), null, {timeout: 5000}).then(() => true, () => false)){
-    fin = {text: (await dialogText(page)).replace(/\s+/g, ' '), items: (await page.locator('.modal li').allTextContents()).map(x => x.trim())};
-    await page.click('.modal [data-x]');
-  }
-  await page.waitForFunction(() => !document.querySelector('.modal'));
-  return {bytes: await fsp.readFile(dl.file), name: dl.name, ask, statuses, fin};
-}
 /* The zip's own central directory, read byte by byte (not through JSZip): [{name, method, csize, usize}]. */
 function zipDirectory(buf){
   let e = buf.length - 22;
@@ -411,6 +387,89 @@ function zipDirectory(buf){
   }
   return out;
 }
+/* Download all through the real dialog, however it ends. stopAt (a RegExp): the page itself taps Stop the moment the busy line
+   matches it. Returns {ask: the first dialog's text; end: the title of the dialog it ended on, or 'closed'; statuses: every busy
+   line shown; stoppedAt; toast; text and items of the dialog it ended on; dls: every download it caused}. The dialog it ended on
+   is closed. */
+async function downloadAllRun(page, {stopAt = null} = {}){
+  await toLibrary(page);
+  await page.click('#tSets');
+  const dls = [], onDl = d => dls.push(d);
+  page.on('download', onDl);
+  try{
+    await page.evaluate(() => { const t = document.querySelector('#toast'); if(t) t.textContent = ''; });
+    await page.click('#view [data-dlall]');
+    const m = page.locator('.modal');
+    await m.locator('[data-ok]').waitFor();
+    const ask = (await m.textContent()).replace(/\s+/g, ' ');
+    await page.evaluate(stop => { window.__dl = []; window.__dlStop = null; const re = stop ? new RegExp(stop) : null;
+      window.__dlOb = new MutationObserver(() => {
+        const t = document.querySelector('.modal [role=status]')?.textContent;
+        if(!t || window.__dl.at(-1) === t) return;
+        window.__dl.push(t);
+        if(re && !window.__dlStop && re.test(t)){ window.__dlStop = t; document.querySelector('.modal [data-x]').click(); }
+      });
+      window.__dlOb.observe(document.body, {subtree: true, childList: true, characterData: true}); }, stopAt ? stopAt.source : null);
+    await m.locator('[data-ok]').click();
+    const end = await (await page.waitForFunction(() => {
+      if(!document.querySelector('.modal')) return 'closed';
+      const h = document.querySelector('.modal h2')?.textContent || '';
+      return /^(Zip saved|Too much to make at once)$/.test(h) ? h : false;
+    }, null, {timeout: 120000})).jsonValue();
+    await sleep(1000);                                     // a download the app started arrives in Playwright a moment later
+    const {statuses, stoppedAt} = await page.evaluate(() => { window.__dlOb.disconnect(); return {statuses: window.__dl, stoppedAt: window.__dlStop}; });
+    const toastText = (await page.locator('#toast').textContent()) || '';
+    let text = '', items = [];
+    if(end !== 'closed'){
+      text = (await dialogText(page)).replace(/\s+/g, ' ');
+      items = (await page.locator('.modal li').allTextContents()).map(x => x.trim());
+      await page.click('.modal [data-x]');
+      await page.waitForFunction(() => !document.querySelector('.modal'));
+    }
+    return {ask, end, statuses, stoppedAt, toast: toastText, text, items, dls: [...dls]};
+  } finally { page.off('download', onDl); }
+}
+const setDlLimit = (page, n) => page.evaluate(async n => { (await import(new URL('js/downloadall.js', location.href).href)).limits.maxBytes = n; }, n);
+/* The order the app holds its setlists in (Download all walks them in this order), read from the app's own store module. */
+const setOrder = page => page.evaluate(async () => (await import(new URL('js/store.js', location.href).href)).state.sets.map(st => st.id));
+/* Whether this browser can share a zip file (then the app shows "Zip saved" with Share… even when nothing is missing). */
+const canShareZip = page => page.evaluate(() => { try{ const b = new Blob(['x'], {type: 'application/zip'});
+  return !!(navigator.canShare && navigator.canShare({files: [new File([b], 'x.zip', {type: b.type})]})); }catch(e){ return false; } });
+/* A one-page chart reading `label`. */
+async function chartPdf(file, label){
+  const doc = await PL.PDFDocument.create(), font = await doc.embedFont(PL.StandardFonts.HelveticaBold);
+  const pg = doc.addPage([PW, PH]);
+  pg.drawText(label, {x: 72, y: 600, size: 30, font, color: PL.rgb(0, 0, 0)});
+  const f = path.join(TMP, file);
+  fs.writeFileSync(f, await doc.save());
+  return f;
+}
+/* A download saved and read back: {dir: the zip's own directory, files: {name: Buffer} read through JSZip with its CRC check}. */
+async function readZip(dl){
+  const f = path.join(TMP, `${Date.now()}-${dl.suggestedFilename()}`);
+  await dl.saveAs(f);
+  const bytes = fs.readFileSync(f), zip = await JSZip.loadAsync(bytes, {checkCRC32: true}), files = {};
+  for(const n of Object.keys(zip.files).filter(n => !zip.files[n].dir).sort()) files[n] = await zip.file(n).async('nodebuffer');
+  return {dir: zipDirectory(bytes), files};
+}
+/* Entries of the zip's own directory that are not stored (method 0 in the directory and the local header, no smaller than it is). */
+const notStored = dir => dir.filter(e => e.method !== 0 || e.localMethod !== 0 || e.csize !== e.usize).map(e => `${e.name}: method ${e.method}/${e.localMethod}, ${e.csize} of ${e.usize} bytes`);
+/* Folder entries other than the two the zip may hold. */
+const strayDirs = dir => dir.filter(e => e.name.endsWith('/') && !['Songs/', 'Setlists/'].includes(e.name)).map(e => e.name);
+/* " (2)", " (3)" on a clash, case ignored: the names the test expects, given the bases in the app's order. */
+function expectNames(bases, ext){
+  const used = new Set();
+  return bases.map(base => { let n = base, k = 1; while(used.has(n.toLowerCase())) n = `${base} (${++k})`; used.add(n.toLowerCase()); return n + ext; });
+}
+/* A title that fileName leaves as it is (test setup: the fixtures' titles), returned unchanged. */
+function fileNameOk(t){
+  assert(t && t === t.trim() && t.length <= 150 && t === t.normalize('NFC') && !/[\\/:*?"<>|\u0000-\u001f\u007f]/.test(t), `test setup: the title ${JSON.stringify(t)} would be changed by fileName`);
+  return t;
+}
+const longDate = (page, g) => page.evaluate(g => { const [y, m, d] = g.split('-').map(Number);
+  return new Intl.DateTimeFormat(undefined, {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'}).format(new Date(y, m - 1, d, 12)); }, g);
+const deleteFile = (page, id) => page.evaluate(id => new Promise((res, rej) => { const r = indexedDB.open('setlist-stand'); r.onerror = () => rej(r.error);
+  r.onsuccess = () => { const t = r.result.transaction('files', 'readwrite'); t.objectStore('files').delete(id); t.oncomplete = () => { r.result.close(); res(); }; t.onerror = () => rej(t.error); }; }), id);
 
 /* ======================================================================================================== */
 export const loops = [
@@ -820,157 +879,185 @@ export const loops = [
   } finally { await s.close(); }
 }},
 
-{name: 'print: Download all zips each setlist\'s own Download PDF (dated and " (2)" names, empty skipped, stored; marks, crops, rotation, pictures; password chart named), library unchanged', async run(ctx){
-  const s = await ctx.session(), page = s.page;
+{name: 'print: Download all makes one stored zip: each chart once as its stored bytes (a protected one too), one list per setlist (gig date, break, repeat, archived, no PDF), " (2)" names, empty skipped, library unchanged; Download PDF keeps its dated name', async run(ctx){
+  const s = await ctx.session(), page = s.page, fails = [];
+  const NFC = 'Café', NFD = 'Café';
   try{
-    /* fixtures: an open /Rotate 90 page, an encrypted copy of two-page.pdf, and a chart whose stored bytes need a password */
-    const doc = await PL.PDFDocument.create(), font = await doc.embedFont(PL.StandardFonts.HelveticaBold);
-    const rp = doc.addPage([PW, PH]);
-    rp.drawRectangle({x: 100, y: 160, width: 80, height: 80, color: PL.rgb(0, 160 / 255, 0)});
-    rp.drawText('Rotated 90', {x: 200, y: 400, size: 30, font, color: PL.rgb(0, 0, 0)});
-    rp.setRotation(PL.degrees(90));
-    const rot = path.join(TMP, 'dlall-rot90.pdf'); fs.writeFileSync(rot, await doc.save());
     const locked = encryptPdf(path.join(FIX, 'two-page.pdf'), path.join(TMP, 'dlall-two-locked.pdf'));
-    const placeholder = encryptPdf(path.join(FIX, 'three-page.pdf'), path.join(TMP, 'Locked Out.pdf'));
-    const pw = fs.readFileSync(encryptPdf(path.join(FIX, 'three-page.pdf'), path.join(TMP, 'dlall-real-password.pdf'), 'secret'));
+    const made = {};
+    for(const [k, label] of [['AR', 'Archived chart'], ['M', 'Gone chart'], ['T1', 'Twin one'], ['T2', 'Twin two'], ['SL', 'Slash chart']]) made[k] = await chartPdf(`dlall-${k}.pdf`, label);
+    const src = {A: path.join(FIX, 'two-page.pdf'), B: path.join(FIX, 'three-page.pdf'), C: path.join(FIX, 'one-page.pdf'), LA: locked, ...made};
     await s.goto();
-    const files = [path.join(FIX, 'one-page.pdf'), path.join(FIX, 'two-page.pdf'), path.join(FIX, 'three-page.pdf'), rot, locked, placeholder];
-    const ids = await importFiles(page, files);
-    const C = ids['one-page.pdf'], A = ids['two-page.pdf'], B = ids['three-page.pdf'], R = ids['dlall-rot90.pdf'], LA = ids['dlall-two-locked.pdf'], NP = ids['Locked Out.pdf'];
-    /* marks (pen, highlighter, note), crops (song-wide, one page), stored records as the input */
-    const pen = {id: 'pen', updated: 1, t: 'pen', c: RED, w: .006, p: [[.15, .15], [.3, .2], [.45, .28]]};
-    const marks = [pen, {id: 'hl', updated: 1, t: 'hl', c: YELLOW, w: .02, p: [[.5, .7], [.7, .72], [.85, .75]]},
-      {id: 'note', updated: 1, t: 'text', x: .12, y: .4, text: 'Verse 2', size: .018, c: BLUE}];
-    const cropB = {x: .12, y: .1, w: .78, h: .7}, cropA2 = {x: .1, y: .1, w: .8, h: .75}, cropR = {x: .08, y: .12, w: .87, h: .73};
-    for(const [id, pns] of [[A, [1, 2]], [B, [1, 3]], [R, [1]], [LA, [1, 2]], [C, [1]]]) for(const pn of pns) await idbPut(page, 'ink', id + ':' + pn, {updated: 1, strokes: marks});
+    const byFile = await importFiles(page, Object.values(src)), id = {};
+    for(const [k, f] of Object.entries(src)) id[k] = byFile[path.basename(f)];
     const songs0 = await songsById(page);
-    for(const [id, crop] of [[A, {all: null, pages: {2: cropA2}}], [LA, {all: null, pages: {2: cropA2}}], [B, {all: cropB, pages: {}}], [R, {all: cropR, pages: {}}]])
-      await idbPut(page, 'songs', id, {...songs0[id], crop});
-    await idbPut(page, 'files', NP, null, pw.toString('base64'));
-    await s.goto();                                         // the app reads songs (and their crops) at start
-    const songs = await songsById(page);
-    /* the setlists, made through the real dialogs; one gets a gig date (next year: in the open Upcoming group) */
+    /* the setlists, made through the real dialogs (songs picked by the titles they were imported with) */
     const gig = `${new Date().getFullYear() + 1}-03-14`;
     const sets = [
-      {key: 'gig', name: 'Gig night', ids: [A, B, R], how: 'plain', file: `${gig} Gig night.pdf`},
-      {key: 'same1', name: 'Same name', ids: [C, A], how: 'plain', file: 'Same name.pdf'},
-      {key: 'same2', name: 'Same name', ids: [B], how: 'plain', file: 'Same name.pdf'},
-      {key: 'prot', name: 'Protected', ids: [LA, C, LA], how: 'pics', file: 'Protected.pdf'},
-      {key: 'pw', name: 'Password', ids: [NP, A], how: 'without', file: 'Password.pdf'},
-      {key: 'empty', name: 'Empty', ids: [], file: null},
+      {key: 'gig', name: 'Gig night', items: ['A', '-', 'C', 'A', 'AR']},
+      {key: 'odd', name: 'Odd ones', items: ['LA', 'M']},
+      {key: 'same1', name: 'Same name', items: ['C', 'B']},
+      {key: 'same2', name: 'Same name', items: ['B']},
+      {key: 'nfc', name: NFC, items: ['C']},
+      {key: 'nfd', name: NFD, items: ['A']},
+      {key: 'twins', name: 'Twins', items: ['T1', 'T2', 'SL']},
+      {key: 'empty', name: 'Empty', items: []},
     ];
     for(const st of sets){
       st.id = await newSetId(page, st.name);
-      for(const id of st.ids) await addSong(page, songs[id].title);
+      for(const k of st.items) if(k === '-') await addBreak(page); else await addSong(page, songs0[id[k]].title);
+      if(st.key === 'gig'){
+        await page.click('#view [data-gig]');
+        await page.locator('.modal input[type=date]').fill(gig);
+        await page.click('.modal [data-ok]');
+        await waitFor(async () => (await idbAll(page, 'sets'))[st.id].gig === gig, 'gig date not saved');
+        await page.waitForFunction(() => !document.querySelector('.modal'));
+      }
     }
-    await openSetById(page, sets[0].id);
-    await page.click('#view [data-gig]');
-    await page.locator('.modal input[type=date]').fill(gig);
-    await page.click('.modal [data-ok]');
-    await waitFor(async () => (await idbAll(page, 'sets'))[sets[0].id].gig === gig, 'gig date not saved');
-    await page.waitForFunction(() => !document.querySelector('.modal'));
+    const stored = await idbAll(page, 'sets');
+    assert(stored[sets[4].id].name === NFC && stored[sets[5].id].name === NFD, 'test setup: the two Café names are not stored as typed');
+    /* titles set on the records (two that differ only in case, one with a slash), one archived, one chart's PDF gone */
+    const TITLE = {A: 'Song A', B: 'Song B', C: 'Song C', LA: 'Locked A', AR: 'Old Tune', M: 'Gone Song', T1: 'Twin', T2: 'TWIN', SL: 'AC/DC Medley'};
+    for(const [k, t] of Object.entries(TITLE)) await idbPut(page, 'songs', id[k], {...songs0[id[k]], song: t, artist: '', version: '', title: t, archived: k === 'AR'});
+    await deleteFile(page, id.M);
+    await s.goto();                                         // the app reads the records at start
+    const songs = await songsById(page);
+    for(const [k, t] of Object.entries(TITLE)) assert(songs[id[k]].title === t && songs[id[k]].archived === (k === 'AR'), `test setup: ${k} is ${fmt(songs[id[k]])}`);
     const before = await snapshot(page);
-    const full = sets.filter(st => st.ids.length), fails = [];
-    const textsOf = pages => pages.map(p => p.text);
-    const bare = pages => pages.map(p => p.text.replace(/Verse 2/g, '').trim());     // the page's own text, without the text note
-    for(const withInk of [true, false]){
-      const tag = withInk ? 'with annotations' : 'without annotations';
-      /* each setlist alone, through Download PDF */
-      for(const st of full){
-        await openSetById(page, st.id);
-        const one = await downloadOne(page, withInk, st.how);
-        assert(one.name === st.file, `${tag}: Download PDF of "${st.name}" saved as "${one.name}", expected "${st.file}"`);
-        st.one = one.bytes;
-      }
-      /* all together */
-      const z = await downloadAll(page, withInk);
-      assert(z.name === 'Setlists - Setlist Stand.zip', `${tag}: the zip is called "${z.name}"`);
-      assert(z.ask.includes(`Makes one PDF for each of your ${full.length} setlists, in one zip file.`) && z.ask.includes('1 setlist has no songs and is skipped.'), `${tag}: the dialog reads "${z.ask}"`);
-      const making = z.statuses.filter(t => /^Making setlist/.test(t));
-      const wantMaking = full.map((_, i) => new RegExp(`^Making setlist ${i + 1} of ${full.length}: `));
-      if(!(making.length === full.length && making.every((t, i) => wantMaking[i].test(t)) && z.statuses.some(t => /^Making the zip file/.test(t))))
-        fails.push(`${tag}: busy lines ${fmt(z.statuses)}`);
-      const npItem = `Password: ${songs[NP].title} needs a password`;
-      if(!z.fin) fails.push(`${tag}: no "Zip saved" dialog naming the left-out chart`);
-      else {
-        if(fmt(z.fin.items) !== fmt([npItem])) fails.push(`${tag}: left out ${fmt(z.fin.items)}, expected ${fmt([npItem])}`);
-        if(!z.fin.text.includes(`${full.length} setlist PDFs in Setlists - Setlist Stand.zip`)) fails.push(`${tag}: final dialog reads "${z.fin.text}"`);
-      }
-      /* the zip read back: its own directory, then JSZip */
-      const dir = zipDirectory(z.bytes);
-      for(const e of dir) if(e.method !== 0 || e.localMethod !== 0 || e.csize !== e.usize) fails.push(`${tag}: zip entry "${e.name}" is not stored: method ${e.method}/${e.localMethod}, ${e.csize} of ${e.usize} bytes`);
-      const zip = await JSZip.loadAsync(z.bytes, {checkCRC32: true});
-      const names = Object.keys(zip.files).filter(n => !zip.files[n].dir).sort();
-      const wantNames = [`${gig} Gig night.pdf`, 'Password.pdf', 'Protected.pdf', 'Same name (2).pdf', 'Same name.pdf'].sort();
-      assert(fmt(names) === fmt(wantNames) && fmt(dir.map(e => e.name).sort()) === fmt(wantNames), `${tag}: zip holds ${fmt(names)} (directory ${fmt(dir.map(e => e.name))}), expected ${fmt(wantNames)}`);
-      /* which entry is which setlist: unique names by name, the two "Same name" sets by what their pages read */
-      const entry = {};
-      for(const n of names){
-        const bytes = await zip.file(n).async('nodebuffer');
-        entry[n] = {bytes, pages: await renderPdf(page, 'z:' + n, bytes, 1)};
-      }
-      const claimed = new Set();
-      for(const st of full){
-        const mine = await renderPdf(page, 'one:' + st.key, st.one, 1);
-        const cands = st.file === 'Same name.pdf' ? ['Same name.pdf', 'Same name (2).pdf'] : [st.file];
-        const n = cands.find(c => !claimed.has(c) && fmt(textsOf(entry[c].pages)) === fmt(textsOf(mine)));
-        if(!n){ fails.push(`${tag}: no zip entry among ${fmt(cands)} reads like "${st.name}"'s own PDF ${fmt(textsOf(mine))} (zip: ${fmt(cands.map(c => textsOf(entry[c].pages)))})`); continue; }
-        claimed.add(n); st.entry = n; st.mine = mine;
-        const zp = entry[n].pages;
-        if(zp.length !== mine.length){ fails.push(`${tag}: "${n}" has ${zp.length} pages, the setlist's own PDF ${mine.length}`); continue; }
-        for(let i = 0; i < zp.length; i++){
-          if(!near(zp[i].vw, mine[i].vw, .5) || !near(zp[i].vh, mine[i].vh, .5)) fails.push(`${tag}: "${n}" page ${i + 1} is ${zp[i].vw.toFixed(1)}x${zp[i].vh.toFixed(1)}pt, own PDF ${mine[i].vw.toFixed(1)}x${mine[i].vh.toFixed(1)}pt`);
-          const d = await pixDiff(page, 'z:' + n, i, 'one:' + st.key, i);
-          if(d.size) fails.push(`${tag}: "${n}" page ${i + 1} renders ${d.size.slice(0, 2).join('x')}px, own PDF ${d.size.slice(2).join('x')}px`);
-          else if(!(d.nDiff / d.total <= 1e-4 && d.max <= 32)) fails.push(`${tag}: "${n}" page ${i + 1} differs from the setlist's own PDF: ${d.nDiff} of ${d.total} pixels, max ${d.max}`);
-        }
-      }
-      /* the comparison has teeth: what went in is visible in the zip's PDFs (marks only with annotations, crops, rotation, pictures) */
-      const G = sets[0], P = sets[3], W = sets[4];
-      if(G.entry){
-        const k = 'z:' + G.entry, gp = entry[G.entry].pages;
-        const want = ['Fixture Song A — page 1', 'Fixture Song A — page 2', 'Fixture Song B — page 1', 'Fixture Song B — page 2', 'Fixture Song B — page 3', 'Rotated 90'];
-        if(fmt(bare(gp)) !== fmt(want)) fails.push(`${tag}: "${G.entry}" reads ${fmt(bare(gp))}, expected ${fmt(want)}`);
-        const red = await boxOf(page, k, 0, {c: RED, aMin: .5}), blue = await boxOf(page, k, 0, {c: BLUE, aMin: .5});
-        if(withInk){
-          if(!boxNear(red, strokeBox(pen), pen.w + .02, pen.w * PW / PH + .02)) fails.push(`${tag}: pen on "${G.entry}" page 1 at ${bb(red)}, stored ${fmt(strokeBox(pen))}`);
-          if(!(blue.n && near(blue.x0, .12, .03) && near(blue.y0, .4, .03))) fails.push(`${tag}: note on "${G.entry}" page 1 at ${bb(blue)}, stored at [.12, .4]`);
-        } else for(let i = 0; i < gp.length; i++){
-          const r = await boxOf(page, k, i, {c: RED, aMin: .5}), b = await boxOf(page, k, i, {c: BLUE, aMin: .5});
-          if(r.n || b.n) fails.push(`${tag}: "${G.entry}" page ${i + 1} has marks: red ${bb(r)}, blue ${bb(b)}`);
-        }
-        const asp = (c, w, h) => c.w * w / (c.h * h);
-        for(const [i, a] of [[1, asp(cropA2, PW, PH)], [2, asp(cropB, PW, PH)], [4, asp(cropB, PW, PH)], [5, asp(cropR, PH, PW)]])
-          if(!near(gp[i].vw / gp[i].vh, a, a * .01)) fails.push(`${tag}: "${G.entry}" page ${i + 1} visible aspect ${(gp[i].vw / gp[i].vh).toFixed(4)}, crop aspect ${a.toFixed(4)}`);
-        if(!(gp[5].vw > gp[5].vh)) fails.push(`${tag}: the /Rotate 90 page is not landscape: ${gp[5].vw.toFixed(1)}x${gp[5].vh.toFixed(1)}pt`);
-      }
-      if(P.entry){
-        const pp = entry[P.entry].pages;
-        if(!(pp.length === 5 && [0, 1, 3, 4].every(i => !/Fixture Song/.test(pp[i].text)) && bare(pp)[2] === 'Fixture Song C — page 1'))
-          fails.push(`${tag}: "${P.entry}" should be picture, picture, C, picture, picture: reads ${fmt(textsOf(pp))}`);
-        const r = await boxOf(page, 'z:' + P.entry, 0, {c: RED, aMin: .5});
-        if(withInk ? !r.n : r.n) fails.push(`${tag}: picture page 1 of "${P.entry}" red pen ${bb(r)}`);
-      }
-      if(W.entry && fmt(bare(entry[W.entry].pages)) !== fmt(['Fixture Song A — page 1', 'Fixture Song A — page 2'])) fails.push(`${tag}: "${W.entry}" reads ${fmt(bare(entry[W.entry].pages))}, expected only song A`);
-      await page.evaluate(() => { window.__pl.store = {}; });
+
+    /* Download PDF on one setlist keeps its own dated file name */
+    await openSetById(page, sets[0].id);
+    const one = await downloadOne(page, true, 'plain');
+    if(one.name !== `${gig} Gig night.pdf`) fails.push(`Download PDF of "Gig night" saved as "${one.name}", expected "${gig} Gig night.pdf"`);
+
+    /* Download all */
+    const r = await downloadAllRun(page);
+    const full = sets.filter(st => st.items.length);
+    if(!r.ask.includes(`Makes one zip file with each chart once, and a list of songs for each of your ${full.length} setlists. 1 setlist has no songs and is skipped.`)) fails.push('the first dialog reads ' + r.ask);
+    const order = (await setOrder(page)).map(x => sets.find(st => st.id === x)).filter(st => st && st.items.length);
+    assert(order.length === full.length, 'test setup: the app holds ' + fmt(order.map(st => st && st.name)));
+    /* charts in the order the app meets them (setlist order, then row order), each once, the missing one left out */
+    const charts = [...new Set(order.flatMap(st => st.items.filter(k => k !== '-')))].filter(k => k !== 'M');
+    const adding = r.statuses.filter(t => /^Adding chart/.test(t));
+    const wantAdding = charts.map((k, i) => `Adding chart ${i + 1} of ${charts.length}: ${TITLE[k]}…`);
+    if(fmt(adding) !== fmt(wantAdding) || !r.statuses.some(t => /^Making the zip file/.test(t))) fails.push(`busy lines ${fmt(r.statuses)}, expected ${fmt(wantAdding)} then "Making the zip file…"`);
+    const leftItem = `Odd ones: ${TITLE.M} has no PDF on this tablet`;
+    if(r.end !== 'Zip saved') fails.push(`a chart without a PDF: ended on "${r.end}" (toast "${r.toast}"), expected the "Zip saved" box naming it`);
+    else {
+      if(fmt(r.items) !== fmt([leftItem])) fails.push(`the final box lists ${fmt(r.items)}, expected ${fmt([leftItem])}`);
+      if(!r.text.includes(`${charts.length} charts and ${full.length} setlists in Setlists - Setlist Stand.zip, in your downloads.`)) fails.push('the final box reads ' + r.text);
     }
-    /* above the size limit (lowered for the test on the app's own module): refused before any work, nothing downloaded */
-    await page.evaluate(async () => { (await import(new URL('js/downloadall.js', location.href).href)).limits.maxBytes = 1; });
-    const dls = []; page.on('download', d => dls.push(d.suggestedFilename()));
-    await toLibrary(page); await page.click('#tSets'); await page.click('#view [data-dlall]');
-    await page.locator('.modal [data-ok]').click();
-    await page.waitForFunction(() => /Too much to make at once/.test(document.querySelector('.modal h2')?.textContent || ''), null, {timeout: 10000})
-      .catch(async () => { throw new Error(`no size refusal: dialog "${await dialogText(page)}", toast "${await page.locator('#toast').textContent()}"`); });
-    const refusal = (await dialogText(page)).replace(/\s+/g, ' ');
-    if(!refusal.includes('That is too much to make at once on a tablet. Download setlists one at a time, or show one collection first.')) fails.push('size refusal reads ' + refusal);
-    await page.click('.modal [data-x]');
-    await sleep(500);
-    if(dls.length) fails.push('the size refusal downloaded ' + fmt(dls));
-    await page.evaluate(async () => { (await import(new URL('js/downloadall.js', location.href).href)).limits.maxBytes = 400e6; });
-    const after = await snapshot(page), d = diff(before, after);
-    if(d.length) fails.push('the library changed during the downloads: ' + d.join('; '));
+    if(r.dls.length !== 1) fails.push(`${r.dls.length} downloads, expected one zip`);
+    else {
+      const dl = r.dls[0];
+      if(dl.suggestedFilename() !== 'Setlists - Setlist Stand.zip') fails.push(`the zip is called "${dl.suggestedFilename()}"`);
+      const z = await readZip(dl);
+      const bad = notStored(z.dir); if(bad.length) fails.push('zip entries not stored: ' + bad.join('; '));
+      const stray = strayDirs(z.dir); if(stray.length) fails.push('stray folders in the zip: ' + fmt(stray));
+      /* the expected entries: charts by title (slash -> "-", "TWIN" after "Twin" gets " (2)"), lists by dated name */
+      const chartFile = {A: 'Song A.pdf', B: 'Song B.pdf', C: 'Song C.pdf', LA: 'Locked A.pdf', AR: 'Old Tune.pdf', T1: 'Twin.pdf', T2: 'TWIN (2).pdf', SL: 'AC-DC Medley.pdf'};
+      const listNames = expectNames(order.map(st => (st.key === 'gig' ? gig + ' ' : '') + st.name.normalize('NFC')), '.txt');
+      const long = await longDate(page, gig);
+      const listOf = st => {
+        const lines = [st.name]; if(st.key === 'gig') lines.push(long); lines.push('');
+        let n = 0;
+        for(const k of st.items) lines.push(k === '-' ? '--- Break ---' : `${++n}. ${TITLE[k]}${k === 'M' ? ' (no PDF on this tablet)' : ''}`);
+        return lines.join('\n') + '\n';
+      };
+      const want = {};
+      for(const k of charts) want['Songs/' + chartFile[k]] = 'chart ' + k;
+      order.forEach((st, i) => { want['Setlists/' + listNames[i]] = listOf(st); });
+      const got = Object.keys(z.files), wantNames = Object.keys(want).sort();
+      if(fmt(got) !== fmt(wantNames)) fails.push(`the zip holds ${fmt(got)}, expected ${fmt(wantNames)}`);
+      if(fmt(z.dir.filter(e => !e.name.endsWith('/')).map(e => e.name).sort()) !== fmt(wantNames)) fails.push('the zip directory lists ' + fmt(z.dir.map(e => e.name)));
+      /* each chart is the stored bytes: SHA-256 equal to the song's stored hash and to the file it was imported from */
+      for(const k of charts){
+        const b = z.files['Songs/' + chartFile[k]]; if(!b) continue;
+        const h = sha256(b), hf = sha256(fs.readFileSync(src[k]));
+        if(h !== songs[id[k]].hash || h !== hf) fails.push(`Songs/${chartFile[k]}: SHA-256 ${h}, stored hash ${songs[id[k]].hash}, imported file ${hf}`);
+      }
+      if(z.files['Songs/Locked A.pdf'] && !z.files['Songs/Locked A.pdf'].toString('latin1').includes('/Encrypt')) fails.push('the protected chart in the zip is not the protected file');
+      for(const [n, w] of Object.entries(want)) if(n.startsWith('Setlists/') && z.files[n]){
+        const t = z.files[n].toString('utf8');
+        if(t !== w) fails.push(`${n} reads ${JSON.stringify(t)}, expected ${JSON.stringify(w)}`);
+      }
+    }
+    const d = diff(before, await snapshot(page));
+    if(d.length) fails.push('the library changed: ' + d.join('; '));
     assert(!fails.length, fails.join('; '));
-    await sourceUntouched(page, ids, Object.fromEntries(files.filter(f => f !== placeholder).map(f => [path.basename(f), f])));
+    await sourceUntouched(page, {'two-page.pdf': id.A, 'three-page.pdf': id.B, 'one-page.pdf': id.C, 'dlall-two-locked.pdf': id.LA},
+      {'two-page.pdf': src.A, 'three-page.pdf': src.B, 'one-page.pdf': src.C, 'dlall-two-locked.pdf': locked});
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'print: Download all limits and Stop (distinct charts counted once, refused before any chart; Stop while adding and while zipping downloads nothing), file names, a collection\'s zip name', async run(ctx){
+  const s = await ctx.session(), page = s.page, fails = [];
+  try{
+    await s.goto();
+    /* the app's own fileName (js/util.js), which names every file in the zip and the zip */
+    const NFC = 'Café', NFD = 'Café';
+    const n = await page.evaluate(async ([nfc, nfd]) => {
+      const {fileName} = await import(new URL('js/util.js', location.href).href);
+      return {date: fileName('Sf 10/18/2026'), back: fileName('Gig\\Sf'), nfc: fileName(nfc), nfd: fileName(nfd), long: fileName('x'.repeat(300)),
+        ctl: fileName('Line one\nLine two\t!'), bad: fileName(':*?"<>|\n'), blank: fileName('   ')};
+    }, [NFC, NFD]);
+    const wantN = {date: 'Sf 10-18-2026', back: 'Gig-Sf', nfc: NFC, nfd: NFC, long: 'x'.repeat(150), ctl: 'Line oneLine two!', bad: 'setlist', blank: 'setlist'};
+    for(const k of Object.keys(wantN)) if(n[k] !== wantN[k]) fails.push(`fileName ${k}: got ${JSON.stringify(n[k])} (${[...n[k]].length} characters), expected ${JSON.stringify(wantN[k])}`);
+    /* three charts, each in two of three setlists: the distinct charts weigh D, counted per setlist 2 x D */
+    const src = {A: path.join(FIX, 'two-page.pdf'), B: path.join(FIX, 'three-page.pdf'), C: path.join(FIX, 'one-page.pdf')};
+    const byFile = await importFiles(page, Object.values(src)), id = {};
+    for(const [k, f] of Object.entries(src)) id[k] = byFile[path.basename(f)];
+    const songs = await songsById(page), sets = {};
+    for(const [name, ks] of [['X', ['A', 'B']], ['Y', ['B', 'C']], ['Z', ['C', 'A']]]){ sets[name] = await newSetId(page, name); for(const k of ks) await addSong(page, songs[id[k]].title); }
+    const D = Object.values(src).reduce((t, f) => t + fs.statSync(f).size, 0);
+    const before = await snapshot(page);
+    /* between D and 2 x D: it goes through */
+    await setDlLimit(page, Math.round(D * 1.5));
+    const r1 = await downloadAllRun(page);
+    if(r1.dls.length !== 1) fails.push(`limit 1.5 x the distinct charts: ${r1.dls.length} downloads, ended on "${r1.end}" ${r1.text} (toast "${r1.toast}"): a chart in two setlists was counted twice`);
+    else {
+      const z = await readZip(r1.dls[0]);
+      const want = ['Setlists/X.txt', 'Setlists/Y.txt', 'Setlists/Z.txt', ...Object.keys(src).map(k => `Songs/${fileNameOk(songs[id[k]].title)}.pdf`)].sort();
+      if(fmt(Object.keys(z.files)) !== fmt(want)) fails.push(`limit 1.5 x: the zip holds ${fmt(Object.keys(z.files))}, expected ${fmt(want)}`);
+      const share = await canShareZip(page);
+      if(share ? r1.end !== 'Zip saved' : (r1.end !== 'closed' || r1.toast !== 'Saved 3 charts and 3 setlists')) fails.push(`nothing missing (share ${share}): ended on "${r1.end}" ${r1.text}, toast "${r1.toast}"`);
+    }
+    /* one byte under D: refused before any chart is added, nothing downloads */
+    await setDlLimit(page, D - 1);
+    const r2 = await downloadAllRun(page);
+    if(r2.end !== 'Too much to make at once') fails.push(`limit D - 1: ended on "${r2.end}" (toast "${r2.toast}"), expected the size refusal`);
+    else if(!r2.text.includes('That is too much to make at once on a tablet. Show one collection first, or download fewer setlists.')) fails.push('the size refusal reads ' + r2.text);
+    if(r2.statuses.some(t => /^(Adding chart|Making)/.test(t))) fails.push('the size refusal came after work had started: ' + fmt(r2.statuses));
+    if(r2.dls.length) fails.push('the size refusal downloaded ' + fmt(r2.dls.map(d => d.suggestedFilename())));
+    await setDlLimit(page, 150e6);
+    /* Stop while charts are added, and while the zip is made: nothing downloads, the box closes with the toast */
+    for(const at of [/^Adding chart 2 of 3: /, /^Making the zip file/]){
+      const r = await downloadAllRun(page, {stopAt: at});
+      if(!r.stoppedAt) fails.push(`Stop at ${at}: the busy line never matched: ${fmt(r.statuses)}`);
+      if(r.dls.length) fails.push(`Stop at ${at} still downloaded ${fmt(r.dls.map(d => d.suggestedFilename()))}`);
+      if(r.end !== 'closed' || r.toast !== 'Stopped. Nothing was downloaded.') fails.push(`Stop at ${at}: ended on "${r.end}" ${r.text}, toast "${r.toast}"`);
+      const i = r.statuses.indexOf('Stopping…');
+      if(i < 0 || r.statuses.length !== i + 1) fails.push(`Stop at ${at}: the busy lines went on after Stop: ${fmt(r.statuses)}`);
+    }
+    const d = diff(before, await snapshot(page));
+    if(d.length) fails.push('the library changed: ' + d.join('; '));
+    /* a collection shown: only its setlists, and the zip says which (its name through fileName: the slash becomes "-") */
+    const now = Date.now();
+    await idbPut(page, 'colls', 'dlallband', {id: 'dlallband', name: 'Band A/B', created: now, updated: now});
+    const ys = (await idbAll(page, 'sets'))[sets.Y];
+    await idbPut(page, 'sets', sets.Y, {...ys, colls: ['dlallband']});
+    await page.evaluate(() => localStorage.setItem('ss-default-coll', 'dlallband'));
+    await s.goto();
+    const r3 = await downloadAllRun(page);
+    if(r3.dls.length !== 1) fails.push(`with a collection shown: ${r3.dls.length} downloads, ended on "${r3.end}" ${r3.text} (toast "${r3.toast}")`);
+    else {
+      if(r3.dls[0].suggestedFilename() !== 'Setlists - Band A-B - Setlist Stand.zip') fails.push(`with a collection shown the zip is called "${r3.dls[0].suggestedFilename()}"`);
+      const z = await readZip(r3.dls[0]);
+      const want = ['Setlists/Y.txt', ...['B', 'C'].map(k => `Songs/${fileNameOk(songs[id[k]].title)}.pdf`)].sort();
+      if(fmt(Object.keys(z.files)) !== fmt(want)) fails.push(`with a collection shown the zip holds ${fmt(Object.keys(z.files))}, expected ${fmt(want)}`);
+    }
+    assert(!fails.length, fails.join('; '));
     noErrors(s);
   } finally { await s.close(); }
 }},

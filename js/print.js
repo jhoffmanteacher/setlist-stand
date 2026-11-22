@@ -143,8 +143,9 @@ export async function buildSetPdf(ids, withInk, opts = {}){
 }
 
 /* The file a setlist's PDF is saved as: its gig date first when it has one ("2026-10-18 Sf October 18 2026.pdf"). Download PDF and
-   Download all (js/downloadall.js) name files the same way. */
-export const setFileName = st => fileName((gigOf(st) ? gigOf(st) + ' ' : '') + st.name) + '.pdf';
+   Download all (js/downloadall.js, its list files) name files the same way. */
+export const setBaseName = st => fileName((gigOf(st) ? gigOf(st) + ' ' : '') + st.name);
+export const setFileName = st => setBaseName(st) + '.pdf';
 
 export function printDialog(st, ids){
   const m = modal(`<h2>Download ${esc(st.name)}</h2><p class="hint">Makes one PDF with all ${ids.length} songs in setlist order.</p>

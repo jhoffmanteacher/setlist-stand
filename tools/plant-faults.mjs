@@ -708,6 +708,23 @@ const FAULTS = [
     loop: 'gigdates', why: 'the fill-in is asked again every time the app is reopened, after it was answered'},
   {id: 'gig-fill-renames', file: 'js/gigui.js', find: "value:{...now, gig, updated:stamp(now)}", replace: "value:{...now, gig, name:now.name + ' (' + gig + ')', updated:stamp(now)}",
     loop: 'gigdates', why: 'filling in a gig date changes the setlist name the person typed'},
+  /* Download all (js/downloadall.js) and the file names it uses (js/util.js) */
+  {id: 'dlall-stop-after-zip-ignored', file: 'js/downloadall.js', find: '    if(job.stopped) return stopped();                                      // pressed during the last step', replace: '    // pressed during the last step',
+    loop: 'print: Download all', why: 'Stop pressed while the zip is made still downloads the file'},
+  {id: 'dlall-size-per-setlist', file: 'js/downloadall.js', find: 'const ids = [...new Set(list.flatMap(songIdsOf))];', replace: 'const ids = list.flatMap(st => [...new Set(songIdsOf(st))]);',
+    loop: 'print: Download all', why: 'a chart in several setlists is counted (and packed) once per setlist: a library well under the limit is refused'},
+  {id: 'dlall-deflate', file: 'js/downloadall.js', find: "compression:'STORE'", replace: "compression:'DEFLATE'",
+    loop: 'print: Download all', why: 'the zip is compressed: much slower on a tablet for PDFs that barely shrink'},
+  {id: 'dlall-empty-not-skipped', file: 'js/downloadall.js', find: 'const list = sets.filter(st => songIdsOf(st).length), skipped', replace: 'const list = sets.filter(st => true), skipped',
+    loop: 'print: Download all', why: 'setlists with no songs are not skipped: an empty list file is put in the zip'},
+  {id: 'dlall-same-name-overwrites', file: 'js/downloadall.js', find: 'while(used.has(n.toLowerCase())) n = `${base} (${++k})`;', replace: '',
+    loop: 'print: Download all', why: 'two setlists (or two charts) with the same name get the same name in the zip: one overwrites the other'},
+  {id: 'dlall-missing-not-marked', file: 'js/downloadall.js', find: "${fileOf.has(it.id) ? '' : ' (no PDF on this tablet)'}", replace: '',
+    loop: 'print: Download all', why: 'a song whose PDF is not on this tablet is listed as if its chart were in the zip'},
+  {id: 'dlall-raw-chart-names', file: 'js/downloadall.js', find: "uniqueNames(have.map(id => fileName(titleOf(id))), '.pdf').forEach((n, i) => fileOf.set(have[i], 'Songs/' + n));", replace: "have.forEach(id => fileOf.set(id, 'Songs/' + titleOf(id) + '.pdf'));",
+    loop: 'print: Download all', why: 'charts are written under their raw titles: "AC/DC" makes a folder, and two titles that differ only in case clash on the tablet'},
+  {id: 'filename-slash-dropped', file: 'js/util.js', find: ".replace(/[\\\\/]+/g, '-')", replace: ".replace(/[\\\\/]+/g, '')",
+    loop: 'print: Download all', why: 'a date in a setlist name, "Sf 10/18/2026", becomes "Sf 10182026" in the file name'},
 ];
 
 const args = process.argv.slice(2);

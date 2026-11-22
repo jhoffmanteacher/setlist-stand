@@ -199,7 +199,10 @@ export function armed(btn, msg = 'Tap again'){
   return false;
 }
 
-export const fileName = s => s.replace(/[\\/:*?"<>|]+/g, '').trim() || 'setlist';
+/* A name safe to save a file under: slashes become '-' (a date such as 10/18/2026 stays readable), the other characters a file
+   system refuses are dropped, control characters are dropped, the letters are put in one composed form (so "Café" typed two ways
+   is one name), and it is cut to 150 characters (a file name is limited to 255 bytes, and an accented letter takes two or more). */
+export const fileName = s => String(s).normalize('NFC').replace(/[\\/]+/g, '-').replace(/[:*?"<>|\u0000-\u001f\u007f]+/g, '').trim().slice(0, 150).trim() || 'setlist';
 
 /* Downloads use a plain <a download>. */
 export function saveBlob(blob, name){

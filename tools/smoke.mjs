@@ -19,6 +19,7 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import vm from 'node:vm';
 import zlib from 'node:zlib';
+import {createHash} from 'node:crypto';
 import {launchBrowser, WEBKIT} from './loops/browser.mjs';
 import {acquireSlot} from './loops/slot.mjs';
 import {splitName, displayName} from '../js/names.js';
@@ -1943,8 +1944,9 @@ async function stepGigDates(t){
   assert(await gigOfSet('Sf October 18 2026') === '2026-10-18', 'the filled-in gig was lost on reload');
 }
 
-/* Download PDF and Download all (js/print.js setFileName, js/downloadall.js): the dated file name, the zip of every shown setlist
-   (empty ones skipped, " (2)" on a name clash), Stop part-way, the size refusal; nothing in the library changes. */
+/* Download PDF and Download all (js/print.js setFileName, js/downloadall.js): the dated file name; the zip of every chart of the
+   shown setlists once (the stored bytes) and one list file per setlist (empty ones skipped, " (2)" on a name clash); Stop
+   part-way, the size refusal; nothing in the library changes. */
 async function stepDownloads(t){
   const {page} = t, errs = t.errors.length, gig = '2026-12-05';
   const toSets = async () => {
@@ -1984,7 +1986,8 @@ async function stepDownloads(t){
     await page.waitForSelector('#view [data-dlall]:not([disabled])');
     await page.click('#view [data-dlall]');
     await page.locator('.modal h2', {hasText: 'Download all setlists'}).waitFor();
-    assert(await page.locator('.modal #dInk').isChecked(), 'Download all: Include my annotations is not ticked');
+    assert(!(await page.locator('.modal #dInk').count()), 'Download all still has an annotations tick box');
+    assert(await page.locator('.modal [data-ok]').textContent() === 'Make zip', 'Download all button: ' + await page.locator('.modal [data-ok]').textContent());
   };
 
   /* one setlist: the button reads Download PDF, the dialog "Download <name>", the file "<gig> <name>.pdf" */
@@ -2001,33 +2004,65 @@ async function stepDownloads(t){
   assert((await PDFDocument.load(await fsp.readFile(one.file))).getPageCount() >= 1, 'the downloaded PDF has no pages');
   assert(await snap() === before, 'Download PDF changed the library');
 
-  /* Download all under "All": a second "Dl Pair" (same name and date) and an empty "Dl Empty" */
+  /* Download all under "All": a second "Dl Pair" (same name and date, the same first song) and an empty "Dl Empty" */
   await make('Dl Pair', gig, true);
   await make('Dl Empty', null, false);
-  const songsNow = await idbAll(page, 'songs');      // a setlist whose songs were all deleted counts as empty (liveItems)
-  const full = Object.values(await idbAll(page, 'sets')).filter(s => !s.deleted && s.items.some(it => it.type === 'song' && songsNow[it.id] && !songsNow[it.id].deleted)).length;
+  const songsNow = await idbAll(page, 'songs'), filesNow = await idbAll(page, 'files');
+  const liveSong = id => songsNow[id] && !songsNow[id].deleted;        // liveItems: a setlist whose songs were all deleted counts as empty
+  const fullSets = Object.values(await idbAll(page, 'sets')).filter(s => !s.deleted && s.items.some(it => it.type === 'song' && liveSong(it.id)));
+  const full = fullSets.length;
+  const used = fullSets.flatMap(s => s.items.filter(it => it.type === 'song' && liveSong(it.id)).map(it => it.id));
+  const charts = [...new Set(used)].filter(id => filesNow[id]);          // each distinct chart with a stored PDF, once
+  const pairs = fullSets.filter(s => s.name === 'Dl Pair');
+  assert(pairs.length === 2, `${pairs.length} "Dl Pair" setlists with songs, expected 2`);
+  const shared = pairs[0].items.find(it => it.type === 'song').id;
+  assert(pairs[1].items.find(it => it.type === 'song').id === shared, 'the two "Dl Pair" setlists do not share their song');
   before = await snap();
   await openDlAll();
   const z = await download(page, () => page.click('.modal [data-ok]'));
   assert(z.name === 'Setlists - Setlist Stand.zip', 'zip name: ' + z.name);
   if(await page.locator('.modal h2', {hasText: 'Zip saved'}).count()) await page.click('.modal [data-x]');
-  else await page.waitForFunction(() => /^Saved \d+ setlist PDFs?$/.test(document.querySelector('#toast').textContent), null, {timeout: 5000})
-    .catch(async () => { throw new Error('no "Saved N setlist PDFs" toast: ' + await page.locator('#toast').textContent()); });
+  else {
+    const want = `Saved ${charts.length} chart${charts.length == 1 ? '' : 's'} and ${full} setlist${full == 1 ? '' : 's'}`;
+    await toastIs(want, 'Download all');
+  }
   await page.waitForFunction(() => !document.querySelector('.modal'));
   const zip = await JSZip.loadAsync(await fsp.readFile(z.file)), names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
-  const mine = names.filter(n => /Dl (Pair|Empty)/.test(n)).sort();
-  assert(JSON.stringify(mine) === JSON.stringify([`${gig} Dl Pair (2).pdf`, `${gig} Dl Pair.pdf`]), 'this step\'s PDFs in the zip: ' + JSON.stringify(mine));
-  assert(names.length === full && names.every(n => /\.pdf$/.test(n)), `the zip holds ${names.length} files (${JSON.stringify(names)}), expected ${full} PDFs (one per setlist with songs)`);
-  for(const n of mine) assert((await PDFDocument.load(await zip.file(n).async('uint8array'))).getPageCount() >= 1, `${n} in the zip has no pages`);
+  const songNames = names.filter(n => n.startsWith('Songs/')), listNames = names.filter(n => n.startsWith('Setlists/'));
+  assert(songNames.length + listNames.length === names.length, 'the zip holds files outside Songs/ and Setlists/: ' + JSON.stringify(names));
+  assert(songNames.every(n => /^Songs\/[^/]+\.pdf$/.test(n)) && listNames.every(n => /^Setlists\/[^/]+\.txt$/.test(n)), 'zip entry names: ' + JSON.stringify(names));
+  assert(songNames.length === charts.length, `the zip holds ${songNames.length} charts, expected ${charts.length} (each distinct chart once; ${used.length} song rows)`);
+  assert(listNames.length === full, `the zip holds ${listNames.length} list files, expected ${full} (one per setlist with songs)`);
+  /* every chart is the stored bytes (SHA-256 equal to the song's), loads as a PDF, and the shared chart is in once */
+  const got = [];
+  for(const n of songNames){
+    const b = await zip.file(n).async('uint8array');
+    assert((await PDFDocument.load(b)).getPageCount() >= 1, `${n} in the zip has no pages`);
+    got.push(createHash('sha256').update(b).digest('hex'));
+  }
+  const wantHashes = charts.map(id => songsNow[id].hash);
+  assert(JSON.stringify([...got].sort()) === JSON.stringify([...wantHashes].sort()), 'the charts in the zip are not the stored bytes of the distinct charts');
+  const sharedN = got.filter(h => h === songsNow[shared].hash).length, sameHash = wantHashes.filter(h => h === songsNow[shared].hash).length;
+  assert(sharedN === sameHash, `the chart used in both "Dl Pair" setlists is in the zip ${sharedN} times, expected ${sameHash}`);
+  /* the list files: the two same-named setlists get " (2)", the empty one is not there */
+  const mine = listNames.filter(n => /Dl (Pair|Empty)/.test(n)).sort();
+  assert(JSON.stringify(mine) === JSON.stringify([`Setlists/${gig} Dl Pair (2).txt`, `Setlists/${gig} Dl Pair.txt`]), 'this step\'s list files: ' + JSON.stringify(mine));
+  assert(!names.some(n => /Dl Empty/.test(n)), 'the empty setlist is in the zip');
+  const long = await page.evaluate(async g => (await import(new URL('js/gigdate.js', location.href).href)).gigLong(g), gig);
+  const wantText = `Dl Pair\n${long}\n\n1. ${songsNow[shared].title}\n`;
+  for(const n of mine){
+    const txt = await zip.file(n).async('string');
+    assert(txt === wantText, `${n} reads ${JSON.stringify(txt)}, expected ${JSON.stringify(wantText)}`);
+  }
   assert(await snap() === before, 'Download all changed the library');
 
-  /* Stop part-way: the page itself presses Stop the moment the second setlist starts, so it is always mid-build */
-  assert(full >= 2, `only ${full} setlist(s) with songs: Stop part-way needs two`);
+  /* Stop part-way: the page itself presses Stop the moment the second chart starts, so it is always mid-build */
+  assert(charts.length >= 2, `only ${charts.length} distinct chart(s): Stop part-way needs two`);
   await openDlAll();
   await page.evaluate(() => {
     const ob = new MutationObserver(() => {
       const p = document.querySelector('.modal [role=status]');
-      if(p && /^Making setlist 2 of /.test(p.textContent)){ ob.disconnect(); window.__dlStopAt = p.textContent; document.querySelector('.modal [data-x]').click(); }
+      if(p && /^Adding chart 2 of /.test(p.textContent)){ ob.disconnect(); window.__dlStopAt = p.textContent; document.querySelector('.modal [data-x]').click(); }
     });
     ob.observe(document.body, {subtree: true, childList: true, characterData: true});
   });
@@ -2036,7 +2071,7 @@ async function stepDownloads(t){
     await toastIs('Stopped. Nothing was downloaded.', 'Stop part-way');
     await page.waitForFunction(() => !document.querySelector('.modal'));
   }, 2000, 'Stop part-way');
-  assert(await page.evaluate(() => window.__dlStopAt), 'Stop was not pressed during "Making setlist 2 of N"');
+  assert(await page.evaluate(() => window.__dlStopAt), 'Stop was not pressed during "Adding chart 2 of N"');
 
   /* the size refusal: the limit lowered in the module instance the app uses; refused before any work, nothing downloaded */
   const setMax = v => page.evaluate(async v => { (await import(new URL('js/downloadall.js', location.href).href)).limits.maxBytes = v; }, v);
@@ -2093,7 +2128,7 @@ const STEPS = [
   ['30c Add songs in tap order: numbers, untap renumbers, Add N, setlist ends in that order; search keeps numbers', stepPickOrder],
   ['30d Backup reminder: after a backup none; a stroke or a rename brings it back on Library and Setlists, never in the viewer; a restore clears it', stepBackupReminder],
   ['30e Gig dates: Upcoming, this year, No date, last year closed; set, change, clear; kept on reload; the fill-in from a name, once', stepGigDates],
-  ['30f Downloads: Download PDF names the file with the gig date; Download all zips one PDF per setlist with songs, " (2)" on a clash; Stop part-way and the size refusal download nothing; the library is unchanged', stepDownloads],
+  ['30f Downloads: Download PDF names the file with the gig date; Download all zips each chart once (Songs/) and a list per setlist with songs (Setlists/, " (2)" on a clash); Stop part-way and the size refusal download nothing; the library is unchanged', stepDownloads],
   ['31 no request left localhost during the run', stepNoExternal],
 ];
 
