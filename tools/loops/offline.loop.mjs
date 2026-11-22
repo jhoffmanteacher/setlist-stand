@@ -249,7 +249,9 @@ export const loops = [
       await s.goto();
       await waitInstalled(s.page, cacheName(ctx.root), precachePaths(ctx.root));
       await restoreZip(s.page, ctx.library);
-      await s.page.evaluate(() => localStorage.setItem('ss-two', '0'));     // one page per view: every page is its own step
+      /* ss-gig-fill: the real library has setlists named with a date, so the one-time 'Fill in gig dates?' box would open over the Setlists
+         list and make the page inert; this loop is about playing offline, not about that box (it is tested in 'gigdates 2'). */
+      await s.page.evaluate(() => { localStorage.setItem('ss-two', '0'); localStorage.setItem('ss-gig-fill', '1'); });     // ss-two: one page per view: every page is its own step
       assert(s.errors.length === 0, 'page errors during the restore: ' + s.errors.join(' | '));
       await s.page.close();
       online = await goOffline(s.context, ctx.server);
