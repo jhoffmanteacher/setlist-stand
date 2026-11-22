@@ -107,7 +107,7 @@ function checkNewVersion(before, after, A, file, days, what){
   const tag = o && /old (\d{4}-\d\d-\d\d)$/.exec(o.version || '');
   assert(tag && days.includes(tag[1]), P + `the old copy's version ${JSON.stringify(o && o.version)}, expected the date ${days.join(' or ')}`);
   const version = (a0.version ? a0.version + ', ' : '') + 'old ' + tag[1];
-  const want = {id: O, song: a0.song, artist: a0.artist, version, title: a0.song + ` (${version})` + (a0.artist ? ' - ' + a0.artist : ''), archived: true, pages: a0.pages, hash: a0.hash};
+  const want = {id: O, song: a0.song, artist: a0.artist, version, title: a0.song + ` (${version})` + (a0.artist ? ' - ' + a0.artist : ''), archived: true, pages: a0.pages, hash: a0.hash, colls: a0.colls};     // the old chart keeps the song's collections
   if('crop' in a0) want.crop = a0.crop;
   assert(Object.keys(o).sort().join() === [...Object.keys(want), 'added', 'updated'].sort().join(), P + 'the old copy has fields ' + Object.keys(o).sort().join());
   expectSame(want, Object.fromEntries(Object.keys(want).map(k => [k, o[k]])), P + 'the old copy');

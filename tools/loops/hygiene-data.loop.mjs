@@ -133,20 +133,20 @@ export const loops = [
     await waitSongs(page, 2);
     const before = await snapshot(page);
 
-    const id = 'v3song' + Date.now().toString(36), buf = fs.readFileSync(path.join(FIX, 'three-page.pdf')), t = Date.now();
+    const id = 'v4song' + Date.now().toString(36), buf = fs.readFileSync(path.join(FIX, 'three-page.pdf')), t = Date.now();
     const z3 = new JSZip();
     z3.file(`files/${id}.pdf`, buf);
-    z3.file('library.json', JSON.stringify({app: 'setlist-stand', version: 3, saved: new Date().toISOString(),
+    z3.file('library.json', JSON.stringify({app: 'setlist-stand', version: 4, saved: new Date().toISOString(),
       songs: [{id, title: 'Future Song', song: 'Future Song', artist: '', version: '', archived: false, pages: 3, hash: sha256(buf), added: t, updated: t}], sets: [], ink: {}}));
-    const f3 = path.join(TMP, 'hygiene-v3.zip');
+    const f3 = path.join(TMP, 'hygiene-v4.zip');
     await fsp.writeFile(f3, await z3.generateAsync({type: 'nodebuffer'}));
     await clearToast(page);
     await page.setInputFiles('#restoreFile', f3);
     const msg = await waitToast(page, /\S/);
-    assert(msg === 'That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.', 'v3 restore toast: ' + JSON.stringify(msg));
+    assert(msg === 'That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.', 'v4 restore toast: ' + JSON.stringify(msg));
     await sleep(500);
-    expectSame(before, await snapshot(page), 'library after refusing a version-3 backup');
-    assert(await songCount(page) === 2, 'song count changed after refusing a version-3 backup');
+    expectSame(before, await snapshot(page), 'library after refusing a version-4 backup');
+    assert(await songCount(page) === 2, 'song count changed after refusing a version-4 backup');
 
     const a = 'v1h' + Date.now().toString(36), z1 = new JSZip();
     z1.file(`files/${a}.pdf`, fs.readFileSync(path.join(FIX, 'three-page.pdf')));
