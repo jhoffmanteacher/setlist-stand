@@ -44,7 +44,7 @@ function driveParts(){
     buttons:'<button class="pri" data-syncnow>Sync</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button>'};
   if(s.state === 'expired') return {cls:'hint warnline', text:`Your Google sign-in ran out at ${esc(clock(s.until))}. Tap Sync or Connect again. ${last}`,
     buttons:'<button class="pri" data-syncnow>Sync</button><button data-driveconnect>Connect again</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button>'};
-  return {cls:'hint', first:true, text:`Sync keeps your songs, setlists and collections the same on your tablets, through your own Google Drive. ${last} Sync is not a backup.`,
+  return {cls:'hint', first:true, text:`Sync keeps your songs, setlists, collections and your pen marks and notes the same on your tablets, through your own Google Drive. ${last} Sync is not a backup.`,
     buttons:'<button class="pri" data-syncnow>Sync</button><button data-driveconnect>Connect Google Drive</button>'};
 }
 /* Drawn only when something changed: a dialog gives focus back to the button that opened it, so that button must still be there. */
@@ -69,7 +69,7 @@ export function openDriveBox(){
   const m = modal('<h2>Google Drive</h2><div id="driveCtl"></div><div class="btns"><button data-x>Close</button></div>');
   m.classList.add('drivebox');
   m.querySelector('[data-x]').onclick = () => { m.remove(); refocus(); };
-  m.addEventListener('click', e => { const b = e.target.closest('#driveCtl button'); if(b) driveClick(b, b.dataset); });
+  m.addEventListener('click', e => { const b = e.target.closest('#driveCtl button'); if(b){ b.focus(); driveClick(b, b.dataset); } });     // Safari does not focus a tapped button: the dialog this opens would remember the page, not the button, and give focus back to the page
   renderDrive();
 }
 /* The line says when the sign-in ends: bring it up to date when the tablet is picked up again. */

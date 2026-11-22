@@ -13,7 +13,7 @@ const KINDS = ['song', 'set', 'coll'];
 /* Once per tablet, before the first sync. Resolves true for Continue. */
 export function introDialog(){
   return new Promise(res => {
-    const m = modal(`<h2>Sync your tablets</h2><p>Sync keeps your songs, setlists and collections the same on your tablets, through your own Google Drive. If this is your second tablet, restore a backup from your first one before you sync, so your songs match instead of doubling.</p><p><b>Sync is not a backup.</b> A mistake syncs to your other tablet too. Keep backing up.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Continue</button></div>`);
+    const m = modal(`<h2>Sync your tablets</h2><p>Sync keeps your songs, setlists, collections and your pen marks and notes the same on your tablets, through your own Google Drive. If this is your second tablet, restore a backup from your first one before you sync, so your songs match instead of doubling.</p><p><b>Sync is not a backup.</b> A mistake syncs to your other tablet too. Keep backing up.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Continue</button></div>`);
     m.querySelector('[data-x]').onclick = () => { m.remove(); res(false); };
     m.querySelector('[data-ok]').onclick = () => { m.remove(); res(true); };
   });
@@ -62,6 +62,9 @@ export function reportDialog(rep, state = 'done', failure = ''){
   const kindsOf = bag => list(KINDS.filter(k => bag[k]).map(k => count(bag[k], k)));
   if(rep.sent.song + rep.sent.set + rep.sent.coll) P(`Sent ${kindsOf(rep.sent)}.`);
   if(rep.got.song + rep.got.set + rep.got.coll) P(`Got ${kindsOf(rep.got)}.`);
+  const pages = n => `${n} ${n === 1 ? 'page' : 'pages'}`, marks = rep.marks || {};
+  if(marks.sent) P(`Sent marks on ${pages(marks.sent)}.`);
+  if(marks.got) P(`Got marks on ${pages(marks.got)}.`);
   if(rep.survived && rep.survived.length) lines.push(`${rep.survived.length === 1 ? 'A song or setlist was' : rep.survived.length + ' were'} deleted on your other tablet but changed here afterwards, so ${rep.survived.length === 1 ? 'it stays' : 'they stay'} and ${rep.survived.length === 1 ? 'goes' : 'go'} back there: ${list(rep.survived.slice(0, 6).map(n => `'${esc(n.name)}'`))}${rep.survived.length > 6 ? ` and ${rep.survived.length - 6} more` : ''}.`);
   if(rep.repaired) P(`Put back ${rep.repaired} ${rep.repaired === 1 ? 'PDF' : 'PDFs'} that ${rep.repaired === 1 ? 'was' : 'were'} missing or not the right one in Google Drive.`);
   if(rep.unapplied) P(`Your ${rep.unapplied === 1 ? 'answer' : rep.unapplied + ' answers'} about what was deleted on your other tablet ${rep.unapplied === 1 ? 'was' : 'were'} not applied, because the sync stopped first. You are asked again next time.`);

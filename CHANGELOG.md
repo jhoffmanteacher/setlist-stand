@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-22: Your pen marks and notes now follow you between tablets
+- **Marks in Sync:** tap **Sync** and the pen, highlighter and text notes on every page go to your own Google Drive and to your other tablet, along with your songs, setlists and collections. Draw on the same page on both tablets and both sets of marks are kept. An erase or an edit on one tablet reaches the other.
+- **The report** says how many pages of marks were sent and received. A page that cannot be used (damaged, or too big) is listed by song and page, and the rest still syncs.
+- **A chart you replaced with New version** keeps its old marks on the archived copy, on both tablets; the new chart starts clean. Marks never move onto a different chart.
+- Sync is still only when you tap it. If you restore an older backup after syncing, the next Sync brings back what your other tablet changed since: disconnect Google Drive first (see BREAK-GLASS.md, "Sync did something wrong").
+- Fixed on the iPad: after a box opened from the Google Drive box is cancelled, focus now returns to the Google Drive box.
+
 ## 2026-11-22: A More menu on an open setlist
 - An open setlist now shows Play setlist, Add songs, Add break and **More**. Gig date, Download PDF, Share, Duplicate, Rename and Collections are in the More menu, each with a short line saying what it does. Download PDF and Share are greyed when the setlist has no songs.
 - Nothing about how any of them works has changed.

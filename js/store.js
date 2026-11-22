@@ -7,6 +7,10 @@ import {uid} from './util.js';
    missing, so a version 1 library keeps every record. */
 /* Ids end up in the page's HTML and in storage keys, so they are held to a plain set of characters (js/backup.js checks every id with it). */
 export const ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+/* The latest `updated` this tablet holds or sends: below the largest date JavaScript has; stamp() and inkRecord() never go above it.
+   What a sync takes from Drive stops at the same time (MAX_READ in js/syncink.js), so everything made here from it is taken there too.
+   js/syncink.js holds a copy of this (it loads in Node). */
+export const MAX_U = 8.64e15 - 1e6;
 export const STORE_NAMES = ['songs', 'files', 'sets', 'ink', 'colls'];
 export const DB_VERSION = 2;
 export let MEM = null;
@@ -47,9 +51,11 @@ async function tx(store, mode, fn){
    `colls: []` added by the upgrade) changes nothing; a plain delete (no marker, no `updated`) counts as now. */
 let newest = 0, newestRec = 0;
 export const newestChange = () => newest;
-/* The same for songs, setlists and collections only: the records a Drive sync carries (ink is not synced yet), for the sync reminder. */
+/* The same for what a Drive sync carries (songs, setlists, collections and, since Part 3, ink pages), for the sync reminder. What a sync
+   itself writes is in step with Drive and does not count (putAll's fromSync); syncPending() is the one way a sync says it left
+   something here that still has to go up. */
 export const newestRecordChange = () => newestRec;
-const RECORD_STORES = new Set(['songs', 'sets', 'colls']);
+const RECORD_STORES = new Set(['songs', 'sets', 'colls', 'ink']);
 /* A record dated in the future (it came from a tablet with a wrong clock): READING it (at start, after a reload of the library) says
    nothing about when anything changed here, so it is ignored; WRITING it is a change made now, so a date more than a day ahead counts as now.
    Either way it can never sit above every real change and hide them, and it cannot keep a reminder on. */
@@ -64,6 +70,10 @@ function seen(u, isRecord, read){
   if(moved) dispatchEvent(new Event('ss-changed'));
 }
 const seenRec = (st, v, read) => { if(st !== 'files' && v && typeof v === 'object') seen(v.updated, RECORD_STORES.has(st), read); };
+/* A sync wrote here, or kept here, something of this tablet's own that is not on Drive yet (a merged page of marks it could not send,
+   or one it sends only later in the run): a change to SYNC made now, so the sync reminder is honest if the run ends before it goes up.
+   It is not a change to back up (the backup reminder's time does not move). */
+export const syncPending = () => { const t = Date.now(); if(t > newestRec){ newestRec = t; dispatchEvent(new Event('ss-changed')); } };
 export const put = async (st, k, v) => { await (MEM ? (MEM[st].set(k, v), Promise.resolve()) : tx(st, 'readwrite', s => s.put(v, k))); seenRec(st, v); };
 export const get = (st, k) => MEM ? Promise.resolve(MEM[st].get(k)) : tx(st, 'readonly', s => s.get(k));
 export const del = async (st, k) => { await (MEM ? (MEM[st].delete(k), Promise.resolve()) : tx(st, 'readwrite', s => s.delete(k))); if(st !== 'files') seen(Date.now(), RECORD_STORES.has(st)); };
@@ -220,7 +230,7 @@ export const songById = id => state.songs.find(s => s.id === id);
 /* The `updated` of an edit to a record that already exists: now, or one millisecond after the version it was made from when
    that one is later (a copy from a tablet whose clock is ahead), so an edit always beats the version it was made from.
    A brand-new record has nothing to beat (stamp(null) is now). Every edit of an existing song, setlist or collection uses it. */
-export const stamp = prev => Math.max(Date.now(), (Number(prev && prev.updated) || 0) + 1);
+export const stamp = prev => Math.min(MAX_U, Math.max(Date.now(), (Number(prev && prev.updated) || 0) + 1));
 export const saveSong = s => { s.title = displayName(s); s.updated = stamp(s); return put('songs', s.id, s); };
 /* The record for a new song whose PDF (pages, hash) is about to be saved under its id. name: {song, artist, version};
    colls: the collections it joins (joinColls() in js/collections.js; [] by default). */
@@ -255,16 +265,24 @@ export async function ensureHashes(){
 
 /* ---------- ink ---------- */
 export const liveStrokes = arr => (arr || []).filter(s => !s.deleted);
-export const inkRecord = (strokes) => ({updated:now(), strokes});
+/* A page record. Its `updated` is now, or later when it must be: never below the newest entry on it (a stroke stamped past now, see
+   stamp()) and always above the page record it replaces (`prev`, the stored record, when there is one), so the page as a whole
+   also beats the version it was made from on a tablet whose clock is behind. */
+const finiteU = x => { const u = Number(x && x.updated); return Number.isFinite(u) ? u : 0; };
+/* Fields of the page other than `updated` and `strokes` (a later version's) are kept from `prev`, as a sync's merge keeps them. */
+export const inkRecord = (strokes, prev) => ({...(isObj(prev) ? prev : {}), updated:Math.min(MAX_U, strokes.reduce((m, s) => Math.max(m, finiteU(s)), Math.max(Date.now(), prev ? finiteU(prev) + 1 : 0))), strokes});
 /* Older data stored a bare array of strokes with no ids. Give them ids and save once.
    Anything else that is not {updated, strokes:[...]} (a damaged or hand-made record) becomes an empty page;
    stroke entries that are not objects are dropped and `updated` is always a number. */
 const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
+/* The id an old stroke without one gets: from its place in the list and its content (FNV-1a of its JSON), so every tablet and every
+   restore of the same old page gives it the SAME id (a random one would make the page double when two tablets sync it). */
+const oldId = (s, i) => { let h = 0x811c9dc5; for(const ch of JSON.stringify(s)){ h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return 'l' + i + '-' + h.toString(16).padStart(8, '0'); };
 export function upgradeInk(v){
   if(!v) return {record:{updated:0, strokes:[]}, changed:false};
   if(Array.isArray(v)){
     const t = now();
-    return {record:{updated:t, strokes:v.filter(isObj).map(s => ({...s, id:s.id || uid(), updated:s.updated || t}))}, changed:true};
+    return {record:{updated:t, strokes:v.map((s, i) => [s, i]).filter(([s]) => isObj(s)).map(([s, i]) => ({...s, id:s.id || oldId(s, i), updated:s.updated || 0}))}, changed:true};      // no time: 0, the same on every tablet (any real edit or erase wins)
   }
   if(!isObj(v) || !Array.isArray(v.strokes)) return {record:{updated:Number(isObj(v) && v.updated) || 0, strokes:[]}, changed:true};
   const strokes = v.strokes.filter(isObj), updated = Number(v.updated) || 0;
@@ -299,6 +317,16 @@ export async function getInkPages(songId, n){
   }
   return out;
 }
+/* Every ink page as [key, stored value], in ONE read (a sync compares them with Drive; nothing is upgraded or written here). */
+export async function inkEntries(){
+  if(MEM) return [...MEM.ink.entries()];
+  const d = await db();
+  return new Promise((res, rej) => {
+    const t = d.transaction('ink', 'readonly'), st = t.objectStore('ink'), ks = st.getAllKeys(), vs = st.getAll();     // the same key order
+    t.oncomplete = () => res(ks.result.map((k, i) => [k, vs.result[i]])); t.onerror = e => rej(txErr(t, e));
+    t.onabort = () => rej(t.error || new Error('aborted'));
+  });
+}
 /* Removes every ink page record of a song, whatever its page count was. */
 export async function delInkFor(songId){
   const [lo, hi] = inkRange(songId);
@@ -311,17 +339,21 @@ export async function delInkFor(songId){
     t.onabort = () => rej(t.error || new Error('aborted'));
   });
 }
-export const putInk = (songId, pn, strokes) => put('ink', songId + ':' + pn, inkRecord(strokes));
+/* Read and written in one transaction, so the page's `updated` is stamped over the record as it is stored. */
+export const putInk = (songId, pn, strokes) => update('ink', songId + ':' + pn, prev => inkRecord(strokes, prev));
 /* Makes `next` the page's strokes: strokes that vanished become deletion markers,
-   strokes that came back (undo) get a fresh timestamp so they beat their old marker. */
+   strokes that came back (undo) or a note put back as it was get a new time so they beat their old marker or version.
+   Every such time is stamp()ed over the entry it replaces (and over the one it brings back), never plain now: an entry dated
+   ahead (a tablet whose clock is ahead) is still beaten by the change made here. Of two markers for one stroke, the later stays. */
 export function reconcile(prev, next){
-  const t = now(), pm = new Map((prev || []).map(s => [s.id, s])), seen = new Set(), out = [];
+  const pm = new Map((prev || []).map(s => [s.id, s])), seen = new Set(), out = [];
   for(const s of next){
     seen.add(s.id); const p = pm.get(s.id);
     const edited = p && !p.deleted && s.t === 'text' && ['text', 'x', 'y', 'size', 'c'].some(k => p[k] !== s[k]);
-    out.push(p && ((p.deleted && !s.deleted) || edited) ? {...s, updated:t} : s);
+    if(p && ((p.deleted && !s.deleted) || edited)) out.push({...s, updated:Math.max(stamp(p), stamp(s))});
+    else out.push(p && p.deleted && s.deleted && finiteU(p) > finiteU(s) ? p : s);
   }
-  for(const p of prev || []) if(!seen.has(p.id)) out.push(p.deleted ? p : {id:p.id, deleted:true, updated:t});
+  for(const p of prev || []) if(!seen.has(p.id)) out.push(p.deleted ? p : {id:p.id, deleted:true, updated:stamp(p)});
   return out;
 }
 

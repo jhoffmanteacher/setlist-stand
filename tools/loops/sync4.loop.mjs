@@ -599,7 +599,13 @@ async function loopMarks(ctx){
     assert(!marksOn(LA, b.id, 1).length && !LA.ink[b.id + ':2'], `A's song now shows the new chart with the old chart's marks: page 1 ${JSON.stringify(marksOn(LA, b.id, 1))}, page 2 ${LA.ink[b.id + ':2'] ? 'still there' : 'gone'}`);
     const h1 = live(LA).filter(s => s.hash === b.hash);
     assert(h1.length === 1 && h1[0].id === copyB.id, `A should hold the old chart once, as B's archived copy (no second copy with the same bytes): ${JSON.stringify(h1.map(s => [s.id, s.version]))}`);
-    for(const pn of [1, 2]) assert(JSON.stringify(marksOn(LA, copyB.id, pn)) === JSON.stringify(oldA[pn]), `A's marks on page ${pn} of the old chart were not kept on its archived copy: ${JSON.stringify(marksOn(LA, copyB.id, pn))} (expected ${JSON.stringify(oldA[pn])})`);
+    /* Part 3: the archived copy holds A's marks on the old chart AND B's (B's copy came with its marks): the union, by id */
+    const both = pn => [...new Set([...oldA[pn], ...marksOn(LB0, copyB.id, pn)])].sort();
+    for(const pn of [1, 2]) assert(JSON.stringify(marksOn(LA, copyB.id, pn)) === JSON.stringify(both(pn)), `A's archived copy page ${pn} should hold A's old marks and B's: ${JSON.stringify(marksOn(LA, copyB.id, pn))} (expected ${JSON.stringify(both(pn))})`);
+    finished(await syncTap(B), 'Sync B (gets A\'s old marks on the archived copy)');
+    const LB1 = await libraryOf(B);
+    for(const pn of [1, 2]) assert(JSON.stringify(marksOn(LB1, copyB.id, pn)) === JSON.stringify(both(pn)), `B's archived copy page ${pn} does not end with both tablets' old marks: ${JSON.stringify(marksOn(LB1, copyB.id, pn))} (expected ${JSON.stringify(both(pn))})`);
+    assert(!marksOn(LB1, b.id, 1).length, 'B\'s new chart has marks of the old one after A\'s Sync');
     assert(!/replaced by a newer one/.test(ra.text), 'A says a chart was kept in Archived although B\'s archived copy already holds it: ' + ra.text);
     assert(shared.length, 'the fixture mark is missing (the test is wrong)');
     noErrors(A, B);

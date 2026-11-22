@@ -12,8 +12,9 @@
  *        close: 'done' | 'escape'), reads the report box and closes it: {title, text, state: 'finished'|'stopped'|'failed', asked: [row texts]}
  *        Split in two for loops that act mid-run: await tapSync(A) (returns once a sync box is up), then await finishSync(A, opts).
  *   await libraryOf(A) -> {songs, sets, colls, files: {id: sha256}, ink}   the tablet's stored library (snapshot(), normalised)
- *   readDrive(A.google) -> {home, charts, data, recs: {song, set, coll: Map id -> record}, pdfs: Map id -> {hash, name, fileId},
- *                           foreign: [files that are not ours], problems: [layout faults]}   read from the stand-in's own files
+ *   readDrive(A.google) -> {home, charts, data, marks, recs: {song, set, coll: Map id -> record}, pdfs: Map id -> {hash, name, fileId},
+ *                           ink: Map "songId:page" -> page of marks, foreign: [files that are not ours], problems: [layout faults]}
+ *                           read from the stand-in's own files
  *   reportCounts(rep.text) -> {sent: {song, set, coll}, got: {...}, upToDate, both: 'the "changed on both tablets" part'}
  *   await setClock(A, ms) moves A's clock (A's browser context only) ms from real time; await clockOf(A) reads it
  *   await takeWrites(A) -> the IndexedDB puts and deletes since the last call ({tx, op, store, key}); halfSongs(writes) -> problems
@@ -31,7 +32,7 @@ import {KINDS, canonHash, pdfName, titleOf} from './sync-model.mjs';
 const FOLDER = 'application/vnd.google-apps.folder';
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 const authCount = g => g.requests.filter(r => r.kind === 'auth').length;
-export const HOME_NAME = 'Setlist Stand', CHARTS_NAME = 'Charts', DATA_NAME = 'Library data (do not edit)';
+export const HOME_NAME = 'Setlist Stand', CHARTS_NAME = 'Charts', DATA_NAME = 'Library data (do not edit)', MARKS_NAME = 'Marks (do not edit)';
 export const REPORT_TITLES = /^Sync (finished|stopped|could not finish)/;
 
 export async function openTablet(ctx, {name = 'A', share = null, fixtures = false} = {}){
@@ -276,19 +277,23 @@ export const setClock = (t, ms) => t.page.clock.setSystemTime(Date.now() + ms);
 /* What is on the shared Drive, read from the stand-in's own store (not through the app), with the design's layout checked. */
 export function readDrive(google){
   const live = [...google.files.values()].filter(f => !f.trashed), problems = [];
-  const out = {home: null, charts: null, data: null, recs: {song: new Map(), set: new Map(), coll: new Map()}, pdfs: new Map(), foreign: [], problems, files: live};
+  const out = {home: null, charts: null, data: null, marks: null, recs: {song: new Map(), set: new Map(), coll: new Map()}, pdfs: new Map(), ink: new Map(), inkH: new Map(), foreign: [], problems, files: live};
   const charts = live.filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'charts');
   const data = live.filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'data');
+  /* Part 3: the Marks folder is made at the first page of marks that has to be sent, so it may be missing; at most one */
+  const marks = live.filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'ink');
   if(!charts.length && !data.length){ if(live.some(f => f.appProperties.k)) problems.push('files of the app with no sub-folders'); return out; }
   if(charts.length !== 1 || data.length !== 1){ problems.push(`${charts.length} Charts folders and ${data.length} data folders (one of each expected)`); }
-  out.charts = charts[0] || null; out.data = data[0] || null;
+  out.charts = charts[0] || null; out.data = data[0] || null; out.marks = marks[0] || null;
+  if(marks.length > 1) problems.push(`${marks.length} Marks folders (one expected)`);
+  if(out.marks && out.marks.name !== MARKS_NAME) problems.push(`the Marks folder is named "${out.marks.name}"`);
   if(out.charts && out.charts.name !== CHARTS_NAME) problems.push(`the charts folder is named "${out.charts.name}"`);
   if(out.data && out.data.name !== DATA_NAME) problems.push(`the data folder is named "${out.data.name}"`);
-  const parents = new Set([...charts, ...data].flatMap(f => f.parents));
+  const parents = new Set([...charts, ...data, ...marks].flatMap(f => f.parents));
   if(parents.size !== 1) problems.push('the sub-folders are not in one folder');
   out.home = google.files.get([...parents][0]) || null;
   if(!out.home || out.home.mimeType !== FOLDER || out.home.name !== HOME_NAME || !Object.keys(out.home.appProperties).length) problems.push('the sub-folders are not in the marked "Setlist Stand" folder');
-  const ours = new Set([out.home && out.home.id, out.charts && out.charts.id, out.data && out.data.id].filter(Boolean));
+  const ours = new Set([out.home && out.home.id, out.charts && out.charts.id, out.data && out.data.id, out.marks && out.marks.id].filter(Boolean));
   const keys = f => Object.keys(f.appProperties).sort().join(',');
   for(const f of live){
     const p = f.appProperties, k = p.k;
@@ -317,6 +322,24 @@ export function readDrive(google){
       if(p.c !== canonHash(rec)) problems.push(`${where}: c is not the sha-256 of the canonical record`);
       if(out.recs[k].has(p.id)) problems.push(`two record files for ${k} ${p.id}`);
       out.recs[k].set(p.id, rec);
+    }else if(k === 'ink'){
+      /* one page of marks: ink-<id>-<page>.json in the Marks folder, holding the page {updated, strokes} (never empty),
+         properties exactly k, id, p, u (= the page's updated), c (= SHA-256 of the canonical page) and h (= the chart's SHA-256) */
+      const where = `the ink file "${f.name}"`, key = p.id + ':' + p.p;
+      if(!out.marks || !f.parents.includes(out.marks.id)) problems.push(`${where} is not in the Marks folder`);
+      if(keys(f) !== 'c,h,id,k,p,u') problems.push(`${where} has the properties ${keys(f)} (c, h, id, k, p, u expected)`);
+      if(!/^[0-9a-f]{64}$/.test(p.h || '')) problems.push(`${where} has h=${p.h} (the SHA-256 of the chart it was drawn on)`);
+      if(f.name !== `ink-${p.id}-${p.p}.json`) problems.push(`${where} should be named ink-${p.id}-${p.p}.json`);
+      if(f.mimeType !== 'application/json') problems.push(`${where} is stored as ${f.mimeType}`);
+      let page = null;
+      try{ page = JSON.parse(google.fileBytes(f.id).toString('utf8')); }catch(e){ problems.push(`${where} is not JSON`); continue; }
+      if(!page || !Array.isArray(page.strokes) || !page.strokes.length) problems.push(`${where} is not a page with marks on it`);
+      else{
+        if(p.u !== String(page.updated)) problems.push(`${where}: u=${p.u}, the page says ${page.updated}`);
+        if(p.c !== canonHash(page)) problems.push(`${where}: c is not the sha-256 of the canonical page`);
+      }
+      if(out.ink.has(key)) problems.push(`two ink files for the page ${key}`);
+      out.ink.set(key, page); out.inkH.set(key, p.h);
     }else problems.push(`a file of an unknown kind k=${k}: "${f.name}"`);
   }
   for(const [id, pdf] of out.pdfs){
@@ -325,6 +348,12 @@ export function readDrive(google){
     else if(pdf.name !== pdfName(rec.title) && pdf.name !== pdfName(titleOf(rec))) problems.push(`the PDF of "${rec.title}" is named "${pdf.name}", not "${pdfName(rec.title)}"`);
   }
   for(const [id, rec] of out.recs.song) if(!rec.deleted && !(out.pdfs.get(id) && out.pdfs.get(id).hash === rec.hash)) problems.push(`the song "${rec.title}" is on Drive without its PDF`);
+  /* marks of a song Drive holds as deleted are swept with its PDF; a page past a live song's end is not sent */
+  for(const key of out.ink.keys()){
+    const i = key.lastIndexOf(':'), rec = out.recs.song.get(key.slice(0, i)), pn = Number(key.slice(i + 1));
+    if(rec && rec.deleted) problems.push(`the marks ${key} are on Drive for a deleted song`);
+    else if(rec && !(pn >= 1 && pn <= rec.pages)) problems.push(`the marks ${key} are on Drive for a page "${rec.title}" does not have (${rec.pages} pages)`);
+  }
   return out;
 }
 

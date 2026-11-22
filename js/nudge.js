@@ -27,7 +27,7 @@ export function backupDue(){
 /* True when this tablet has synced before and something has changed since. */
 export function syncDue(){
   const t = lastSync();
-  return t > 0 && newestRecordChange() > t;       // songs, setlists, collections: ink is not synced yet, so a mark is not a change to sync
+  return t > 0 && newestRecordChange() > t;       // songs, setlists, collections and marks (ink pages): what a sync carries
 }
 export function renderNudge(){
   const el = $('#libNudge'); if(!el) return;

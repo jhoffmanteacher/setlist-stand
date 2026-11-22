@@ -16,6 +16,7 @@ import {assert, sleep, diff, restoreZip, TMP, sha256, PDFDocument} from './harne
 import {openTablet, tapSync, finishSync, syncTap, libraryOf, readDrive, reportCounts} from './sync-two.mjs';
 import {startPair, roles, live, libOnly, timeless, whole, assertWhole, deleteSongUi, deleteSetUi, deleteCollUi, saveSong, saveSet,
   writeRecords, putRecordFile, removeDriveFile, recordFileId, pdfFileId, waitBox, pageErrors, H, titleOf, addCopies} from './sync-kit.mjs';
+import {inkDiff, splitInkKey} from './sync-model.mjs';
 
 /* A check whose failure is collected and reported at the end of the loop (with every other one), so one gap does not hide the
    checks after it. The loop still FAILS. */
@@ -24,9 +25,14 @@ const inkOf = (lib, id) => Object.keys(lib.ink).filter(k => k.startsWith(id + ':
 const finished = (r, what) => assert(r.state === 'finished', `${what}: the sync did not finish: ${r.title}: ${r.text.slice(0, 400)}`);
 const noErrors = (...ts) => { for(const t of ts){ const e = pageErrors(t); assert(!e.length, `${t.name}: page errors: ${e.join(' | ')}`); } };
 const sameLib = async (X, Y, what) => {
-  const a = libOnly(await libraryOf(X)), b = libOnly(await libraryOf(Y));
-  delete a.ink; delete b.ink;                                          // marks are not synced in Part 2
+  const a = libOnly(await libraryOf(X)), b = libOnly(await libraryOf(Y)), ia = a.ink, ib = b.ink;
+  delete a.ink; delete b.ink;                                          // marks (Part 3) are compared by stroke id below: their order on a page is not the library
   const d = diff(a, b);
+  for(const k of new Set([...Object.keys(ia), ...Object.keys(ib)])){
+    const {id, p} = splitInkKey(k), s = a.songs[id];
+    if(!s || s.deleted || !(p >= 1 && p <= s.pages)){ if((ia[k] || ib[k]) && (!s || s.deleted)) d.push(`marks ${k} kept for a song that is not live`); continue; }
+    d.push(...inkDiff(ia[k], ib[k]).map(x => `marks ${k}: ${x}`));
+  }
   assert(!d.length, `${what}: ${X.name} and ${Y.name} do not hold the same library: ${d.join(' | ')}`);
 };
 /* the d property of the record file of kind/id on Drive */

@@ -373,7 +373,7 @@ async function loopV1(ctx){
     assert(d.sets[0].items.map(i => i.type + ':' + i.id).join() === [a, b, a].map(i => 'song:' + i).join(), 'set order lost: ' + JSON.stringify(d.sets[0].items));
     for(const [k, v] of Object.entries(d.ink)){
       assert(!Array.isArray(v) && v.updated > 0 && Array.isArray(v.strokes), `ink ${k} not {updated, strokes}`);
-      for(const x of v.strokes) assert(typeof x.id === 'string' && x.id && x.updated > 0, `stroke in ${k} lacks id/updated: ` + JSON.stringify(x));
+      for(const x of v.strokes) assert(typeof x.id === 'string' && x.id && Number.isFinite(x.updated) && x.updated >= 0, `stroke in ${k} lacks id/updated: ` + JSON.stringify(x));     // an old stroke with no time of its own is 0 on every tablet (so any real edit wins, and two tablets restoring the same backup agree)
     }
     assert(Object.keys(d.ink).sort().join() === [a + ':1', b + ':2'].sort().join() && d.ink[b + ':2'].strokes.length === 2, 'ink pages: ' + Object.keys(d.ink).join());
     await wipeReload(s);

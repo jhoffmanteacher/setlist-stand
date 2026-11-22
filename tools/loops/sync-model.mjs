@@ -79,19 +79,21 @@ const same = (kind, a, b) => canon(upgraded(kind, a)) === canon(upgraded(kind, b
 export const nameOf = (kind, r) => (!r ? '' : kind === 'song' ? r.title || titleOf(r) : r.name || '');
 
 const side = () => ({song: new Map(), set: new Map(), coll: new Map()});
-export function newModel(){ return {drive: {...side(), pdfs: new Map()}, tablets: {}}; }
+export function newModel(){ return {drive: {...side(), pdfs: new Map(), ink: new Map()}, tablets: {}}; }      // ink: Part 3, see the end of this file
 
 /* lib: {songs:{id:rec}, sets:{...}, colls:{...}, files:{id:hash}} (libraryOf() in sync-two.mjs builds it from a snapshot) */
 export function addTablet(m, name, lib){
   const t = {name, ...side(), pdfs: new Map(), base: side()};
   for(const k of KINDS) for(const r of Object.values(lib[STORE[k]] || {})) t[k].set(r.id, clone(r));
   for(const [id, h] of Object.entries(lib.files || {})) t.pdfs.set(id, h);
+  t.ink = new Map(Object.entries(lib.ink || {}).map(([k, v]) => [k, clone(v)]));
   m.tablets[name] = t;
   return t;
 }
 export function copyTablet(m, from, name){
   const f = m.tablets[from], t = {name, ...side(), pdfs: new Map(f.pdfs), base: side()};
   for(const k of KINDS) for(const [id, r] of f[k]) t[k].set(id, clone(r));
+  t.ink = new Map([...(f.ink || new Map())].map(([k, v]) => [k, clone(v)]));
   m.tablets[name] = t;
   return t;
 }
@@ -281,4 +283,151 @@ export function compareDrive(m, drive, loose = []){
     if(!want !== !has || (want && (want.hash !== has.hash || want.name !== has.name))) out.push(`Drive PDF of ${nameOf('song', d.song.get(id)) || id}: Drive ${has ? has.name + ' ' + has.hash.slice(0, 12) : 'none'} | model ${want ? want.name + ' ' + want.hash.slice(0, 12) : 'none'}`);
   }
   return out;
+}
+
+/* ==================== Marks: Drive sync Part 3 (pen, highlighter and text notes) ====================
+   Written from the Part 3 spec, never from js/syncink.js, js/syncapply.js or js/driveops.js. The records (which songs are live
+   on a tablet after a run, their pages and charts) are Part 2's and are read from the app; this step models the marks only.
+
+   The rules, in this file's own words:
+    - A page is {updated, strokes:[entries]}; an entry is a pen or highlighter stroke, a text note, or the marker an erase
+      leaves {id, deleted:true, updated}. Entries are compared BY ID; their order is not modelled.
+    - Merge of two pages: every id of either side; for an id on both, the entry with the larger `updated` wins, equal times:
+      the larger canonical JSON text (the same answer on both tablets). The page's `updated` is the larger of the two and at
+      least its newest entry's.
+    - One Sync on a tablet, after its records are settled: a song whose chart was replaced by the run (same id, another PDF
+      hash) has its marks (erase markers too) moved onto the archived song that holds the old chart, and starts with Drive's marks only; a
+      song that is not live here afterwards has no marks here; Drive's pages of a song whose Drive record is a deletion marker
+      are removed. Then every page of a song live here whose chart Drive holds (Drive's PDF has the song's hash here: marks
+      never cross from one chart to another), page number 1..pages, seen on either side: both get the merge (a page
+      with no entries at all is not a page). Pages past the song's end and pages listed in `invalid` (hostile on Drive) are
+      left as they are on both sides.
+    - Every Drive page carries h, the SHA-256 of the chart it was drawn on: it is merged on a tablet only when h is that tablet's
+      song hash; a page with another h is treated as no page (this tablet's own page for its chart replaces it, with its h).
+    - A local action (draw, erase, edit, undo, Clear, New version) is taken from the app as it stored it (inkLocal), after the
+      loop has checked it. */
+const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+export const inkKeyOf = (id, p) => `${id}:${p}`;
+export const splitInkKey = k => { const i = k.lastIndexOf(':'); return {id: k.slice(0, i), p: Number(k.slice(i + 1))}; };
+export function inkWinner(a, b){
+  if(num(a.updated) !== num(b.updated)) return num(a.updated) > num(b.updated) ? a : b;
+  return canon(a) >= canon(b) ? a : b;
+}
+const entryMap = page => { const m = new Map(); for(const s of (page && Array.isArray(page.strokes) ? page.strokes : [])) m.set(s.id, m.has(s.id) ? inkWinner(m.get(s.id), s) : s); return m; };
+export function inkMerge(a, b){
+  const out = entryMap(a);
+  for(const [id, s] of entryMap(b)) out.set(id, out.has(id) ? inkWinner(out.get(id), s) : s);
+  let u = Math.max(num(a && a.updated), num(b && b.updated));
+  for(const s of out.values()) u = Math.max(u, num(s.updated));
+  return {updated: u, strokes: [...out.values()].map(clone)};
+}
+const entriesText = page => canon([...entryMap(page).entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1)));
+const liveText = page => canon([...entryMap(page).entries()].filter(([, s]) => !s.deleted).sort((x, y) => (x[0] < y[0] ? -1 : 1)));
+const pageText = page => entriesText(page) + '|' + (entryMap(page).size ? num(page.updated) : 0);
+/* differences between two pages, by id ([] = the same entries) */
+export function inkDiff(want, has, {extraMarkers = false} = {}){
+  const W = entryMap(want), H = entryMap(has), out = [];
+  for(const id of new Set([...W.keys(), ...H.keys()])){
+    const w = W.get(id), h = H.get(id);
+    if(!h) out.push(`${id} missing (model ${canon(w).slice(0, 120)})`);
+    else if(!w){ if(!(extraMarkers && h.deleted === true)) out.push(`${id} should not be there (${canon(h).slice(0, 120)})`); }
+    else if(canon(w) !== canon(h) && !(extraMarkers && w.deleted === true && h.deleted === true)) out.push(`${id}: ${canon(h).slice(0, 140)} | model ${canon(w).slice(0, 140)}`);
+  }
+  return out;
+}
+export function inkSeed(m, name, ink){ m.tablets[name].ink = new Map(Object.entries(ink || {}).map(([k, v]) => [k, clone(v)])); }
+export function inkSeedDrive(m, pages, hs = new Map()){ m.drive.ink = new Map([...pages].map(([k, v]) => [k, clone(v)])); m.drive.inkH = new Map(hs); }
+export function inkLocal(m, name, key, page){ const t = m.tablets[name]; if(page && entryMap(page).size) t.ink.set(key, clone(page)); else t.ink.delete(key); }
+
+/* One Sync on tablet `name`: before / after = the tablet's song records (id -> record) before and after the run, driveSongs
+   = Drive's song records after it, drivePdfs = Drive's PDFs after it (id -> hash). Returns {sent: pages whose page record changed on Drive (entries or the page's time), got: pages
+   whose drawn marks changed here (a mark, a newer version of one, an erase; markers of marks never drawn here do not count), moved, problems}. */
+export function inkSync(m, name, {before, after, driveSongs, drivePdfs = null, invalid = new Set()}){
+  const t = m.tablets[name], D = m.drive.ink, r = {sent: [], got: [], moved: [], problems: []};
+  const liveAfter = id => !!after[id] && !after[id].deleted;
+  for(const [id, b] of Object.entries(before)){
+    if(b.deleted || !liveAfter(id) || b.hash === after[id].hash) continue;
+    const mine = [...t.ink.keys()].filter(k => splitInkKey(k).id === id);
+    const cands = Object.values(after).filter(s => !s.deleted && s.archived && s.hash === b.hash && s.id !== id), fresh = cands.filter(s => !before[s.id]);
+    const holder = cands.length === 1 ? cands[0] : fresh.length === 1 ? fresh[0] : null;
+    /* every entry moves, erase markers too: a mark erased here before the new chart arrived stays erased on the archived copy */
+    const allOn = k => [...entryMap(t.ink.get(k)).values()], liveOn = k => allOn(k).filter(s => !s.deleted);
+    if(!holder){ if(mine.some(k => liveOn(k).length)) r.problems.push(`${name}: the chart of ${nameOf('song', b)} was replaced and ${cands.length} archived songs hold the old chart (the model needs one)`); }
+    else for(const k of mine){ const es = allOn(k); if(es.length){ const hk = inkKeyOf(holder.id, splitInkKey(k).p); t.ink.set(hk, inkMerge(t.ink.get(hk), {updated: 0, strokes: es})); } }
+    for(const k of mine) t.ink.delete(k);
+    r.moved.push({from: id, to: holder && holder.id});
+    /* what the replaced chart's own pages hold here afterwards is Drive's marks; whether the app also leaves markers there for
+       the marks it moved away, and how it dates them (they are not drawn), is not settled by the spec: on this song, markers
+       the model does not have, or dated otherwise, are accepted (live entries must still be exactly the model's) */
+    (m.inkLoose || (m.inkLoose = new Set())).add(id);
+  }
+  for(const k of [...t.ink.keys()]) if(!liveAfter(splitInkKey(k).id)) t.ink.delete(k);
+  for(const k of [...D.keys()]){ const dr = driveSongs[splitInkKey(k).id]; if(dr && dr.deleted) D.delete(k); }
+  for(const k of [...new Set([...t.ink.keys(), ...D.keys()])].sort()){
+    if(invalid.has(k)) continue;
+    const {id, p} = splitInkKey(k);
+    if(!liveAfter(id) || !(p >= 1 && p <= num(after[id].pages))) continue;
+    /* marks never cross charts: a song's marks sync only while Drive holds the chart this tablet has (drivePdfs: id -> hash) */
+    if(drivePdfs && drivePdfs.get(id) !== after[id].hash) continue;
+    /* ... and Drive's record of the song names that chart too (a record refused on its way up leaves Drive's old chart in charge) */
+    if(drivePdfs && !(driveSongs[id] && !driveSongs[id].deleted && driveSongs[id].hash === after[id].hash)) continue;
+    /* a Drive page drawn on another chart (its h is not this song's hash here) is never merged into this chart: as if Drive had
+       no page; this tablet's own page for its chart replaces it if it has one */
+    const H = m.drive.inkH || (m.drive.inkH = new Map()), hash = after[id].hash;
+    const R0 = D.get(k), R = R0 && H.has(k) && H.get(k) !== hash ? null : R0, L = t.ink.get(k), M = inkMerge(L, R);
+    if(!M.strokes.length) continue;
+    if(liveText(L) !== liveText(M)) r.got.push(k);                    // got: what is drawn here changed (a mark, a newer version, an erase)
+    if(pageText(R) !== pageText(M) || (R0 && !R)) r.sent.push(k);
+    t.ink.set(k, M); D.set(k, clone(M)); H.set(k, hash);
+  }
+  return r;
+}
+/* the tablet's ink (lib = libraryOf()) against the model: every page of a live song, 1..pages, by id */
+export function inkCompareTablet(m, name, lib){
+  const t = m.tablets[name], out = [];
+  for(const k of new Set([...t.ink.keys(), ...Object.keys(lib.ink || {})])){
+    const {id, p} = splitInkKey(k), s = lib.songs[id];
+    if(!s || s.deleted){ if(lib.ink[k] && entryMap(lib.ink[k]).size) out.push(`${name} holds the marks ${k} of a song that is not live there`); continue; }
+    if(!(p >= 1 && p <= num(s.pages))) continue;
+    for(const d of inkDiff(t.ink.get(k), lib.ink[k], {extraMarkers: !!(m.inkLoose && m.inkLoose.has(id))})) out.push(`${name} "${nameOf('song', s)}" page ${p}: ${d}`);
+  }
+  return out;
+}
+/* Drive's pages (readMarks().pages) against the model, for every page of a song that Drive holds live, 1..pages; a page of a
+   song Drive holds as deleted must not be there. */
+export function inkCompareDrive(m, pages, driveSongs, hs = null){
+  const D = m.drive.ink, H = m.drive.inkH || new Map(), out = [];
+  for(const k of new Set([...D.keys(), ...pages.keys()])){
+    const {id, p} = splitInkKey(k), s = driveSongs[id];
+    if(s && s.deleted){ if(pages.has(k)) out.push(`Drive still holds the marks ${k} of a deleted song`); continue; }
+    if(!s || !(p >= 1 && p <= num(s.pages))) continue;
+    for(const d of inkDiff(D.get(k), pages.get(k), {extraMarkers: !!(m.inkLoose && m.inkLoose.has(id))})) out.push(`Drive "${nameOf('song', s)}" page ${p}: ${d}`);
+    if(hs && H.has(k) && pages.has(k) && hs.get(k) !== H.get(k)) out.push(`Drive "${nameOf('song', s)}" page ${p}: drawn on the chart ${String(hs.get(k)).slice(0, 12)} (h), the model says ${String(H.get(k)).slice(0, 12)}`);
+  }
+  return out;
+}
+/* New version on `name` (CLAUDE.md data model): `id` keeps its id and takes the new chart, its live marks become markers
+   stamped over them, pages past the new end lose their marks; the archived copy `copyId` holds every live mark exactly, and
+   no marker. Checked against what the app stored (inkBefore / inkAfter = the tablet's ink store), then taken. */
+export function inkNewVersion(m, name, id, copyId, inkBefore, inkAfter, newPages){
+  const out = [], keys = Object.keys(inkBefore).filter(k => splitInkKey(k).id === id);
+  for(const k of keys){
+    const p = splitInkKey(k).p, was = entryMap(inkBefore[k]), lv = [...was.values()].filter(s => !s.deleted);
+    const ck = inkKeyOf(copyId, p), copy = inkAfter[ck];
+    if(lv.length || (copy && entryMap(copy).size)) for(const d of inkDiff({strokes: lv}, copy)) out.push(`${name} New version: the archived copy page ${p}: ${d}`);
+    const now = entryMap(inkAfter[k]);
+    if(p > newPages){ if(now.size) out.push(`${name} New version: page ${p} is past the new chart's end and still has marks`); continue; }
+    for(const s of lv){ const x = now.get(s.id); if(!x || x.deleted !== true || !(num(x.updated) > num(s.updated))) out.push(`${name} New version: ${s.id} on page ${p} is ${JSON.stringify(x)}, not a marker stamped after ${s.updated}`); }
+    for(const [sid, x] of now) if(!x.deleted) out.push(`${name} New version: ${sid} on page ${p} is still live on the new chart`);
+  }
+  for(const k of new Set([...keys, ...Object.keys(inkAfter).filter(k => [id, copyId].includes(splitInkKey(k).id))])) inkLocal(m, name, k, inkAfter[k]);
+  return out;
+}
+/* After a comparison passed: on a song whose replaced chart left markers the spec does not settle (m.inkLoose), the model takes the
+   pages the app and Drive hold, so its next prediction starts from them (live entries were already checked equal). */
+export function inkAdoptLoose(m, name, lib, drivePages){
+  if(!m.inkLoose || !m.inkLoose.size) return;
+  const t = name && m.tablets[name], D = m.drive.ink;
+  if(t) for(const [k, v] of Object.entries(lib.ink || {})) if(m.inkLoose.has(splitInkKey(k).id)) t.ink.set(k, clone(v));
+  if(drivePages) for(const [k, v] of drivePages) if(m.inkLoose.has(splitInkKey(k).id)) D.set(k, clone(v));
 }

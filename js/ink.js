@@ -2,7 +2,7 @@
    so marks never move when a crop changes. A canvas carries the crop it is drawn through in cv._crop. */
 import {$, esc, toast, armed, uid, modal} from './util.js';
 import {explainError} from './errors.js';
-import {putInk, getInk, reconcile, liveStrokes} from './store.js';
+import {putInk, getInk, reconcile, liveStrokes, stamp} from './store.js';
 import {V, stage, viewer, draw} from './viewer.js';
 
 const FULL = {x:0, y:0, w:1, h:1};
@@ -94,7 +94,7 @@ function eraseAt(e){
   const arr = cur.arr;
   const hit = s => !s.deleted && s.t !== 'text' && Array.isArray(s.p) && s.p.some(p => { const [sx, sy] = toScreen(cv, r, p); return Math.hypot(sx - x, sy - y) < 14 + s.w * r.width / cr.w / 2; });
   if(arr.some(hit)){
-    const t = Date.now(), keep = arr.map(s => hit(s) ? {id:s.id, deleted:true, updated:t} : s);
+    const keep = arr.map(s => hit(s) ? {id:s.id, deleted:true, updated:stamp(s)} : s);     // stamp(): the marker beats the stroke, even one dated ahead
     cur.arr = keep; cur.changed = true; showArr(cur, keep);
   }
 }
@@ -146,13 +146,14 @@ async function noteTap(cv, pn, note, pos){
   const color = PEN_COLORS.includes(V.color) ? V.color : PEN_COLORS[0];
   const r = await noteDialog(note, color);
   if(!r) return;
-  const arr = V.ink.get(pn) || [], t = Date.now();
+  const arr = V.ink.get(pn) || [];
   if(note){
-    if(r === 'delete') commit(cv, pn, arr.map(s => s.id === note.id ? {id:note.id, deleted:true, updated:t} : s));
-    else { V.textSize = r.sizeKey; commit(cv, pn, arr.map(s => s.id === note.id ? {...s, text:r.text, size:r.size, c:r.c, updated:t} : s)); }
+    /* an edit or a deletion is stamp()ed over the note as it is now, so it beats that note even when it is dated ahead */
+    if(r === 'delete') commit(cv, pn, arr.map(s => s.id === note.id ? {id:note.id, deleted:true, updated:stamp(s)} : s));
+    else { V.textSize = r.sizeKey; commit(cv, pn, arr.map(s => s.id === note.id ? {...s, text:r.text, size:r.size, c:r.c, updated:stamp(s)} : s)); }
   } else {
     V.textSize = r.sizeKey; V.color = r.c;
-    commit(cv, pn, arr.concat([{id:uid(), t:'text', x:r4(pos[0]), y:r4(pos[1]), text:r.text, size:r.size, c:r.c, updated:t}]));
+    commit(cv, pn, arr.concat([{id:uid(), t:'text', x:r4(pos[0]), y:r4(pos[1]), text:r.text, size:r.size, c:r.c, updated:Date.now()}]));   // a new note: now
   }
 }
 
@@ -210,7 +211,7 @@ export function inkPointerMove(e){
 function endNote(c, cancelled){
   if(cancelled){ showArr(c, c.before); return; }
   if(c.note && c.moved){            // moved: the note object was edited in place, so save it as one step
-    const t = Date.now(), next = c.arr.map(s => s.id === c.note.id ? {...s, updated:t} : s);
+    const next = c.arr.map(s => s.id === c.note.id ? {...s, updated:stamp(s)} : s);       // the copy still has the note's old `updated`
     V.hist.push({id:c.id, pn:c.pn, before:c.before}); saveInk(c.id, c.pn, next); showArr(c, next);
   } else if(V.id === c.id && curCv(c).isConnected){   // a tap: the note dialog, only while that page is still shown
     c.cv = curCv(c);
@@ -302,7 +303,7 @@ export function initInk(){
     for(const cv of stage.querySelectorAll('.ink')){
       const pn = +cv.dataset.pn, before = V.ink.get(pn) || [];
       if(!liveStrokes(before).length) continue;
-      const t = Date.now(), gone = before.map(s => s.deleted ? s : {id:s.id, deleted:true, updated:t});
+      const gone = before.map(s => s.deleted ? s : {id:s.id, deleted:true, updated:stamp(s)});
       V.hist.push({id:V.id, pn, before:before.slice()}); V.ink.set(pn, gone); saveInk(V.id, pn, gone); paint(cv, gone);
     }
   };

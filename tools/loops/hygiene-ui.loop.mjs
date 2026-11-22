@@ -742,7 +742,7 @@ async function setMenuLoop(ctx){
 }
 
 /* ---------- (f) the Back up / Sync box and the Google Drive box ---------- */
-const NOT_SET_UP = 'Sync keeps your songs, setlists and collections the same on your tablets, through your own Google Drive. Not synced on this tablet yet. Sync is not a backup.';
+const NOT_SET_UP = 'Sync keeps your songs, setlists, collections and your pen marks and notes the same on your tablets, through your own Google Drive. Not synced on this tablet yet. Sync is not a backup.';
 /* The Google Drive box as it is drawn: its heading, the status sentence, the buttons (data name and text) and their heights, the
    read-only line at the bottom of the Library, and whether the box fits the screen. */
 const driveDrawn = page => page.evaluate(() => {

@@ -67,3 +67,11 @@ in another tab or window that is still running the old version, the new one wait
 tab". Close that tab (or the other window); the page carries on by itself and nothing is lost. If it never goes: close every
 Setlist Stand tab and the Home Screen app, then open it once. A tab left open on the new version says "Reload this page" when
 a still newer update is installed elsewhere: reload it before changing anything.
+
+## (f) Sync did something wrong
+Sync copies a change on one tablet to the other, so a mistake can be copied too (a song deleted by accident, a library restored from an old backup).
+1. On the tablet that still has the good library: Library → "Back up / Sync" → "Back up everything". Keep that file safe.
+2. Stop it spreading: on both tablets, Library → "Back up / Sync" → "Google Drive settings" → "Disconnect". Nothing is sent to Google after that, and nothing on the tablet changes.
+3. To start clean: in Google Drive on a computer, delete the folder "Setlist Stand" (this loses nothing on the tablets: every tablet keeps its own copy). On BOTH tablets restore the same good backup (Library → "Back up / Sync" → "Restore from backup"), then on one tablet connect and tap Sync, then on the other.
+4. Restoring an OLDER backup while Sync is still connected does not hold: the next Sync brings back whatever the other tablet changed since, because the newer change wins. Disconnect first (step 2).
+5. Keep the clock of both tablets on "automatic": the newer change wins, and the tablet's clock says which is newer.

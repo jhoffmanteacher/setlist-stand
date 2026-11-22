@@ -34,7 +34,9 @@ import path from 'node:path';
 import {FIX, assert, sleep, diff, sha256, PDFDocument, backupNow, restoreZip, idbAll, normalise, snapshot, openSetMenu} from './harness.mjs';
 import {buildLibrary, NOTE} from './share-lib.mjs';
 import {openTablet, makeFromBackup, syncTap, tapSync, finishSync, libraryOf, readDrive, reportCounts, clockOf, setClock, takeWrites, halfSongs} from './sync-two.mjs';
-import {newModel, addTablet, copyTablet, localEdit, localNew, localDelete, adopt, sync, compareTablet, compareDrive, KINDS, pdfName, titleOf, canonHash} from './sync-model.mjs';
+import {marksCounts} from './sync-ink-kit.mjs';
+import {newModel, addTablet, copyTablet, localEdit, localNew, localDelete, adopt, sync, compareTablet, compareDrive, KINDS, pdfName, titleOf, canonHash,
+  inkSeed, inkSync, inkCompareTablet, inkCompareDrive, inkDiff, splitInkKey, inkAdoptLoose} from './sync-model.mjs';
 
 const YEAR = 365 * 864e5;
 const VERBOSE = process.argv.includes('--verbose');
@@ -174,9 +176,11 @@ async function startA(ctx, {copy = false, extraSet = false} = {}){
 /* ---------- checks ---------- */
 async function agree(m, tablets, what, loose = []){
   const drive = readDrive(tablets[0].google);
-  const out = [...drive.problems.map(p => 'Drive layout: ' + p), ...compareDrive(m, drive, loose)];
+  const out = [...drive.problems.map(p => 'Drive layout: ' + p), ...compareDrive(m, drive, loose), ...inkCompareDrive(m, drive.ink, Object.fromEntries(drive.recs.song), drive.inkH)];
   for(const t of tablets){
-    out.push(...compareTablet(m, t.name, await libraryOf(t), loose));
+    const L = await libraryOf(t);
+    out.push(...compareTablet(m, t.name, L, loose), ...inkCompareTablet(m, t.name, L));
+    if(!out.length) inkAdoptLoose(m, t.name, L, drive.ink);
     out.push(...t.watch.violations.map(v => `${t.name} (order on Drive): ${v}`));
     if(pageErrors(t).length) out.push(`${t.name} page errors: ${pageErrors(t).join(' | ')}`);
   }
@@ -186,12 +190,18 @@ async function agree(m, tablets, what, loose = []){
 const short = (m, name, kind, id) => { const x = m.tablets[name][kind].get(id) || m.drive[kind].get(id); return kind === 'song' ? x.song : x.name; };
 function checkReport(m, t, rep, r, what, {both = true} = {}){
   const c = reportCounts(rep.text), P = `${what}: the report "${rep.text.slice(0, 500)}"`;
+  /* Part 3: the pages of marks sent and got, as the marks step of the model has them (a run that moved a replaced chart's marks
+     onto its archived copy may count pages the spec leaves open: see inkSync) */
+  if(r.ink && !r.ink.moved.length){
+    const mk = marksCounts(rep.text);
+    assert(mk.sent === r.ink.sent.length && mk.got === r.ink.got.length, `${P} counts marks sent on ${mk.sent} and got on ${mk.got} page(s); the model: sent ${r.ink.sent.join(', ') || 'none'}, got ${r.ink.got.join(', ') || 'none'}`);
+  }
   assert(rep.state === 'finished', `${P} did not finish`);
   if(!r.sentMarkers && !r.asked.length) for(const k of KINDS){
     assert(c.sent[k] === r.sent[k], `${P} counts ${c.sent[k]} ${k} sent; the model sent ${r.sent[k]}`);
     assert(c.got[k] === r.got[k], `${P} counts ${c.got[k]} ${k} got; the model got ${r.got[k]}`);
   }
-  const nothing = !r.actions.length && !r.skipped.length;
+  const nothing = !r.actions.length && !r.skipped.length && !(r.ink && (r.ink.sent.length || r.ink.got.length || r.ink.moved.length));
   assert(c.upToDate === nothing, `${P} ${nothing ? 'does not say' : 'says'} everything is up to date; the model's work: ${JSON.stringify(r.actions).slice(0, 300)}`);
   if(both){
     if(r.both.length) for(const b of r.both) assert(c.both.includes(short(m, t.name, b.kind, b.id)), `${P} does not name "${short(m, t.name, b.kind, b.id)}" as changed on both tablets`);
@@ -205,12 +215,18 @@ function checkReport(m, t, rep, r, what, {both = true} = {}){
 /* One Sync through the button, the same run in the model, and the report checked against it. byName: answers for the box. */
 async function doSync(m, t, what, {byName = {}, byId = {}, both = true, invalid} = {}){
   const now = await clockOf(t);
+  /* marks: what this tablet holds now is what the app made of the person's actions (drawing is not what these loops test); the
+     model takes it, then predicts this run's marks from the spec (inkSync) */
+  const L0 = await libraryOf(t);
+  inkSeed(m, t.name, L0.ink);
   t.google.clearLog(); await takeWrites(t);
   const rep = await syncTap(t, {answers: byName});
   const log = t.google.requests.slice();
   const half = halfSongs(await takeWrites(t));
   assert(!half.length, `${what}: ${half.join('; ')}`);
   const r = sync(m, t.name, {now, answers: byId, invalid});
+  r.ink = inkSync(m, t.name, {before: L0.songs, after: (await libraryOf(t)).songs, driveSongs: Object.fromEntries(readDrive(t.google).recs.song), drivePdfs: new Map([...readDrive(t.google).pdfs].map(([k, v]) => [k, v.hash]))});
+  assert(!r.ink.problems.length, `${what}: ${r.ink.problems.join('; ')}`);
   if(r.skipped.length) for(const x of r.skipped) assert(/Skipped/.test(rep.text) && rep.text.includes(short(m, t.name, x.kind, x.id)), `${what}: the report does not list "${short(m, t.name, x.kind, x.id)}" as skipped: ${rep.text.slice(0, 400)}`);
   if(VERBOSE) console.log(`    ${what}: ${rep.text}\n      model: ${JSON.stringify(r.actions)}${r.both.length ? ' both: ' + r.both.map(b => b.id) : ''}${r.future.length ? ' future: ' + r.future.map(f => f.id) : ''}`);
   checkReport(m, t, rep, r, what, {both});
@@ -223,12 +239,16 @@ function quiet(run, t, what){
   assert(!w.length && !d.length, `${what}: a Sync with nothing to do sent ${w.length} write(s) and ${d.length} download(s): ${[...w, ...d].map(e => e.method + ' ' + e.path).slice(0, 6).join(', ')}`);
   assert(!run.r.actions.length, `${what}: the model has work to do (the test is wrong): ${JSON.stringify(run.r.actions)}`);
 }
-/* Nothing per-tablet and no ink in Drive: names, properties and bytes of every file */
-function nothingPrivate(google, extra = []){
+/* Nothing per-tablet on Drive: names, properties and bytes of every file. Marks (Part 3) live only in the Marks folder's ink files:
+   `inkOk` (text notes, '"strokes"') may be in those and in no other file; per-tablet settings and `extra` are in none. */
+function nothingPrivate(google, extra = [], inkOk = []){
+  const marks = readDrive(google).marks;
   for(const f of google.files.values()){
     const hay = [f.name, JSON.stringify(f.appProperties), f.description || '', f.content ? f.content.toString('latin1') : ''].join('\n');
-    for(const k of [...PRIVATE_KEYS, ...extra]) assert(!hay.includes(k), `"${k}" is in the Drive file "${f.name}" (per-tablet settings and ink stay on the tablet)`);
-    assert(!/^ink/.test(f.appProperties.k || '') && !/^ink/.test(f.name), `an ink file on Drive: "${f.name}"`);
+    const isInk = f.appProperties.k === 'ink';
+    for(const k of [...PRIVATE_KEYS, ...extra, ...(isInk ? [] : inkOk)]) assert(!hay.includes(k), `"${k}" is in the Drive file "${f.name}" (per-tablet settings stay on the tablet; marks only in the Marks folder)`);
+    if(isInk) assert(!f.trashed && marks && f.parents.includes(marks.id) && /^ink-.+-\d+\.json$/.test(f.name), `an ink file outside the Marks folder or misnamed: "${f.name}"`);
+    else assert(!/^ink-/.test(f.name), `a file named like an ink page that is not one: "${f.name}"`);
   }
 }
 const fileState = f => JSON.stringify({name: f.name, mimeType: f.mimeType, parents: f.parents, appProperties: f.appProperties, modifiedTime: f.modifiedTime, trashed: !!f.trashed, bytes: f.content ? sha256(f.content) : null});
@@ -276,8 +296,7 @@ async function loopWalk(ctx){
     const gig = live(L0, 'sets')[0];
     assert(a && b && c && cp && gig && c.archived && a.hash === cp.hash && a.id !== cp.id && a.crop && gig.items.some(i => i.type === 'break') && gig.items.filter(i => i.id === a.id).length === 2,
       'the test library is not what the loop needs: ' + JSON.stringify(live(L0).map(s => [s.title, s.archived])));
-    const inkA = JSON.stringify(L0.ink);
-    assert(inkA.includes(NOTE), 'the test library has no text note');
+    assert(JSON.stringify(L0.ink).includes(NOTE), 'the test library has no text note');
 
     /* Sync A: everything goes up; Drive is laid out as the design says */
     const s1 = await doSync(m, A, 'first Sync on A');
@@ -286,7 +305,7 @@ async function loopWalk(ctx){
     assert(A.watch.songWrites >= 4, `the order watcher saw ${A.watch.songWrites} song record writes (4 expected): it is not looking at the uploads`);
     assert(drive.pdfs.has(a.id) && drive.pdfs.has(cp.id) && drive.pdfs.get(a.id).fileId !== drive.pdfs.get(cp.id).fileId, 'two songs with the same PDF do not have one PDF file each on Drive');
     assert(/Last synced/.test(await A.page.locator('#libDriveLine [data-drivestatus]').textContent()) && Number((await ls(A))['ss-last-sync']) > 0, 'the Library does not say when this tablet last synced, or ss-last-sync is not set');
-    nothingPrivate(A.google, [NOTE, PROBLEM, '"strokes"']);
+    nothingPrivate(A.google, [PROBLEM], [NOTE, '"strokes"']);
     const seeded = seedForeign(A.google, drive);
 
     /* a second Sync with nothing changed sends nothing and downloads nothing */
@@ -327,7 +346,6 @@ async function loopWalk(ctx){
     w = await act(B, 'songs', cp.id, () => setArchived(B, cp.id, true));
     probs.push(...localEdit(m, 'B', 'song', cp.id, {archived: true}, w, (await libraryOf(B)).songs[cp.id]));
     assert(!probs.length, 'the edits did not do what the model expects:\n    ' + probs.join('\n    '));
-    const inkB = JSON.stringify((await libraryOf(B)).ink);
 
     /* Sync A, Sync B, Sync A */
     await doSync(m, A, 'Sync A after the edits');
@@ -360,9 +378,19 @@ async function loopWalk(ctx){
     const sa = await ls(A), sb = await ls(B);
     assert(sa['ss-default-coll'] === 'cband' && sa['ss-two'] === '1' && sa['ss-pen-w'] === 'thick' && (sa['ss-problems'] || '').includes(PROBLEM), 'A\'s own settings changed: ' + JSON.stringify(sa));
     assert(!('ss-default-coll' in sb) && sb['ss-two'] === '0' && sb['ss-pen-w'] === 'thin' && !(sb['ss-problems'] || '').includes(PROBLEM), 'B took settings from A: ' + JSON.stringify(sb));
-    nothingPrivate(A.google, [NOTE, PROBLEM, '"strokes"']);
-    assert(JSON.stringify((await libraryOf(A)).ink) === inkA, 'a Sync changed A\'s marks (marks are not synced in Part 2)');
-    assert(JSON.stringify((await libraryOf(B)).ink) === inkB, 'a Sync changed B\'s marks');
+    nothingPrivate(A.google, [PROBLEM], [NOTE, '"strokes"']);
+    /* Part 3: the marks went across: A = B = Drive by stroke id, on every page of every live song (the text note too) */
+    {
+      const IA = await libraryOf(A), IB = await libraryOf(B), DI = readDrive(A.google).ink, keys = new Set([...Object.keys(IA.ink), ...Object.keys(IB.ink), ...DI.keys()]);
+      const bad = [];
+      for(const k of keys){
+        const {id, p} = splitInkKey(k), s = IA.songs[id];
+        if(!s || s.deleted || !(p >= 1 && p <= s.pages)) continue;
+        bad.push(...inkDiff(IA.ink[k], IB.ink[k]).map(x => `${k} A vs B: ${x}`), ...inkDiff(IA.ink[k], DI.get(k)).map(x => `${k} A vs Drive: ${x}`));
+      }
+      assert(!bad.length, 'after the walk the marks differ: ' + bad.slice(0, 6).join(' | '));
+      assert(JSON.stringify(IA.ink).includes(NOTE) && [...DI.values()].some(pg => JSON.stringify(pg).includes(NOTE)), 'the text note did not stay on A and reach Drive');
+    }
     foreignUntouched(A.google, seeded, 'the end of the walk');
     assert(!live(await libraryOf(A)).some(s => s.title === 'Planted'), 'a file that is not the app\'s became a song');
 

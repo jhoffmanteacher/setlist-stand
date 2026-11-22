@@ -183,10 +183,10 @@ async function runNewVersion(file, id, s){
     }
     ops.push({store:'files', key:id, value:new Blob([buf], {type:'application/pdf'})});
     for(let p = 1; p <= s.pages; p++){
-      const key = id + ':' + p, cur = upgradeInk(await get('ink', key)).record.strokes, marks = cur.filter(x => !x.deleted);
+      const key = id + ':' + p, rec = upgradeInk(await get('ink', key)).record, cur = rec.strokes, marks = cur.filter(x => !x.deleted);
       if(copy && marks.length) ops.push({store:'ink', key:copy.id + ':' + p, value:inkRecord(marks)});   // the old chart keeps its marks
       if(p > n) ops.push({store:'ink', key, delete:true});                                       // that page no longer exists
-      else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []))});     // keep deletion markers for the pages that remain
+      else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []), rec)});     // keep deletion markers for the pages that remain (stamped over the marks and the page)
     }
     ops.push({store:'songs', key:id, value:{...s, pages:n, hash, title:displayName(s), updated:stamp(s)}});
     /* load() makes new records: a different one here means the song was edited or deleted while the dialogs were open

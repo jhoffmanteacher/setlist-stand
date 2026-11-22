@@ -1,24 +1,28 @@
-/* What a sync does to Google Drive (Part 2): the two sub-folders, ONE listing of each, downloads, uploads, rename, delete.
+/* What a sync does to Google Drive (Parts 2 and 3): the three sub-folders, ONE listing of each, downloads, uploads, rename, delete.
    Built on the thin client in js/drive.js (token, retries, plain errors). Nothing here decides anything about the library:
-   js/syncmerge.js decides, js/sync.js carries it out.
+   js/syncmerge.js decides, js/sync.js carries it out (js/syncplan.js reads both sides, js/syncapply.js does the work).
 
    Layout, inside the home folder "Setlist Stand" (found by its private mark, see drive.js):
      Charts                          one PDF per song: name "<title>.pdf", properties {k:'pdf', id:<song id>, h:<sha-256 hex>}
      Library data (do not edit)      one JSON file per record: name "<kind>-<id>.json", the record itself as the content,
                                      properties {k:<kind>, id, u:<updated>, c:<canonical hash>, d:'1' for a deletion marker}
+     Marks (do not edit)             one JSON file per ink page (Part 3): name "ink-<song id>-<page>.json" (inkFileName in
+                                     js/syncink.js), the page record {updated, strokes} as the content, properties
+                                     {k:'ink', id:<song id>, p:<page>, u:<updated>, c:<canonical hash>, h:<the chart's sha-256>}
+                                     (parseInkProps; a file without a usable h is a stray)
    The properties are what ONE listing needs to tell what changed, so nothing is downloaded to find out. A file the app did
    not make, or one whose properties are not ours, is never touched. Two files for one record (two tablets made it at the same
    moment) are not an error: the one with the larger `u` is used, then the oldest, then the smaller file id, so every tablet
    picks the same one; the others are left alone. */
 import {call, readJson, odd, listAll, okFileId, FOLDER_MIME, ensureFolder, DriveError} from './drive.js';
 import {ID_RE} from './store.js';
+import {parseInkProps, DATE_MAX} from './syncink.js';
 
 export const MULTIPART_MAX = 5 * 1024 * 1024;       // up to this, one request; over it, a resumable upload (needs the session address to be readable)
-const SUBS = {charts:'Charts', data:'Library data (do not edit)'};
+const SUBS = {charts:'Charts', data:'Library data (do not edit)', ink:'Marks (do not edit)'};
 const LIST_FIELDS = 'nextPageToken,files(id,name,mimeType,createdTime,size,appProperties)';
 const FILE_FIELDS = 'id,name,appProperties';
 const HEX64 = /^[0-9a-f]{64}$/;
-const MAX_U = 8.64e15 - 1e6;                                  // below the largest date JavaScript has, so `updated + 1` (stamp()) stays a date for any number of edits we will ever see
 export const KIND_MARKS = ['coll', 'song', 'set'];
 
 const byAge = (a, b) => String(a.createdTime || '').localeCompare(String(b.createdTime || '')) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -40,10 +44,19 @@ async function ensureSub(home, mark, {signal}){
   found = await findSub(home, mark, {signal});
   return found.length ? found[0].id : made.id;
 }
-/* {home, charts, data}: the folder ids, made when they are not there yet. */
+/* {home, charts, data, ink}: the folder ids, made when they are not there yet. The Marks folder is only LOOKED FOR here (ink: null when
+   there is none): it is made by ensureInk() at the first page of marks that has to be sent, so a run with no marks to send never makes
+   it, and a full Drive still downloads everything and fails only at the upload that needs space (as in Part 2). */
 export async function ensureLayout({signal} = {}){
   const home = (await ensureFolder({signal})).id;
-  return {home, charts:await ensureSub(home, 'charts', {signal}), data:await ensureSub(home, 'data', {signal})};
+  const charts = await ensureSub(home, 'charts', {signal}), data = await ensureSub(home, 'data', {signal});
+  const ink = (await findSub(home, 'ink', {signal}))[0];
+  return {home, charts, data, ink:ink ? ink.id : null};
+}
+/* The Marks folder's id, found or made once (same rules as the other two); kept in the layout for the rest of the run. */
+export async function ensureInk(layout, {signal} = {}){
+  if(!layout.ink) layout.ink = await ensureSub(layout.home, 'ink', {signal});
+  return layout.ink;
 }
 
 /* The better of two files for one thing: the larger `u` (records only), then the older, then the smaller file id. */
@@ -55,14 +68,15 @@ function better(a, b){
 /* What Drive holds, from one listing of each folder:
      pdfs     Map song id -> {fileId, name, h, size, createdTime}
      records  {coll, song, set}: Map id -> {fileId, name, u, c, d, createdTime}
-     strays   how many files in the two folders are not ours (left alone) */
-export async function listLibrary({charts, data}, {signal} = {}){
-  const pdfs = new Map(), records = {coll:new Map(), song:new Map(), set:new Map()};
+     ink      Map "songId:page" -> {fileId, u, c, h, size, createdTime}   (a page of marks; same rule for two files of one page)
+     strays   how many files in the three folders are not ours (left alone) */
+export async function listLibrary({charts, data, ink: marks}, {signal} = {}){
+  const pdfs = new Map(), records = {coll:new Map(), song:new Map(), set:new Map()}, ink = new Map();
   let strays = 0;
   for(const f of await listAll({q:`'${data}' in parents and trashed = false`, fields:LIST_FIELDS, pageSize:'1000'}, {signal})){
     const p = f.appProperties || {}, u = Number(p.u);
     if(!records[p.k] || typeof p.id !== 'string' || !ID_RE.test(p.id) || !Number.isFinite(u) || !HEX64.test(p.c || '')){ strays++; continue; }
-    if(u < 0 || u > MAX_U){ strays++; continue; }
+    if(u < 0 || u > DATE_MAX){ strays++; continue; }          // (a time past MAX_U but still a date is listed: the run refuses it by name, fetchRecord)
     const e = {fileId:f.id, name:f.name, u, c:p.c, d:p.d === '1', createdTime:f.createdTime};
     const had = records[p.k].get(p.id);
     records[p.k].set(p.id, had ? better(had, e) : e);
@@ -74,7 +88,14 @@ export async function listLibrary({charts, data}, {signal} = {}){
     const had = pdfs.get(p.id);
     pdfs.set(p.id, had ? better(had, e) : e);
   }
-  return {pdfs, records, strays};
+  for(const f of marks ? await listAll({q:`'${marks}' in parents and trashed = false`, fields:LIST_FIELDS, pageSize:'1000'}, {signal}) : []){      // no Marks folder yet: no pages
+    const p = parseInkProps(f.appProperties);          // checks the id, the page number, u (a date, written as String() writes it; one past MAX_U is refused by name when read) and c
+    if(!p){ strays++; continue; }
+    const key = p.songId + ':' + p.page, e = {fileId:f.id, u:p.u, c:p.c, h:p.h, size:Number(f.size) || 0, createdTime:f.createdTime};
+    const had = ink.get(key);
+    ink.set(key, had ? better(had, e) : e);
+  }
+  return {pdfs, records, ink, strays};
 }
 
 /* ---------- names and properties ---------- */
@@ -86,6 +107,7 @@ export function pdfFileName(title){
 }
 export const recordProps = (kind, rec, u, c) => ({k:kind, id:rec.id, u:String(u), c, ...(rec.deleted ? {d:'1'} : {})});
 export const pdfProps = (id, h) => ({k:'pdf', id, h});
+export const inkProps = (songId, page, u, c, h) => ({k:'ink', id:songId, p:String(page), u:String(u), c, h});
 
 /* ---------- downloads ---------- */
 export class TooBig extends Error { constructor(what){ super(`${what} is too big`); this.name = 'TooBig'; } }
@@ -110,10 +132,15 @@ async function readLimited(res, maxBytes, what){
   }
   return new Blob(parts, {type:res.headers.get('content-type') || ''});
 }
+/* A file's content as text, never more than maxBytes (TooBig). Whether it is JSON is the caller's question (a page of marks that is
+   not JSON is a bad file, not a refusal by Google). */
+export async function downloadText(fileId, {signal, maxBytes = 1e6, what = 'a record'} = {}){
+  const res = await call('/files/' + encodeURIComponent(fileId), {query:{alt:'media'}, signal});
+  return bodyOf(res, async r => (await readLimited(r, maxBytes, what)).text());
+}
 /* A record file's JSON, as an object (never an array). */
 export async function downloadJson(fileId, {signal, maxBytes = 1e6} = {}){
-  const res = await call('/files/' + encodeURIComponent(fileId), {query:{alt:'media'}, signal});
-  const text = await bodyOf(res, async r => (await readLimited(r, maxBytes, 'a record')).text());
+  const text = await downloadText(fileId, {signal, maxBytes});
   let j; try{ j = JSON.parse(text); }catch(e){ throw odd('a record that is not JSON'); }
   if(!j || typeof j !== 'object' || Array.isArray(j)) throw odd('a record that is not an object');
   return j;
@@ -149,6 +176,11 @@ export async function putFile({fileId, parent, name, mime, appProperties, bytes}
   const j = await readJson(res);
   if(!okFileId(j.id)) throw odd('an uploaded file with no usable id');
   return j;
+}
+/* A file's properties as Drive holds them NOW (a page of marks is replaced only if it is still the one that was merged). */
+export async function fileProps(fileId, {signal} = {}){
+  const j = await readJson(await call('/files/' + encodeURIComponent(fileId), {query:{fields:'id,appProperties'}, signal}));
+  return j.appProperties && typeof j.appProperties === 'object' ? j.appProperties : {};
 }
 /* Renames a file or changes its properties without touching its content. */
 export async function patchFile(fileId, {name, appProperties}, {signal} = {}){

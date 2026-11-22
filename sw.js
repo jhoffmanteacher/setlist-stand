@@ -9,7 +9,7 @@
  *   fall back to the cached index.html so the app opens offline.
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-22-6';
+const VERSION = '2026-11-22-7';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -50,6 +50,10 @@ const PRECACHE = [
   'js/driveops.js',
   'js/syncmerge.js',
   'js/sync.js',
+  'js/syncplan.js',
+  'js/syncapply.js',
+  'js/syncink.js',
+  'js/syncmarks.js',
   'js/syncdialogs.js',
   'js/deleteops.js',
   'js/errors.js',
