@@ -689,6 +689,25 @@ const FAULTS = [
     loop: "sync 5e", why: "a backup time stored while the clock was ahead hides every change for days"},
   {id: 's4-old-chart-copy-shares-blob', file: 'js/sync.js', find: "const bytes = await stored.arrayBuffer(), old = new Blob([bytes], {type:'application/pdf'});", replace: "const bytes = await stored.arrayBuffer(), old = stored;",
     loop: 'sync 4k', why: 'the archived copy of a replaced chart stores the SAME Blob it read: in Safari it points at data the download then replaces, so the old chart is lost (Chromium hides it: run this one with SS_BROWSER=webkit)'},
+  /* gig dates: groups, the name parser, the date check, restore heal, Duplicate, the one-time fill-in */
+  {id: 'gig-earlier-years-open', file: 'js/gigdate.js', find: "sets:earlier.get(y).sort(desc), open:false}", replace: "sets:earlier.get(y).sort(desc), open:true}",
+    loop: 'gigdates', why: 'every past year starts open: the Setlists list is a long scroll of old gigs instead of Upcoming first'},
+  {id: 'gig-today-is-past', file: 'js/gigdate.js', find: 'else if(g >= today) upcoming.push(st);', replace: 'else if(g > today) upcoming.push(st);',
+    loop: 'gigdates', why: "tonight's gig is filed under this year's past gigs instead of Upcoming"},
+  {id: 'gig-name-two-dates-taken', file: 'js/gigdate.js', find: 'if(found.length !== 1) return null;', replace: 'if(!found.length) return null;',
+    loop: 'gigdates', why: 'a name holding two dates ("moved from Oct 18 2026 to Oct 25 2026") is filled in with the first one, maybe the wrong day'},
+  {id: 'gig-feb-31-valid', file: 'js/gigdate.js', find: 'return d <= new Date(Date.UTC(y, mo, 0)).getUTCDate() ? v : null;', replace: 'return d <= 31 ? v : null;',
+    loop: 'gigdates', why: 'February 31 counts as a gig date: it is kept, shown and grouped as a day that does not exist'},
+  {id: 'gig-restore-keeps-bad', file: 'js/backup.js', find: 'if(st.gig != null && !gigOf(st)){ delete st.gig; badGig++; }', replace: 'if(st.gig != null && !gigOf(st)){ badGig++; }',
+    loop: 'gigdates', why: 'a restore keeps a gig that is not a real date in the library (and still says it left it out)'},
+  {id: 'gig-duplicate-copies-date', file: 'js/setlists.js', find: "const copy = {id:uid(), name:st.name + ' copy', created:Date.now(),", replace: "const copy = {id:uid(), name:st.name + ' copy', ...(st.gig ? {gig:st.gig} : {}), created:Date.now(),",
+    loop: 'gigdates', why: "Duplicate carries the gig date: next week's copy shows last week's date and sits in the wrong group"},
+  {id: 'gig-fill-not-now-writes', file: 'js/gigui.js', find: "const picked = await fillDialog(cands);\n    if(!picked){ answer(); return; }", replace: "const picked = (await fillDialog(cands)) || cands;",
+    loop: 'gigdates', why: 'Not now (or Escape) on the fill-in still writes every date it found'},
+  {id: 'gig-fill-key-never-set', file: 'js/gigui.js', find: "answered = true; try{ localStorage.setItem(FILL_KEY, '1'); }catch(e){}", replace: 'answered = true;',
+    loop: 'gigdates', why: 'the fill-in is asked again every time the app is reopened, after it was answered'},
+  {id: 'gig-fill-renames', file: 'js/gigui.js', find: "value:{...now, gig, updated:stamp(now)}", replace: "value:{...now, gig, name:now.name + ' (' + gig + ')', updated:stamp(now)}",
+    loop: 'gigdates', why: 'filling in a gig date changes the setlist name the person typed'},
 ];
 
 const args = process.argv.slice(2);

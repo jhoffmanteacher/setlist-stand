@@ -1842,6 +1842,107 @@ async function stepBackupReminder(t){
   await page.click('#tLib');
 }
 
+/* Gig dates (js/gigdate.js, js/gigui.js): groups on the Setlists list, the Gig date button, the one-time fill-in from a name. */
+async function stepGigDates(t){
+  const {page} = t;
+  const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const now = new Date(), y = now.getFullYear(), today = ymd(now);
+  const next = ymd(new Date(y, now.getMonth() + 1, 15)), later = ymd(new Date(y, now.getMonth() + 2, 15));
+  const early = `${y}-01-01` < today ? `${y}-01-01` : null;          // none when today is January 1
+  const last = `${y - 1}-06-15`;
+  const toSets = async () => {
+    await toLibrary(page); await page.click('#tSets');
+    if(await page.locator('.collbar [data-collpick="all"]').count()) await page.click('.collbar [data-collpick="all"]');
+    await page.waitForSelector('#view [data-newset]');
+  };
+  const make = async (name, gig) => {
+    await page.click('#view [data-newset]');
+    await page.locator('.modal input[type=text]').fill(name);
+    if(gig) await page.locator('.modal input[type=date]').fill(gig);
+    await page.click('.modal [data-ok]');
+    await page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, name);
+    await page.click('#view [data-allsets]');
+    await page.waitForSelector('#view [data-newset]');
+  };
+  /* the list as drawn: group headers (label without the arrow, open or not) and this step's rows ("Gd ...") */
+  const screen = () => page.evaluate(() => [...document.querySelectorAll('#view h3.grp button, #view li.row .t')]
+    .map(e => e.matches('button') ? 'H:' + [...e.childNodes].filter(n => !(n.classList && n.classList.contains('chev'))).map(n => n.textContent).join('') + (e.getAttribute('aria-expanded') === 'true' ? '' : ' [closed]') : e.textContent)
+    .filter(s => s.startsWith('H:') || s.startsWith('Gd ')));
+  const want = open => ['H:Upcoming', 'Gd Next', 'Gd Later', ...(early ? ['H:' + y, 'Gd Early'] : []), 'H:No date', 'Gd None',
+    ...(open ? ['H:' + (y - 1), 'Gd Last'] : ['H:' + (y - 1) + ' (1) [closed]'])];
+  const expectScreen = async (open, what) => {
+    const w = JSON.stringify(want(open));
+    await waitFor(async () => JSON.stringify(await screen()) === w, what).catch(async () => { throw new Error(`${what}: the Setlists list reads ${JSON.stringify(await screen())}, expected ${w}`); });
+  };
+  const gigOfSet = async name => (await setByName(page, name)).gig;
+
+  await toSets();
+  await make('Gd Later', later);
+  await make('Gd Next', next);
+  if(early) await make('Gd Early', early); else console.log('      (no earlier date this year: today is January 1, that group is not checked)');
+  await make('Gd Last', last);
+  await make('Gd None', null);
+  assert(await gigOfSet('Gd Next') === next && await gigOfSet('Gd Last') === last && (await gigOfSet('Gd None')) === undefined, 'the dates from the New setlist dialog were not saved');
+  await expectScreen(false, 'groups');
+  await page.click(`h3.grp button[data-grp="y${y - 1}"]`);
+  await expectScreen(true, 'last year opened');
+  assert(await page.getAttribute(`h3.grp button[data-grp="y${y - 1}"]`, 'aria-expanded') === 'true', 'last year header is not aria-expanded after a tap');
+
+  /* set, change, Cancel and clear on an open setlist; the date in words shows in .gigline */
+  await page.locator('#view [data-set]').filter({has: page.locator('.t', {hasText: exactText('Gd None')})}).click();
+  await page.waitForSelector('#view [data-gig]');
+  assert(!(await page.locator('#view .gigline').count()), 'a setlist with no date shows a gig line');
+  const long = g => page.evaluate(g => { const [a, b, c] = g.split('-').map(Number); return new Intl.DateTimeFormat(undefined, {weekday:'long', year:'numeric', month:'long', day:'numeric'}).format(new Date(a, b - 1, c)); }, g);
+  const gigBox = async (fn) => { await page.click('#view [data-gig]'); await page.locator('.modal input[type=date]').waitFor(); await fn(); await page.waitForFunction(() => !document.querySelector('.modal')); };
+  const line = async (g, what) => {
+    const w = await long(g);
+    await waitFor(async () => (await page.locator('#view .gigline').count()) && (await page.locator('#view .gigline').textContent()) === w, `${what}: .gigline is not "${w}"`);
+    await waitFor(async () => (await gigOfSet('Gd None')) === g, `${what}: the stored gig is not ${g}`);
+  };
+  const d1 = `${y}-03-07`, d2 = `${y}-03-21`;
+  await gigBox(async () => { await page.locator('.modal input[type=date]').fill(d1); await page.click('.modal [data-ok]'); });
+  await line(d1, 'set a date');
+  await gigBox(async () => { assert(await page.locator('.modal input[type=date]').inputValue() === d1, 'the Gig date box does not show the date'); await page.locator('.modal input[type=date]').fill(d2); await page.click('.modal [data-ok]'); });
+  await line(d2, 'change the date');
+  await gigBox(async () => { await page.locator('.modal input[type=date]').fill(d1); await page.click('.modal [data-x]'); });
+  await line(d2, 'Cancel');
+  await gigBox(async () => { await page.click('.modal [data-clear]'); });
+  await waitFor(async () => !(await page.locator('#view .gigline').count()), 'Clear left the gig line');
+  assert(!('gig' in await setByName(page, 'Gd None')), 'Clear left a gig in the record');
+  await page.click('#view [data-allsets]');
+
+  /* reload: the dates are kept and last year is closed again */
+  await page.reload();
+  await page.waitForSelector('#libList');
+  await toSets();
+  await expectScreen(false, 'after a reload');
+  assert(await gigOfSet('Gd Later') === later && await gigOfSet('Gd Last') === last && (!early || await gigOfSet('Gd Early') === early), 'a gig date was lost on reload');
+
+  /* the fill-in: a name holding a full date is offered once, Fill in sets the gig and keeps the name */
+  assert(!(await page.locator('.modal').count()), 'a dialog showed before any setlist name held a date');
+  await page.click('#view [data-newset]');
+  await page.locator('.modal input[type=text]').fill('Sf October 18 2026');
+  await page.click('.modal [data-ok]');
+  await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Sf October 18 2026');
+  await page.click('#view [data-allsets]');
+  await page.waitForFunction(() => document.querySelector('.modal h2')?.textContent === 'Fill in gig dates?', null, {timeout: 5000})
+    .catch(() => { throw new Error('the fill-in dialog did not appear'); });
+  const opts = await page.locator('.modal label.opt').allTextContents();
+  assert(opts.length === 1 && opts[0].startsWith('Sf October 18 2026'), 'the fill-in lists ' + JSON.stringify(opts));
+  await page.click('.modal [data-ok]');
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  await waitFor(async () => (await gigOfSet('Sf October 18 2026')) === '2026-10-18', 'Fill in did not set the gig to 2026-10-18');
+  await toSets();
+  await sleep(500);
+  assert(!(await page.locator('.modal').count()), 'the fill-in dialog came back on the next draw');
+  await page.reload();
+  await page.waitForSelector('#libList');
+  await toSets();
+  await sleep(800);
+  assert(!(await page.locator('.modal').count()), 'the fill-in dialog came back after a reload');
+  assert(await gigOfSet('Sf October 18 2026') === '2026-10-18', 'the filled-in gig was lost on reload');
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -1879,6 +1980,7 @@ const STEPS = [
   ['30b Collections: Band A and Band B, default opens on Band A, a new PDF joins it, a song in both, delete one keeps the song', stepCollections],
   ['30c Add songs in tap order: numbers, untap renumbers, Add N, setlist ends in that order; search keeps numbers', stepPickOrder],
   ['30d Backup reminder: after a backup none; a stroke or a rename brings it back on Library and Setlists, never in the viewer; a restore clears it', stepBackupReminder],
+  ['30e Gig dates: Upcoming, this year, No date, last year closed; set, change, clear; kept on reload; the fill-in from a name, once', stepGigDates],
   ['31 no request left localhost during the run', stepNoExternal],
 ];
 
