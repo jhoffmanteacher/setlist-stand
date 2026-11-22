@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-21: Collections: one for each band
+- **Collections:** the Library and Setlists now have a row of buttons under the tabs: **All**, one button for each collection, and **Collections**. A collection is a group you name yourself, like "Friday Band" or "Jazz Trio". Tap one and both tabs show only that band's songs and setlists. Your choice stays when you switch between Library and Setlists.
+- **Make and manage them:** tap **Collections** to make a new one, rename it, add songs to it, or delete it. Deleting a collection (two taps) never deletes a song, a PDF, your marks or a setlist: they just leave that collection.
+- **Put songs and setlists in them:** **Edit** on a song has tick boxes for its collections, and an open setlist has a **Collections** button. A song or setlist can be in several at once. **Add songs** in a setlist lists the shown collection's songs, with a **Show all songs** switch for the rest.
+- **A default:** in the Collections box, **Set as default** makes the app open on that band, and new songs and setlists join it. (Tap Default again to clear it.) Anything new joins the collection you are looking at; with All showing, it joins the default.
+- Copy a song keeps its collections. A setlist you duplicate stays in the same collections. Share packages carry no collections: songs and a setlist you import join the collection you are looking at, and a song you already had stays exactly as it was.
+- **Safe update:** your library is updated the first time the new version opens; every song, PDF, mark and setlist is kept as it was. Backups now hold your collections (and older backups still restore). If the app is also open in another tab, the page says "Close the other Setlist Stand tab" and carries on by itself when you do.
+
 ## 2026-11-21: Copy a song to make a second version
 - **Copy:** each song in the Library has a new **Copy** button. Tap it, type a name for the new version (for example "for the wedding band") and Save. The copy is its own song with the same chart, the same details and crop, and **the same pen marks and text notes** as the original.
 - Marking up the copy never changes the original, and the other way round. Setlists keep using the original: the copy is in no setlist until you add it.
