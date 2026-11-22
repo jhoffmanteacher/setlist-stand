@@ -117,12 +117,20 @@ export function ask(title, val = ''){
     i.onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); done(i.value.trim() || null); } if(e.key === 'Escape') done(null); };   // see form()
   });
 }
-/* A dialog with several text fields. fields: [{key, label, value}]. Resolves to {key: value} or null. */
-export function form(title, fields){
+/* A dialog with several text fields. fields: [{key, label, value}]. Resolves to {key: value} or null.
+   checks (optional): {label, options:[{value, label, on}]} adds a group of tick boxes under the fields (the Collections of a
+   song or a setlist); the result then also has `checks`: the values ticked. With no text fields the first tick box takes focus. */
+export function form(title, fields, checks){
   return new Promise(res => {
-    const m = modal(`<h2>${esc(title)}</h2>${fields.map(f => `<label class="fld"><span>${esc(f.label)}</span><input type="text" maxlength="200" data-k="${f.key}" value="${esc(f.value || '')}"></label>`).join('')}<div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
-    const ins = [...m.querySelectorAll('input')]; ins[0].focus(); ins[0].select();
-    const done = ok => { const v = ok ? Object.fromEntries(ins.map(i => [i.dataset.k, i.value.trim()])) : null; m.remove(); res(v); };
+    const group = checks && checks.options.length ? `<fieldset class="fld checks"><legend>${esc(checks.label)}</legend>${checks.options.map(o => `<label class="opt"><input type="checkbox" value="${esc(o.value)}" ${o.on ? 'checked' : ''}>${esc(o.label)}</label>`).join('')}</fieldset>` : '';
+    const m = modal(`<h2>${esc(title)}</h2>${fields.map(f => `<label class="fld"><span>${esc(f.label)}</span><input type="text" maxlength="200" data-k="${f.key}" value="${esc(f.value || '')}"></label>`).join('')}${group}<div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
+    const ins = [...m.querySelectorAll('input[type=text]')];
+    if(ins[0]){ ins[0].focus(); ins[0].select(); }
+    const done = ok => {
+      const v = ok ? Object.fromEntries(ins.map(i => [i.dataset.k, i.value.trim()])) : null;
+      if(v && checks) v.checks = [...m.querySelectorAll('fieldset.checks input:checked')].map(c => c.value);
+      m.remove(); res(v);
+    };
     m.querySelector('[data-x]').onclick = () => done(false);
     m.querySelector('[data-ok]').onclick = () => done(true);
     /* Enter saves only from a text field: on Cancel (or any other button) it presses that button, as a click would.
@@ -131,15 +139,26 @@ export function form(title, fields){
     m.onkeydown = e => { if(e.key === 'Enter' && e.target.matches('input[type=text]')){ e.preventDefault(); done(true); } if(e.key === 'Escape') done(false); };
   });
 }
-/* A checklist of songs: resolves to the ticked ids. The title and the button can be changed ({title, button}); the defaults are the setlist's "Add songs". */
-export function pick(songs, {title = 'Add songs', button = 'Add', needOne = false} = {}){
-  songs = [...songs].sort(compareSongs);          // A to Z by song name, like the library (items carry song, artist, version, or just a title)
+/* A checklist of songs: resolves to the ticked ids (in the list's A to Z order). The title and the button can be changed
+   ({title, button}); the defaults are the setlist's "Add songs". `all` (optional): a longer list of songs; a "Show all songs"
+   switch then swaps the short list (`songs`) for it, and a song ticked in one stays ticked in the other. */
+export function pick(songs, {title = 'Add songs', button = 'Add', needOne = false, all = null} = {}){
+  const sorted = list => [...list].sort(compareSongs);          // A to Z by song name, like the library (items carry song, artist, version, or just a title)
+  const short = sorted(songs), long = all ? sorted(all) : short, ticked = new Set();
   return new Promise(res => {
-    const m = modal(`<h2>${esc(title)}</h2><div class="pick">${songs.map(s => `<label><input type="checkbox" value="${esc(s.id)}">${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>'}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>${esc(button)}</button></div>`);
-    const ok = m.querySelector('[data-ok]');
-    if(needOne){ ok.disabled = true; m.addEventListener('change', () => { ok.disabled = !m.querySelector('input:checked'); }); }     // the button waits for a tick
+    const rows = list => list.map(s => `<label><input type="checkbox" value="${esc(s.id)}" ${ticked.has(s.id) ? 'checked' : ''}>${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>';
+    const m = modal(`<h2>${esc(title)}</h2>${all ? '<label class="sw-row"><input type="checkbox" data-showall>Show all songs</label>' : ''}<div class="pick">${rows(short)}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>${esc(button)}</button></div>`);
+    const ok = m.querySelector('[data-ok]'), box = m.querySelector('.pick');
+    const sync = () => { if(needOne) ok.disabled = !ticked.size; };
+    sync();                                                                           // the button waits for a tick
+    m.addEventListener('change', e => {
+      if(e.target.matches('[data-showall]')){ box.innerHTML = rows(e.target.checked ? long : short); return; }
+      if(!e.target.matches('.pick input')) return;
+      if(e.target.checked) ticked.add(e.target.value); else ticked.delete(e.target.value);
+      sync();
+    });
     m.querySelector('[data-x]').onclick = () => { m.remove(); res([]); };
-    m.querySelector('[data-ok]').onclick = () => { const ids = [...m.querySelectorAll('input:checked')].map(c => c.value); m.remove(); res(ids); };
+    m.querySelector('[data-ok]').onclick = () => { const ids = long.filter(s => ticked.has(s.id)).map(s => s.id); m.remove(); res(ids); };
   });
 }
 /* two-tap confirm instead of confirm() */

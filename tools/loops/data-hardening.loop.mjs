@@ -204,6 +204,24 @@ print(json.dumps(out))`;
       ['an ink key with no page', {ink: {'a': {updated: 1, strokes: []}}}],
       ['more than 50000 strokes on a page', {ink: {'a:1': {updated: 1, strokes: big(50001, () => ({}))}}}],
       ['a stroke of more than 200000 points', {ink: {'a:1': {updated: 1, strokes: [{id: 'k', p: big(200001, () => 0)}]}}}],
+      /* collections (backup version 3) */
+      ['collections that are not a list', {version: 3, colls: {a: 1}}],
+      ['a collection that is not a record', {version: 3, colls: ['a']}],
+      ['a collection id with a space', {version: 3, colls: [{id: 'a b', name: 'Band', created: 1, updated: 1}]}],
+      ['a collection id of 65 characters', {version: 3, colls: [{id: 'a'.repeat(65), name: 'Band', created: 1, updated: 1}]}],
+      ['a collection id twice', {version: 3, colls: [{id: 'c', name: 'A', created: 1, updated: 1}, {id: 'c', deleted: true, updated: 2}]}],
+      ['a 10000-character collection name', {version: 3, colls: [{id: 'c', name: 'x'.repeat(10000), created: 1, updated: 1}]}],
+      ['a collection name that is a number', {version: 3, colls: [{id: 'c', name: 5, created: 1, updated: 1}]}],
+      ['a collection with no name', {version: 3, colls: [{id: 'c', created: 1, updated: 1}]}],
+      ['a deleted collection marked "yes"', {version: 3, colls: [{id: 'c', deleted: 'yes', updated: 1}]}],
+      ['more than 10000 collections', {version: 3, colls: big(10001, i => ({id: 'd' + i, deleted: true, updated: 1}))}],
+      ['a song whose collections are not a list', {version: 3, songs: [liveSong('a', 'a', {colls: 'band'})]}],
+      ['a song with a collection id that is a number', {version: 3, songs: [liveSong('a', 'a', {colls: [7]})]}],
+      ['a song with a collection id with a space', {version: 3, songs: [liveSong('a', 'a', {colls: ['a b']})]}],
+      ['a song with a crafted collection id', {version: 3, songs: [liveSong('a', 'a', {colls: [CRAFTED]})]}],
+      ['a song in more than 1000 collections', {version: 3, songs: [liveSong('a', 'a', {colls: big(1001, i => 'c' + i)})]}],
+      ['a setlist whose collections are not a list', {version: 3, sets: [{id: 'st', name: 'S', items: [], colls: {}}]}],
+      ['a setlist with a bad collection id', {version: 3, sets: [{id: 'st', name: 'S', items: [], colls: ['a b']}]}],
     ];
     for(const [what, lib] of cases){
       const files = Object.fromEntries((lib.songs || []).filter(x => x && typeof x === 'object' && !x.deleted && typeof x.id === 'string').map(x => [x.id, ONE]));
@@ -218,6 +236,45 @@ print(json.dumps(out))`;
       sets: [{id: 'v1s', name: 'Old', songs: ['up'], created: 1}, {id: 'v2s', name: 'New', items: [{type: 'break', id: 'b1', name: 'Set 2'}, {type: 'song', id: 'up'}], created: 2}]}, {up: ONE}));
     assert(ok === 'Restored 1 song and 2 setlists', 'valid backup toast: ' + JSON.stringify(ok));
     assert((await idbAll(page, 'songs')).up.hash === H1, 'an upper-case hash was not stored lower-case');
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'hardening: collections in a backup: unknown ids are ignored not refused, a newer local collection beats an older marker, and a crafted name is drawn as text', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  const NAME = '<img src=x onerror=alert(1)>"\'';
+  try{
+    await s.goto();
+    await importOne(page);
+    /* a collection that already exists here, newer than the backup's marker for it */
+    await inStore(page, async S => { await S.putAll([{store: 'colls', key: 'local', value: {id: 'local', name: 'Local band', created: 1, updated: 5000}}]); });
+    const msg = await restore(page, await zipFile({version: 3,
+      songs: [liveSong('s1', 's1', {colls: ['c1', 'ghost']}), liveSong('s2', 's2')],
+      sets: [{id: 'st1', name: 'S', items: [{type: 'song', id: 's1'}], colls: ['ghost'], created: 1, updated: 1}],
+      colls: [{id: 'c1', name: NAME, created: 1, updated: 1}, {id: 'local', deleted: true, updated: 10}, {id: 'gone', deleted: true, updated: 3}]}, {s1: ONE, s2: ONE}), /^Restored/);
+    assert(msg === 'Restored 2 songs and 1 setlist', 'restore toast: ' + JSON.stringify(msg));
+    const A = await snapshot(page);
+    assert(A.colls.local && !A.colls.local.deleted && A.colls.local.updated === 5000, 'an older marker deleted a newer local collection: ' + JSON.stringify(A.colls.local));
+    assert(A.colls.c1.name === NAME && A.colls.gone.deleted === true, 'restored collections: ' + JSON.stringify(A.colls));
+    assert(JSON.stringify(A.songs.s1.colls) === '["c1","ghost"]' && JSON.stringify(A.songs.s2.colls) === '[]' && JSON.stringify(A.sets.st1.colls) === '["ghost"]', 'colls on restored records: ' + JSON.stringify([A.songs.s1.colls, A.songs.s2.colls, A.sets.st1.colls]));
+    /* drawn as text, never as markup */
+    await s.goto();
+    await page.waitForSelector('.collbar [data-collpick]');
+    assert(await page.locator('#view img, #view [onerror]').count() === 0, 'a crafted collection name became markup');
+    const labels = await page.locator('.collbar button').evaluateAll(l => l.map(b => b.textContent));
+    assert(JSON.stringify(labels) === JSON.stringify(['All', NAME, 'Local band', 'Collections']), 'picker buttons: ' + JSON.stringify(labels));
+    /* choosing it lists only the songs in it; the unknown id "ghost" counts for nothing, and the setlist (in "ghost" only) is not in it */
+    await page.click('.collbar [data-collpick="c1"]');
+    assert(JSON.stringify(await page.locator('#libList [data-open]').evaluateAll(l => l.map(b => b.getAttribute('data-open')))) === '["s1"]', 'the collection shows the wrong songs');
+    await page.click('#tSets');
+    await page.waitForSelector('#view .empty');
+    assert(await page.locator('#view [data-set]').count() === 0, 'a setlist in an unknown collection only was listed under a real one');
+    await page.click('.collbar [data-collpick="all"]');
+    assert(await page.locator('#view [data-set]').count() === 1, 'the setlist is missing under All');
+    /* a library whose only collection ids are unknown shows no picker but the Collections button, and nothing is hidden */
+    await inStore(page, async S => { await S.putAll([{store: 'colls', key: 'c1', value: {id: 'c1', deleted: true, updated: 99}}, {store: 'colls', key: 'local', value: {id: 'local', deleted: true, updated: 99}}]); });
+    await s.goto();
+    assert(await page.locator('.collbar button').count() === 1 && await page.locator('#libList [data-open]').count() === 3, 'with no live collection the library shows the picker or hides songs');
     noErrors(s);
   } finally { await s.close(); }
 }},

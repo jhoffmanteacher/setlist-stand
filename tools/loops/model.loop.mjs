@@ -94,6 +94,15 @@ const pagesText = n => `${n} page${n == 1 ? '' : 's'}`;
 const cropOf = (s, pn) => (s.crop && ((s.crop.pages && s.crop.pages[pn]) || s.crop.all)) || null;
 
 const liveSongs = M => M.songs.filter(s => !s.deleted);
+/* collections: labels like C1, C2 stand for ids; songs and setlists hold the labels of their collections. M.def is this tablet's
+   default (kept in localStorage, so it survives a reload and a wipe of the database); M.shown is the collection the picker is on
+   (null = All): in memory only, so a reload goes back to the default. */
+const liveColls = M => M.colls.filter(c => !c.deleted);
+const collOf = (M, label) => M.colls.find(c => c.label === label);
+const byCollName = (a, b) => COLL.compare(a.name, b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const inShownM = (M, rec) => !M.shown || (rec.colls || []).includes(M.shown);
+const joinM = M => M.shown ? [M.shown] : M.def ? [M.def] : [];
+const COLL_NAMES = ['Band A', 'Band B', 'Jazz Trio', 'Café Duo', 'Ölfest Band', 'Wedding Crew', 'Sunday Band', 'F♯ Quartet'];
 const libSongs = M => liveSongs(M).filter(s => !s.archived);
 const liveSets = M => M.sets.filter(s => !s.deleted);
 const songOf = (M, label) => M.songs.find(s => s.label === label);
@@ -136,10 +145,12 @@ async function closeViewer(s, M){
   }
   M.viewer = null;
 }
-async function toLib(s, M){
+/* keep: leave the collection that is shown as it is (the default is to pick All, so every song's row is on the screen). */
+async function toLib(s, M, keep = false){
   await closeViewer(s, M);
   await s.page.click('#tLib');
   await s.page.waitForSelector('#libList');
+  if(!keep && M.shown){ await s.page.click('.collbar [data-collpick="all"]'); M.shown = null; }
   M.ui = {screen: 'lib'};
 }
 async function setShowArch(s, on){
@@ -147,15 +158,16 @@ async function setShowArch(s, on){
   if((await b.isChecked()) !== on) await b.setChecked(on);
   await s.page.waitForFunction(on => !!([...document.querySelectorAll('#libList h2')].find(h => h.textContent === 'Archived')) === on, on, {timeout: 5000});
 }
-async function toSets(s, M){
+async function toSets(s, M, keep = false){
   await closeViewer(s, M);
   await s.page.click('#tSets');
   await s.page.waitForSelector('#view [data-newset]');
+  if(!keep && M.shown){ await s.page.click('.collbar [data-collpick="all"]'); M.shown = null; }
   M.ui = {screen: 'sets'};
 }
-async function openSetUI(s, M, set){
+async function openSetUI(s, M, set, keep = false){
   if(M.ui.screen === 'set' && M.ui.set === set.label && !M.viewer) return;
-  await toSets(s, M);
+  await toSets(s, M, keep);
   await s.page.click(`#view [data-set="${set.id}"]`);
   await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n && !!document.querySelector('#view [data-addto]'), set.name, {timeout: 5000});
   M.ui = {screen: 'set', set: set.label};
@@ -166,15 +178,20 @@ const readLib = page => page.evaluate(() => {
   const L = document.querySelector('#libList');
   return {rows: [...L.querySelectorAll('li.row')].map(li => ({id: li.querySelector('.main').dataset.open, t: li.querySelector('.t').textContent,
     s: li.querySelector('.s').textContent, arch: !!li.querySelector('[data-restoresong]')})),
-    empty: !!L.querySelector('.empty h2'), archHead: [...L.querySelectorAll('h2')].some(h => h.textContent === 'Archived')};
+    empty: !!L.querySelector('.empty h2'), emptyH: L.querySelector('.empty h2')?.textContent || null, addBtn: L.querySelector('[data-addcollsongs]')?.textContent || null, archHead: [...L.querySelectorAll('h2')].some(h => h.textContent === 'Archived')};
 });
 function checkLib(M, got, showArch){
-  const out = [], live = libSongs(M).sort(byName), arch = liveSongs(M).filter(s => s.archived).sort(byName);
+  const out = [], live = libSongs(M).filter(s => inShownM(M, s)).sort(byName), arch = liveSongs(M).filter(s => s.archived && inShownM(M, s)).sort(byName);
   const want = live.map(s => ({id: s.id, t: titleOf(s), s: pagesText(s.pages), arch: false}));
   if(showArch) want.push(...arch.map(s => ({id: s.id, t: titleOf(s), s: pagesText(s.pages) + ' · Archived', arch: true})));
   const lab = r => { const s = M.songs.find(x => x.id === r.id); return `${s ? s.label : '?'} "${r.t}" (${r.s})`; };
   if(JSON.stringify(got.rows) !== JSON.stringify(want)) out.push(`library rows:\n      shown    ${got.rows.map(lab).join(' | ')}\n      expected ${want.map(lab).join(' | ')}`);
   if(got.empty !== !live.length) out.push(`library "No music yet" shown=${got.empty}, live songs=${live.length}`);
+  const cs = M.shown && collOf(M, M.shown);
+  if(!live.length){
+    const wantH = cs ? `No songs in ${cs.name} yet` : 'No music yet', wantB = cs ? `Add songs to ${cs.name}` : null;
+    if(got.emptyH !== wantH || got.addBtn !== wantB) out.push(`empty library shows "${got.emptyH}" / button ${fmt(got.addBtn)}, expected "${wantH}" / ${fmt(wantB)}`);
+  }
   if(got.archHead !== showArch) out.push(`"Archived" heading shown=${got.archHead}, Show archived=${showArch}`);
   return out;
 }
@@ -182,7 +199,7 @@ const readSets = page => page.evaluate(() => [...document.querySelectorAll('#vie
   t: li.querySelector('.t').textContent, s: li.querySelector('.s').textContent, play: !li.querySelector('[data-play]').disabled})));
 const songCountOf = (M, set) => set.items.filter(it => it.type === 'song').length;
 function checkSets(M, got){
-  const want = liveSets(M).slice().sort((a, b) => b.n - a.n).map(st => { const n = songCountOf(M, st); return {id: st.id, t: st.name, s: `${n} song${n == 1 ? '' : 's'}`, play: n > 0}; });
+  const want = liveSets(M).filter(st => inShownM(M, st)).sort((a, b) => b.n - a.n).map(st => { const n = songCountOf(M, st); return {id: st.id, t: st.name, s: `${n} song${n == 1 ? '' : 's'}`, play: n > 0}; });
   return JSON.stringify(got) === JSON.stringify(want) ? [] : [`setlist list:\n      shown    ${fmt(got)}\n      expected ${fmt(want)}`];
 }
 const readSet = page => page.evaluate(() => ({h2: document.querySelector('#view h2')?.textContent, empty: !!document.querySelector('#view .empty'),
@@ -202,11 +219,22 @@ function checkSet(M, set, got){
 }
 
 /* ---------- IndexedDB vs model ---------- */
+/* The picker under the tabs: nothing but a "Collections" button until a collection exists; then All, each collection A to Z (the
+   default marked), and the button. */
+const readPicker = page => page.evaluate(() => [...document.querySelectorAll('#view .collbar button')].map(b => ({t: b.textContent, on: b.getAttribute('aria-pressed')})));
+function checkPicker(M, got){
+  const live = liveColls(M).sort(byCollName);
+  const want = live.length ? [{t: 'All', on: String(!M.shown)}, ...live.map(c => ({t: c.name + (M.def === c.label ? ' (default)' : ''), on: String(M.shown === c.label)})), {t: 'Collections', on: null}]
+    : [{t: 'Collections', on: null}];
+  return JSON.stringify(got) === JSON.stringify(want) ? [] : [`collection picker:\n      shown    ${fmt(got)}\n      expected ${fmt(want)}`];
+}
 const keysAre = (o, ks) => JSON.stringify(Object.keys(o).sort()) === JSON.stringify(ks.slice().sort());
 async function readDb(page){
-  const [songs, sets, ink, files] = await Promise.all(['songs', 'sets', 'ink', 'files'].map(st => idbAll(page, st)));
-  return {songs, sets, ink, files};
+  const [songs, sets, ink, files, colls] = await Promise.all(['songs', 'sets', 'ink', 'files', 'colls'].map(st => idbAll(page, st)));
+  return {songs, sets, ink, files, colls};
 }
+const idsOf = (M, labels) => (labels || []).map(l => collOf(M, l).id).sort();
+const sortedIds = v => Array.isArray(v) ? [...v].sort() : v;
 function checkDb(M, db){
   const out = [], P = m => out.push(m);
   /* songs */
@@ -219,12 +247,23 @@ function checkDb(M, db){
       if(!(keysAre(r, ['id', 'deleted', 'updated']) && r.id === s.id && r.deleted === true && r.updated > 0)) P(`songs: ${s.label} should be a deletion marker {id, deleted, updated}, is ${fmt(r).slice(0, 160)}`);
       continue;
     }
-    const want = {id: s.id, song: s.song, artist: s.artist, version: s.version, title: titleOf(s), archived: s.archived, pages: s.pages, hash: s.hash};
+    const want = {id: s.id, song: s.song, artist: s.artist, version: s.version, title: titleOf(s), archived: s.archived, pages: s.pages, hash: s.hash, colls: idsOf(M, s.colls)};
     if(s.crop !== undefined) want.crop = s.crop;
     if(!keysAre(r, [...Object.keys(want), 'added', 'updated'])) P(`songs: ${s.label} fields ${Object.keys(r).sort().join(',')}`);
-    const d = diff(want, Object.fromEntries(Object.keys(want).map(k => [k, r[k]])));
+    const d = diff(want, Object.fromEntries(Object.keys(want).map(k => [k, k === 'colls' ? sortedIds(r[k]) : r[k]])));
     if(d.length) P(`songs: ${s.label} ${d.join('; ')}`);
     if(!(r.added > 0 && r.updated >= r.added)) P(`songs: ${s.label} added/updated ${r.added}/${r.updated}`);
+  }
+  /* collections: a record each, {id, name, created, updated}; a deleted one is a marker */
+  const cids = new Set(M.colls.map(c => c.id));
+  for(const k of Object.keys(db.colls)) if(!cids.has(k)) P(`colls: unexpected record ${k} ${fmt(db.colls[k]).slice(0, 120)}`);
+  for(const c of M.colls){
+    const r = db.colls[c.id];
+    if(!r){ P(`colls: ${c.label} missing`); continue; }
+    if(c.deleted){ if(!(keysAre(r, ['id', 'deleted', 'updated']) && r.deleted === true && r.updated > 0)) P(`colls: ${c.label} should be a deletion marker, is ${fmt(r).slice(0, 140)}`); continue; }
+    if(!keysAre(r, ['id', 'name', 'created', 'updated'])) P(`colls: ${c.label} fields ${Object.keys(r).sort().join(',')}`);
+    if(r.name !== c.name) P(`colls: ${c.label} name ${fmt(r.name)} != ${fmt(c.name)}`);
+    if(!(r.created > 0 && r.updated >= r.created)) P(`colls: ${c.label} created/updated ${r.created}/${r.updated}`);
   }
   /* files: one per live song, the bytes of the file picked */
   const live = liveSongs(M);
@@ -240,8 +279,9 @@ function checkDb(M, db){
       if(!(keysAre(r, ['id', 'deleted', 'updated']) && r.deleted === true && r.updated > 0)) P(`sets: ${st.label} should be a deletion marker, is ${fmt(r).slice(0, 160)}`);
       continue;
     }
-    if(!keysAre(r, ['id', 'name', 'items', 'created', 'updated'])) P(`sets: ${st.label} fields ${Object.keys(r).sort().join(',')}`);
+    if(!keysAre(r, ['id', 'name', 'items', 'colls', 'created', 'updated'])) P(`sets: ${st.label} fields ${Object.keys(r).sort().join(',')}`);
     if(r.name !== st.name) P(`sets: ${st.label} name ${fmt(r.name)} != ${fmt(st.name)}`);
+    if(fmt(sortedIds(r.colls)) !== fmt(idsOf(M, st.colls))) P(`sets: ${st.label} collections ${fmt(r.colls)}, model ${fmt(idsOf(M, st.colls))}`);
     const want = st.items.map(it => it.type === 'break' ? {type: 'break', id: it.id, name: it.name} : {type: 'song', id: songOf(M, it.label).id});
     const d = diff(want, r.items);
     if(d.length) P(`sets: ${st.label} items ${d.join('; ')}\n      stored   ${fmt(r.items)}\n      expected ${fmt(want)}`);
@@ -401,7 +441,7 @@ const A = {};
 A.import = {w: 2.5, plan: (M, r) => ({files: Array.from({length: r.chance(.3) ? 2 : 1}, () => r.pick(FILES))}),
   desc: a => `import ${a.files.join(', ')}`,
   async run(s, M, a){
-    await toLib(s, M);
+    await toLib(s, M, true);                 // a new song joins the collection that is shown (or the default when All is shown)
     await clearToast(s.page);
     await s.page.setInputFiles('#file', a.files.map(f => path.join(FIX, f)));
     /* a PDF already in the library (or twice in the batch) brings up one question: the model always adds anyway */
@@ -418,7 +458,7 @@ A.import = {w: 2.5, plan: (M, r) => ({files: Array.from({length: r.chance(.3) ? 
       if(i < 0) throw new Error(`no new song record with the hash of ${f}`);
       const [rec] = fresh.splice(i, 1);
       M.songs.push({label: 'S' + (++M.nSong), n: M.nSong, id: rec.id, song: fx.song, artist: '', version: '', archived: false,
-        pages: fx.pages, hash: fx.hash, crop: undefined, ink: new Map(), deleted: false});
+        pages: fx.pages, hash: fx.hash, crop: undefined, ink: new Map(), colls: joinM(M), deleted: false});
     }
     a.got = M.songs.slice(-a.files.length).map(x => x.label).join(', ');
   }};
@@ -501,7 +541,7 @@ A.newVersion = {w: 1.5, plan: (M, r) => { const c = libSongs(M); return c.length
     const ink = new Map();
     for(const [pn, items] of song.ink){ const live = items.filter(i => !i.deleted); if(live.length) ink.set(pn, clone(live)); }
     const old = {label: 'S' + (++M.nSong), n: M.nSong, id: rec.id, song: song.song, artist: song.artist, version: versions.includes(rec.version) ? rec.version : versions[0],
-      archived: true, pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, deleted: false};
+      archived: true, pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, colls: [...song.colls], deleted: false};
     M.songs.push(old);
     a.got = `old copy ${old.label}`;
     /* the song keeps its id, details, crop and setlist places; its marks start fresh: every mark of the pages that remain
@@ -545,46 +585,59 @@ A.copySong = {w: 1.5, plan: (M, r) => {
       ink.set(pn, live);
     }
     M.songs.push({label: 'S' + (++M.nSong), n: M.nSong, id: rec.id, song: song.song, artist: song.artist, version: a.version, archived: false,
-      pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, deleted: false});
+      pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, colls: [...song.colls], deleted: false});
     a.got = 'copy ' + M.songs[M.songs.length - 1].label;
   }};
 A.newSet = {w: 1.5, plan: (M, r) => ({name: r.pick(SET_NAMES)}),
   desc: a => `new setlist "${a.name}"`,
   async run(s, M, a){
-    await toSets(s, M);
+    await toSets(s, M, true);                // a new setlist joins the collection that is shown (or the default when All is shown)
     await s.page.click('#view [data-newset]');
     await askFill(s.page, a.name);
     await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, a.name, {timeout: 5000});
     const known = new Set(M.sets.map(x => x.id));
     const rec = await until(async () => Object.values(await idbAll(s.page, 'sets')).find(x => !known.has(x.id)), 4000, 'the new set record');
-    const st = {label: 'L' + (++M.nSet), n: M.nSet, id: rec.id, name: a.name, items: [], deleted: false};
+    const st = {label: 'L' + (++M.nSet), n: M.nSet, id: rec.id, name: a.name, items: [], colls: joinM(M), deleted: false};
     M.sets.push(st); M.ui = {screen: 'set', set: st.label};
     a.got = st.label;
   }};
 const setPick = (M, r, ok) => { const c = liveSets(M).filter(ok); return c.length ? r.pick(c) : null; };
 A.addSongs = {w: 4, plan: (M, r) => {
-    const st = setPick(M, r, x => x.items.length <= 4), pool = libSongs(M);
-    if(!st || !pool.length) return null;
+    const st = setPick(M, r, x => x.items.length <= 4), all = libSongs(M);
+    if(!st || !all.length) return null;
+    /* with one of the setlist's collections shown the picker lists that collection's songs, and "Show all songs" reaches the rest */
+    const mine = st.colls.filter(l => !collOf(M, l).deleted);
+    const cl = mine.length && r.chance(.5) ? r.pick(mine) : null;
+    let showAll = false, pool = all;
+    if(cl){ pool = all.filter(x => x.colls.includes(cl)); if(!pool.length || r.chance(.3)){ showAll = true; pool = all; } }
     const k = 1 + r.int(3), chosen = [];
     for(let i = 0; i < k; i++){
       const c = pool.filter(x => !chosen.includes(x) && !chosen.some(y => byNameNoId(x, y) === 0));
       if(!c.length) break;
       chosen.push(r.pick(c));
     }
-    return {set: st.label, songs: chosen.map(x => x.label)};
+    return {set: st.label, songs: chosen.map(x => x.label), cl, showAll};
   },
-  desc: a => `add ${a.songs.join(', ')} to ${a.set} (picker)`,
+  desc: a => `add ${a.songs.join(', ')} to ${a.set} (picker${a.cl ? `, ${a.cl} shown${a.showAll ? ', Show all songs' : ''}` : ''})`,
   async run(s, M, a){
-    const st = M.sets.find(x => x.label === a.set);
-    await openSetUI(s, M, st);
-    await s.page.click('#view [data-addto]');
-    await s.page.locator('.modal .pick').waitFor();
-    const listed = await s.page.locator('.modal .pick input').evaluateAll(els => els.map(e => e.value));
-    const want = libSongs(M).sort(byName).map(x => x.id);
-    if(JSON.stringify(listed) !== JSON.stringify(want)) throw new Error(`picker lists ${listed.map(id => M.songs.find(x => x.id === id)?.label)}, expected ${want.map(id => M.songs.find(x => x.id === id)?.label)} (non-archived, library order)`);
-    for(const l of a.songs) await s.page.check(`.modal .pick input[value="${songOf(M, l).id}"]`);
-    await s.page.click('.modal [data-ok]');
-    await noModal(s.page);
+    const st = M.sets.find(x => x.label === a.set), page = s.page;
+    if(a.cl){                                   // pick the collection under the tabs, then open the setlist from that list
+      await toLib(s, M);
+      await page.click(`.collbar [data-collpick="${collOf(M, a.cl).id}"]`);
+      M.shown = a.cl;
+    }
+    await openSetUI(s, M, st, !!a.cl);
+    await page.click('#view [data-addto]');
+    await page.locator('.modal .pick').waitFor();
+    if(await page.locator('.modal [data-showall]').count() !== (M.shown ? 1 : 0)) throw new Error(`the picker ${M.shown ? 'has no' : 'has a'} "Show all songs" switch with ${M.shown ? 'a collection' : 'All'} shown`);
+    const needAll = a.showAll || (!!M.shown && a.songs.some(l => !inShownM(M, songOf(M, l))));     // a collection may still be shown from an earlier action
+    if(needAll) await page.check('.modal [data-showall]');
+    const listed = await page.locator('.modal .pick input').evaluateAll(els => els.map(e => e.value));
+    const want = libSongs(M).filter(x => needAll || inShownM(M, x)).sort(byName).map(x => x.id);
+    if(JSON.stringify(listed) !== JSON.stringify(want)) throw new Error(`picker lists ${listed.map(id => M.songs.find(x => x.id === id)?.label)}, expected ${want.map(id => M.songs.find(x => x.id === id)?.label)} (non-archived, library order${M.shown ? (needAll ? ', all songs' : ', the shown collection') : ''})`);
+    for(const l of a.songs) await page.check(`.modal .pick input[value="${songOf(M, l).id}"]`);
+    await page.click('.modal [data-ok]');
+    await noModal(page);
     /* added in the picker's (library) order, not in the order ticked */
     const add = a.songs.map(l => songOf(M, l)).sort(byName);
     st.items.push(...add.map(x => ({type: 'song', label: x.label})));
@@ -637,7 +690,7 @@ A.dupSet = {w: 1.2, plan: (M, r) => { const st = setPick(M, r, () => true); retu
       if(!id || id === it.id) throw new Error(`break ${i + 1} of the copy: id ${id} (source ${it.id}); a copied break needs its own id`);
       return {type: 'break', id, name: it.name};
     });
-    const c = {label: 'L' + (++M.nSet), n: M.nSet, id: rec.id, name: st.name + ' copy', items, deleted: false};
+    const c = {label: 'L' + (++M.nSet), n: M.nSet, id: rec.id, name: st.name + ' copy', items, colls: [...st.colls], deleted: false};
     M.sets.push(c); M.ui = {screen: 'set', set: c.label};
     a.got = c.label;
   }};
@@ -662,6 +715,162 @@ A.deleteSet = {w: 0.8, plan: (M, r) => { const st = setPick(M, r, () => true); r
     await b.click();
     await s.page.waitForFunction(id => !document.querySelector(`#view [data-set="${id}"]`), st.id, {timeout: 5000});
     st.deleted = true;
+  }};
+/* ---------- collections ---------- */
+const mgrRows = page => page.evaluate(() => [...document.querySelectorAll('.collmgr .mrow')].map(r => ({id: r.querySelector('[data-mren]').dataset.mren, name: r.querySelector('.mname').textContent, def: r.querySelector('[data-mdef]').textContent})));
+async function openMgr(s, M){
+  await toLib(s, M, true);
+  await s.page.click('#view [data-collmanage]');
+  await s.page.locator('.collmgr').waitFor({timeout: 5000});
+}
+async function checkMgr(s, M){
+  const want = liveColls(M).sort(byCollName).map(c => ({id: c.id, name: c.name, def: M.def === c.label ? 'Default' : 'Set as default'}));
+  const got = await settle(async () => JSON.stringify(await mgrRows(s.page)) === JSON.stringify(want) ? [] : ['x']);
+  if(got.length) throw new Error(`the Collections dialog lists ${fmt(await mgrRows(s.page))}, expected ${fmt(want)}`);
+}
+async function closeMgr(s){ await s.page.click('.collmgr [data-x]'); await noModal(s.page); }
+const freeCollName = (M, r) => { const free = COLL_NAMES.filter(n => !liveColls(M).some(c => c.name.toLowerCase() === n.toLowerCase())); return free.length ? r.pick(free) : null; };
+A.newColl = {w: 1.5, plan: (M, r) => { if(liveColls(M).length >= 4) return null; const name = freeCollName(M, r); return name ? {name, tryDup: liveColls(M).length > 0 && r.chance(.3)} : null; },
+  desc: a => `new collection "${a.name}"${a.tryDup ? ' (first typing a name already used)' : ''}`,
+  async run(s, M, a){
+    const page = s.page;
+    await openMgr(s, M);
+    await page.click('.collmgr [data-newcoll]');
+    const dlg = page.locator('.collname');
+    await dlg.waitFor({timeout: 5000});
+    if(a.tryDup){            // a name another collection has (case ignored): the dialog stays open and says so
+      await dlg.locator('input').fill(liveColls(M).sort(byCollName)[0].name.toUpperCase());
+      await dlg.locator('[data-ok]').click();
+      if(!(await dlg.count()) || !(await dlg.locator('[data-err]').isVisible())) throw new Error('a name another collection already has was accepted');
+    }
+    await dlg.locator('input').fill('   ');      // a name of only spaces is refused too
+    await dlg.locator('[data-ok]').click();
+    if(!(await dlg.count()) || !(await dlg.locator('[data-err]').isVisible())) throw new Error('an empty collection name was accepted');
+    await dlg.locator('input').fill(a.name);
+    await dlg.locator('[data-ok]').click();
+    await page.waitForFunction(() => !document.querySelector('.collname'), null, {timeout: 5000});
+    const known = new Set(M.colls.map(c => c.id));
+    const rec = await until(async () => Object.values(await idbAll(page, 'colls')).find(x => !known.has(x.id)), 4000, 'the new collection record');
+    const c = {label: 'C' + (++M.nColl), id: rec.id, name: a.name, deleted: false};
+    M.colls.push(c);
+    a.got = c.label;
+    await checkMgr(s, M); await closeMgr(s);
+  }};
+A.renameColl = {w: 0.8, plan: (M, r) => { const live = liveColls(M); if(!live.length) return null; const name = freeCollName(M, r); return name ? {coll: r.pick(live).label, name} : null; },
+  desc: a => `rename ${a.coll} to "${a.name}"`,
+  async run(s, M, a){
+    const c = collOf(M, a.coll), page = s.page;
+    await openMgr(s, M);
+    await page.click(`.collmgr [data-mren="${c.id}"]`);
+    const dlg = page.locator('.collname');
+    await dlg.waitFor({timeout: 5000});
+    if(await dlg.locator('input').inputValue() !== c.name) throw new Error(`the rename dialog shows "${await dlg.locator('input').inputValue()}", model "${c.name}"`);
+    await dlg.locator('input').fill(a.name);
+    await dlg.locator('[data-ok]').click();
+    await page.waitForFunction(() => !document.querySelector('.collname'), null, {timeout: 5000});
+    c.name = a.name;
+    await checkMgr(s, M); await closeMgr(s);
+  }};
+A.deleteColl = {w: 0.6, plan: (M, r) => { const live = liveColls(M); return live.length ? {coll: r.pick(live).label} : null; },
+  desc: a => `delete collection ${a.coll} (two taps; the songs stay)`,
+  async run(s, M, a){
+    const c = collOf(M, a.coll), page = s.page;
+    await openMgr(s, M);
+    const before = {songs: await idbAll(page, 'songs'), sets: await idbAll(page, 'sets')};
+    const b = page.locator(`.collmgr [data-mdel="${c.id}"]`);
+    await b.click();
+    if(await b.textContent() !== 'Songs stay in your library') throw new Error(`first tap on Delete shows "${await b.textContent()}"`);
+    await b.click();
+    await page.waitForFunction(id => !document.querySelector(`.collmgr [data-mdel="${id}"]`), c.id, {timeout: 5000});
+    c.deleted = true;
+    const held = {songs: new Set(), sets: new Set()};
+    for(const x of liveSongs(M)) if(x.colls.includes(a.coll)){ held.songs.add(x.id); x.colls = x.colls.filter(l => l !== a.coll); }
+    for(const x of liveSets(M)) if(x.colls.includes(a.coll)){ held.sets.add(x.id); x.colls = x.colls.filter(l => l !== a.coll); }
+    if(M.def === a.coll) M.def = null;
+    if(M.shown === a.coll) M.shown = null;
+    /* every song and setlist that held it got a new `updated` (a sync carries a change only when it moves); no other record did */
+    const after = {songs: await idbAll(page, 'songs'), sets: await idbAll(page, 'sets')};
+    for(const [store, ids] of [['songs', held.songs], ['sets', held.sets]]) for(const [id, r] of Object.entries(after[store])){
+      const was = before[store][id];
+      if(!r || r.deleted || !was) continue;
+      if(ids.has(id) ? !(r.updated > was.updated) : r.updated !== was.updated) throw new Error(`${store} ${id}: updated ${was.updated} -> ${r.updated} after deleting ${c.label}; ${ids.has(id) ? 'it held the collection, so it should have moved' : 'it did not hold it, so it should not move'}`);
+    }
+    await checkMgr(s, M); await closeMgr(s);
+  }};
+A.setDefault = {w: 1, plan: (M, r) => { const live = liveColls(M); return live.length ? {coll: r.pick(live).label} : null; },
+  desc: a => `set ${a.coll} as the default (or clear it, if it is)`,
+  async run(s, M, a){
+    const c = collOf(M, a.coll);
+    await openMgr(s, M);
+    await s.page.click(`.collmgr [data-mdef="${c.id}"]`);
+    M.def = M.def === a.coll ? null : a.coll;
+    const stored = await s.page.evaluate(() => localStorage.getItem('ss-default-coll'));
+    if(stored !== (M.def ? collOf(M, M.def).id : null)) throw new Error(`localStorage ss-default-coll is ${fmt(stored)} after the tap, model ${fmt(M.def ? collOf(M, M.def).id : null)}`);
+    await checkMgr(s, M); await closeMgr(s);
+  }};
+A.showColl = {w: 2.5, plan: (M, r) => { const live = liveColls(M); return live.length ? {coll: r.chance(.2) ? null : r.pick(live).label, end: r.chance(.5) ? 'lib' : 'sets'} : null; },
+  desc: a => `show ${a.coll || 'All'} in the picker (then both tabs; ends on ${a.end})`,
+  async run(s, M, a){
+    const page = s.page;
+    await toLib(s, M);
+    if(a.coll){ await page.click(`.collbar [data-collpick="${collOf(M, a.coll).id}"]`); M.shown = a.coll; }
+    const bad = [];
+    bad.push(...await settle(async () => [...checkLib(M, await readLib(page), false), ...checkPicker(M, await readPicker(page))]));
+    await toSets(s, M, true);                // the choice is kept when the tab changes
+    bad.push(...await settle(async () => [...checkSets(M, await readSets(page)), ...checkPicker(M, await readPicker(page))]));
+    if(a.end === 'lib') await toLib(s, M, true);
+    if(bad.length) throw new Error('with ' + (a.coll || 'All') + ' shown: ' + bad.join('\n    '));
+  }};
+const tickOpts = page => page.evaluate(() => [...document.querySelectorAll('.modal fieldset.checks label')].map(l => ({v: l.querySelector('input').value, name: l.textContent, on: l.querySelector('input').checked})));
+async function setTicks(s, M, rec, labels, what){
+  const want = liveColls(M).sort(byCollName).map(c => ({v: c.id, name: c.name, on: rec.colls.includes(c.label)}));
+  const got = await tickOpts(s.page);
+  if(JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`the Collections tick boxes of ${what} show ${fmt(got)}, expected ${fmt(want)}`);
+  for(const c of liveColls(M)) await s.page.locator(`.modal fieldset.checks input[value="${c.id}"]`).setChecked(labels.includes(c.label));
+  await s.page.click('.modal [data-ok]');
+  await noModal(s.page);
+  rec.colls = [...labels];
+}
+const ticksPlan = (M, r) => liveColls(M).filter(() => r.chance(.5)).map(c => c.label);
+A.editColls = {w: 2.5, plan: (M, r) => { const c = libSongs(M); if(!c.length || !liveColls(M).length) return null; return {song: r.pick(c).label, ticks: ticksPlan(M, r)}; },
+  desc: a => `Edit ${a.song}: tick collections [${a.ticks.join(', ')}]`,
+  async run(s, M, a){
+    const song = songOf(M, a.song);
+    await toLib(s, M);
+    await s.page.click(`#libList [data-edit="${song.id}"]`);
+    await s.page.locator('.modal fieldset.checks').waitFor({timeout: 5000});
+    await setTicks(s, M, song, a.ticks, song.label);
+  }};
+A.setColls = {w: 1.5, plan: (M, r) => { const st = setPick(M, r, () => true); if(!st || !liveColls(M).length) return null; return {set: st.label, ticks: ticksPlan(M, r)}; },
+  desc: a => `${a.set}: Collections button, tick [${a.ticks.join(', ')}]`,
+  async run(s, M, a){
+    const st = M.sets.find(x => x.label === a.set);
+    await openSetUI(s, M, st);
+    await s.page.click('#view [data-setcolls]');
+    await s.page.locator('.modal fieldset.checks').waitFor({timeout: 5000});
+    await setTicks(s, M, st, a.ticks, st.label);
+  }};
+A.addSongsToColl = {w: 1.5, plan: (M, r) => {
+    const live = liveColls(M); if(!live.length) return null;
+    const c = r.pick(live), rest = liveSongs(M).filter(x => !x.colls.includes(c.label));
+    if(!rest.length) return null;
+    const chosen = [r.pick(rest)]; if(rest.length > 1 && r.chance(.4)) chosen.push(r.pick(rest.filter(x => x !== chosen[0])));
+    return {coll: c.label, songs: chosen.map(x => x.label)};
+  },
+  desc: a => `Collections > Add songs to ${a.coll}: ${a.songs.join(', ')}`,
+  async run(s, M, a){
+    const c = collOf(M, a.coll), page = s.page;
+    await openMgr(s, M);
+    await page.click(`.collmgr [data-madd="${c.id}"]`);
+    await page.locator('.modal .pick').waitFor({timeout: 5000});
+    const listed = await page.locator('.modal .pick input').evaluateAll(els => els.map(e => e.value));
+    const want = liveSongs(M).filter(x => !x.colls.includes(a.coll)).sort(byName).map(x => x.id);      // the whole library (archived too) except what is in it already
+    if(JSON.stringify(listed) !== JSON.stringify(want)) throw new Error(`the picker lists ${listed.map(id => M.songs.find(x => x.id === id)?.label)}, expected ${want.map(id => M.songs.find(x => x.id === id)?.label)}`);
+    for(const l of a.songs) await page.check(`.modal .pick input[value="${songOf(M, l).id}"]`);
+    await page.click('.modal .pick ~ .btns [data-ok]');
+    await page.waitForFunction(() => !document.querySelector('.modal .pick'), null, {timeout: 5000});
+    for(const l of a.songs) songOf(M, l).colls.push(a.coll);
+    await checkMgr(s, M); await closeMgr(s);
   }};
 A.reorder = {w: 4, plan: (M, r) => {
     const st = setPick(M, r, x => x.items.length >= 2); if(!st) return null;
@@ -815,13 +1024,14 @@ A.reload = {w: 0.7, plan: () => ({}), desc: () => 'reload the page', async run(s
 async function afterLoad(s, M){
   await s.page.waitForSelector('#libList');
   M.ui = {screen: 'lib'}; M.viewer = null;
+  M.shown = M.def && collOf(M, M.def) && !collOf(M, M.def).deleted ? M.def : null;      // the app opens on the default collection, or on All
 }
 
 /* ---------- checks ---------- */
 async function checkScreen(s, M){
   const page = s.page;
-  if(M.ui.screen === 'lib') return checkLib(M, await readLib(page), false);
-  if(M.ui.screen === 'sets') return checkSets(M, await readSets(page));
+  if(M.ui.screen === 'lib') return [...checkLib(M, await readLib(page), false), ...checkPicker(M, await readPicker(page))];
+  if(M.ui.screen === 'sets') return [...checkSets(M, await readSets(page)), ...checkPicker(M, await readPicker(page))];
   if(M.ui.screen === 'set'){ const st = M.sets.find(x => x.label === M.ui.set); return checkSet(M, st, await readSet(page)); }
   if(M.ui.screen === 'viewer' && M.viewer){
     const song = songOf(M, M.viewer.label), pn = M.viewer.page, out = [];
@@ -846,6 +1056,7 @@ async function fullCheck(s, M){
   const out = [];
   await toLib(s, M);
   out.push(...await settle(async () => checkLib(M, await readLib(s.page), false)));
+  out.push(...await settle(async () => checkPicker(M, await readPicker(s.page))));
   if(liveSongs(M).some(x => x.archived)){
     await setShowArch(s, true);
     out.push(...await settle(async () => checkLib(M, await readLib(s.page), true)));
@@ -853,6 +1064,7 @@ async function fullCheck(s, M){
   }
   await toSets(s, M);
   out.push(...await settle(async () => checkSets(M, await readSets(s.page))));
+  out.push(...await settle(async () => checkPicker(M, await readPicker(s.page))));
   for(const st of liveSets(M).sort((a, b) => a.n - b.n)){
     await openSetUI(s, M, st);
     out.push(...await settle(async () => checkSet(M, st, await readSet(s.page))));
@@ -875,7 +1087,7 @@ async function openCase(ctx){
 }
 async function runCase(ctx, seed, c, log){
   const r = rng(hash32(`model:${seed}:${c}`));
-  const M = {songs: [], sets: [], nSong: 0, nSet: 0, ui: {screen: 'lib'}, viewer: null};
+  const M = {songs: [], sets: [], colls: [], nSong: 0, nSet: 0, nColl: 0, def: null, shown: null, ui: {screen: 'lib'}, viewer: null};
   const s = await openCase(ctx);
   const where = {step: 'start'};
   let nActions = 0;
@@ -936,8 +1148,9 @@ async function runCase(ctx, seed, c, log){
     const left = await s.page.evaluate(async () => (await indexedDB.databases()).map(d => d.name));
     if(left.includes('setlist-stand')) fail('the wipe did not delete the database');
     await s.goto(); await afterLoad(s, M);
+    M.shown = null;        // the library was empty when the app started, so there was no default collection to open on; a restore does not change what is shown
     const empty = await snapshot(s.page);
-    if(Object.keys(empty.songs).length || Object.keys(empty.sets).length || Object.keys(empty.ink).length) fail('database not empty after the wipe');
+    if(Object.keys(empty.songs).length || Object.keys(empty.sets).length || Object.keys(empty.ink).length || Object.keys(empty.colls || {}).length) fail('database not empty after the wipe');
     await restoreZip(s.page, file);
     const after = await snapshot(s.page);
     const d = diff(before, after);

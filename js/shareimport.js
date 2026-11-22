@@ -10,6 +10,7 @@ import {esc, toast, modal, uid, hooks, pdfPageCount} from './util.js';
 import {state, putAll, load, newSong, sha256, ensureHashes, cleanCrop} from './store.js';
 import {displayName} from './names.js';
 import {explainError} from './errors.js';
+import {joinColls} from './collections.js';
 import {ID_RE, LIMITS} from './backup.js';
 import {SHARE_VERSION} from './sharepack.js';
 
@@ -187,7 +188,7 @@ async function commit(plan){
   const t = Date.now(), ops = [], ids = [];
   const taken = new Set([...state.songs.map(s => s.id), ...state.sets.map(s => s.id)]);
   for(const f of plan.fresh){
-    const s = newSong({song:f.ps.song.trim(), artist:String(f.ps.artist || '').trim(), version:String(f.ps.version || '').trim()}, f.pages, f.hash);
+    const s = newSong({song:f.ps.song.trim(), artist:String(f.ps.artist || '').trim(), version:String(f.ps.version || '').trim()}, f.pages, f.hash, joinColls());
     if(f.crop) s.crop = f.crop;
     s.id = unique(taken);
     ids.push(s.id);
@@ -203,7 +204,7 @@ async function commit(plan){
       return {type:'song', id:g.id || ids[g.fresh]};
     });
     const id = unique(taken);
-    ops.push({store:'sets', key:id, value:{id, name:setName, items, created:t, updated:t}});
+    ops.push({store:'sets', key:id, value:{id, name:setName, items, colls:joinColls(), created:t, updated:t}});
   }
   await putAll(ops);
   return {added:plan.fresh.length, setName};

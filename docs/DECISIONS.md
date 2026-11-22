@@ -25,6 +25,7 @@ Running list of what the app must do. Source for the work orders.
 - **Crop** margins, with a choice of one crop for the whole song or a crop per page
 - **Split import** (done, WO2): one big PDF (songbook/fake book) becomes separate songs, using the PDF's bookmarks when present and hand-marked page ranges
 - **New version** (was Replace chart; Jonathan, 2026-11-21): swap in a new PDF; the song keeps its place in every setlist and starts with fresh marks; the old chart, its marks and its crop are kept in Archived as "<song> (old YYYY-MM-DD)"
+- **Collections** (Jonathan, 2026-11-21; this reversed "Collections (setlists cover it)" under Not doing): group songs and setlists by the band he plays them with, not the band that wrote the song. Each is named by him and can be renamed. A song or a setlist can be in more than one. One collection can be the default: the Library and Setlists open showing it, and new songs and setlists join it. One picker under the Library / Setlists tabs serves both. Share packages carry no collections (they are personal): songs and a setlist imported from a package join the receiver's own shown or default collection. Deleting a collection never deletes a song or setlist. The default is a setting of the tablet, not part of the library, a backup or a sync. MobileSheets' own collections are still not imported (the converter is unchanged).
 - **Copy song** (Jonathan, 2026-11-21): Copy on a library row makes a second version of a chart (the same PDF marked up another way, say for another band). The person types the version name; the copy keeps the original's details, crop and marks (the marks are copied, not shared) and is in no setlist until it is added. Setlists keep using the original. Known limit: two songs with one PDF hash are two songs, so a share package holding both carries only one of them, and Add PDFs calls the second "already in your library".
 - **Archive songs**: hidden from the library, still shown and playable in old setlists
 - Print a setlist as one combined PDF (annotations optional); cropped songs print cropped
@@ -32,7 +33,6 @@ Running list of what the app must do. Source for the work orders.
 - **Share package**: export chosen songs or a whole setlist as one file with the PDFs and setlist order but **no annotations**; another user imports it into their own library. Songs already in their library are matched and not added twice.
 
 ## Not doing
-- Collections (setlists cover it)
 
 ## Later
 - Bluetooth page-turner pedal (no pedal yet)

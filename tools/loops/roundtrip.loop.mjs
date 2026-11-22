@@ -119,6 +119,51 @@ async function setNamed(page, name){
   const l = (await idbAll(page, 'sets')); return Object.values(l).find(s => !s.deleted && s.name === name);
 }
 async function twoTap(page, sel){ const b = page.locator(sel); await b.click(); await b.click(); }
+/* ---------- collections through the real UI ---------- */
+const collRecs = async page => Object.values(await idbAll(page, 'colls'));
+const noModal = page => page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 5000});
+async function openManager(page){
+  await toLibrary(page);
+  await page.click('#view [data-collmanage]');
+  await page.locator('.collmgr').waitFor();
+}
+async function closeManager(page){ await page.click('.collmgr [data-x]'); await noModal(page); }
+async function makeColl(page, name){
+  await openManager(page);
+  await page.click('.collmgr [data-newcoll]');
+  await page.locator('.collname input').fill(name);
+  await page.click('.collname [data-ok]');
+  await page.waitForFunction(() => !document.querySelector('.collname'), null, {timeout: 5000});
+  await closeManager(page);
+  return (await waitFor(async () => (await collRecs(page)).find(c => !c.deleted && c.name === name), 'collection ' + name + ' not saved')).id;
+}
+async function deleteColl(page, id){
+  await openManager(page);
+  await twoTap(page, `.collmgr [data-mdel="${id}"]`);
+  await page.waitForFunction(id => !document.querySelector(`.collmgr [data-mdel="${id}"]`), id, {timeout: 5000});
+  await closeManager(page);
+}
+/* In a dialog with a Collections group: tick exactly `ids`, then Save. */
+async function tickIn(page, ids){
+  await page.locator('.modal fieldset.checks').waitFor();
+  const all = await page.locator('.modal fieldset.checks input').evaluateAll(els => els.map(e => e.value));
+  for(const id of all) await page.locator(`.modal fieldset.checks input[value="${id}"]`).setChecked(ids.includes(id));
+  await page.click('.modal [data-ok]');
+  await noModal(page);
+}
+async function tickSong(page, songId, ids){
+  await toLibrary(page);
+  await page.click(`#libList [data-edit="${songId}"]`);
+  await tickIn(page, ids);
+}
+async function tickSet(page, name, ids){
+  await toLibrary(page);
+  await page.click('#tSets');
+  await page.locator('#view [data-set]', {hasText: name}).click();
+  await page.click('#view [data-setcolls]');
+  await tickIn(page, ids);
+}
+const sameSet = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
 
 /* Restore through the UI without asserting success: returns the toast text. */
 async function restoreAny(page, file, timeout = 180000){
@@ -133,7 +178,7 @@ async function wipeReload(s){
   await wipe(s.page);
   await s.goto();
   const snap = await snapshot(s.page);
-  assert(['songs', 'sets', 'ink', 'files'].every(k => !Object.keys(snap[k]).length), 'database not empty after wipe + reload');
+  assert(Object.keys(snap).includes('colls') && Object.values(snap).every(o => !Object.keys(o).length), 'database not empty after wipe + reload');
 }
 const readZip = async f => JSZip.loadAsync(await fsp.readFile(f));
 const libJson = async zip => JSON.parse(await zip.file('library.json').async('string'));
@@ -200,8 +245,17 @@ async function buildRich(s){
   await toLibrary(page);
   await twoTap(page, `#libList [data-del="${ids.doomed}"]`);
   await waitFor(async () => (await songRec(page, ids.doomed))?.deleted === true, 'song deletion marker not saved');
+  /* Three collections: Round Trip is in two of them at once, Three-page in the second and the third; Gig is in the first.
+     The third is deleted again, so it is a marker and Three-page no longer lists it. */
+  const A = await makeColl(page, 'Band A'), B = await makeColl(page, 'Band B'), C = await makeColl(page, 'Band C');
+  await tickSong(page, ids.two, [A, B]);
+  await tickSong(page, ids.three, [B, C]);
+  await tickSet(page, 'Gig', [A]);
+  await waitFor(async () => sameSet((await songRec(page, ids.two)).colls, [A, B]) && sameSet((await setNamed(page, 'Gig')).colls, [A]), 'collections not saved on the song and the set');
+  await deleteColl(page, C);
+  await waitFor(async () => (await idbAll(page, 'colls'))[C]?.deleted === true && sameSet((await songRec(page, ids.three)).colls, [B]), 'deleting Band C did not leave a marker and take it off Three-page');
   await sleep(300);
-  return {...ids, scratch};
+  return {...ids, scratch, collA: A, collB: B, collC: C};
 }
 async function makeGen1(ctx){
   const s = await ctx.session();
@@ -219,7 +273,7 @@ async function loopBackupRestore(ctx){
   try{
     /* Independent read of the zip */
     const zip = await readZip(file), data = await libJson(zip);
-    assert(data.app === 'setlist-stand' && data.version === 2, `library.json app/version ${data.app}/${data.version}, expected setlist-stand/2`);
+    assert(data.app === 'setlist-stand' && data.version === 3, `library.json app/version ${data.app}/${data.version}, expected setlist-stand/3`);
     const want = {[ids.one]: fixHash('one-page.pdf'), [ids.two]: fixHash('two-page.pdf'), [ids.three]: fixHash('three-page.pdf')};
     const live = data.songs.filter(x => !x.deleted);
     assert(live.length === 3, `backup has ${live.length} live songs, expected 3`);
@@ -240,8 +294,16 @@ async function loopBackupRestore(ctx){
     assert(ink.some(x => x.t === 'pen') && ink.some(x => x.t === 'hl') && ink.some(x => x.t === 'text' && x.text === 'C♯ to B♭'),
       'backup ink page lacks pen/hl/note: ' + JSON.stringify(ink.map(x => x.t + (x.text ? ':' + x.text : ''))));
     expectSame(A.ink, data.ink, 'backup ink vs app ink');
-    const bs = id => data.songs.find(x => x.id === id);
+    const bs = id => data.songs.find(x => x.id === id), gigOf = d => d.sets.find(x => x.name === 'Gig' && !x.deleted);
     assert(bs(ids.three).crop?.pages?.['2'] && bs(ids.two).crop?.all, 'backup lacks crops: ' + JSON.stringify([bs(ids.three).crop, bs(ids.two).crop]));
+    /* collections: version 3 lists them, with the deleted one as a marker; songs and sets carry their ids; deleting Band C took its id off Three-page */
+    assert(Array.isArray(data.colls) && data.colls.length === 3, 'backup colls: ' + JSON.stringify(data.colls));
+    const cm = data.colls.find(x => x.id === ids.collC);
+    assert(cm && cm.deleted === true && cm.updated > 0 && Object.keys(cm).sort().join() === 'deleted,id,updated', 'collection deletion marker missing/wrong: ' + JSON.stringify(cm));
+    assert(data.colls.filter(x => !x.deleted).map(x => x.name).sort().join() === 'Band A,Band B' && data.colls.filter(x => !x.deleted).every(x => x.created > 0 && x.updated >= x.created), 'live collections: ' + JSON.stringify(data.colls));
+    assert(sameSet(bs(ids.two).colls, [ids.collA, ids.collB]) && sameSet(bs(ids.three).colls, [ids.collB]) && bs(ids.one).colls.length === 0, 'song collections: ' + JSON.stringify(live.map(x => [x.id, x.colls])));
+    assert(sameSet(data.sets.find(x => x.name === 'Gig' && !x.deleted).colls, [ids.collA]), 'Gig collections: ' + JSON.stringify(gigOf(data)));
+    expectSame(A.colls, Object.fromEntries(data.colls.map(x => [x.id, x])), 'backup collections vs the app\'s');
     for(const so of data.songs) expectSame(A.songs[so.id], so, `backup song ${so.id}`);
     for(const st of data.sets) expectSame(A.sets[st.id], st, `backup set ${st.id}`);
     const gig = data.sets.find(x => x.name === 'Gig' && !x.deleted);
@@ -301,7 +363,9 @@ async function loopV1(ctx){
     const A = await snapshot(s.page);
     const {file: b2} = await backupNow(s.page);
     const d = await libJson(await readZip(b2));
-    assert(d.version === 2, 'backup of a v1 restore has version ' + d.version);
+    assert(d.version === 3, 'backup of a v1 restore has version ' + d.version);
+    assert(Array.isArray(d.colls) && d.colls.length === 0 && !Object.keys(A.colls).length, 'a v1 restore has collections: ' + JSON.stringify(d.colls));
+    for(const x of [...d.songs, ...d.sets]) assert(Array.isArray(x.colls) && x.colls.length === 0, 'record not given colls [] by a v1 restore: ' + JSON.stringify(x));
     for(const x of d.songs) assert(/^[0-9a-f]{64}$/.test(x.hash || '') && x.updated > 0 && typeof x.song === 'string' && 'artist' in x && 'version' in x,
       'song not upgraded in the v2 backup: ' + JSON.stringify(x));
     assert(d.songs.find(x => x.id === a).hash === fixHash('one-page.pdf'), 'v1 song hash != its PDF');
@@ -447,16 +511,18 @@ async function seeded(ctx, init){
 }
 /* A valid v2 backup of `n` new songs (one-page fixture), as a STORE zip so its PDF bytes sit in the file as-is.
    ink: true gives every song an annotated page 1 (one pen stroke). */
-async function v2zip(n, {missing = -1, ink = false} = {}){
+async function v2zip(n, {missing = -1, ink = false, colls = false} = {}){
   const pdf = fs.readFileSync(path.join(FIX, 'one-page.pdf')), h = sha256(pdf), t = Date.now(), z = new JSZip(), list = [], inkRecs = {};
   for(let i = 0; i < n; i++){
     const id = 'rz' + t.toString(36) + '_' + i;
-    list.push({id, title: 'Zip Song ' + i, song: 'Zip Song ' + i, artist: '', version: '', archived: false, pages: 1, hash: h, added: t, updated: t});
+    list.push({id, title: 'Zip Song ' + i, song: 'Zip Song ' + i, artist: '', version: '', archived: false, pages: 1, hash: h, added: t, updated: t, ...(colls ? {colls: ['rzc' + t.toString(36) + (i % 2)]} : {})});
     if(i !== missing) z.file(`files/${id}.pdf`, pdf);
     if(ink) inkRecs[id + ':1'] = {updated: t, strokes: [{id: 'rzk' + i, t: 'pen', c: '#1a1a1a', w: .003, p: [[.1, .1], [.5, .5]], updated: t}]};
   }
-  z.file('library.json', JSON.stringify({app: 'setlist-stand', version: 2, saved: new Date().toISOString(), songs: list,
-    sets: [{id: 'rzset' + t.toString(36), name: 'Zip Set', items: list.map(x => ({type: 'song', id: x.id})), created: t, updated: t}], ink: inkRecs}));
+  const cid = k => 'rzc' + t.toString(36) + k;
+  z.file('library.json', JSON.stringify({app: 'setlist-stand', version: colls ? 3 : 2, saved: new Date().toISOString(), songs: list,
+    sets: [{id: 'rzset' + t.toString(36), name: 'Zip Set', items: list.map(x => ({type: 'song', id: x.id})), ...(colls ? {colls: [cid(0)]} : {}), created: t, updated: t}], ink: inkRecs,
+    ...(colls ? {colls: [{id: cid(0), name: 'Zip A', created: t, updated: t}, {id: cid(1), name: 'Zip B', created: t, updated: t}, {id: cid(2), deleted: true, updated: t}]} : {})}));
   return z.generateAsync({type: 'nodebuffer', compression: 'STORE'});
 }
 async function unchangedAfter(s, buf, name){
@@ -551,12 +617,14 @@ const TX_PROBE = () => {
   };
   IDBObjectStore.prototype.put = function(...a){ const r = recs.get(this.transaction); if(r) r.puts++; return put.apply(this, a); };
 };
-async function loopOneTransaction(ctx){
-  const N = 12, file = path.join(TMP, 'roundtrip-onetx.zip');
-  await fsp.writeFile(file, await v2zip(N, {ink: true}));
+/* The restore of a version 2 backup (no collections) and of a version 3 one (with them): each is exactly one readwrite transaction. */
+async function loopOneTransaction(ctx){ await oneTransaction(ctx, false); await oneTransaction(ctx, true); }
+async function oneTransaction(ctx, v3){
+  const N = 12, file = path.join(TMP, 'roundtrip-onetx' + (v3 ? '-v3' : '') + '.zip');
+  await fsp.writeFile(file, await v2zip(N, {ink: true, colls: v3}));
   const data = await libJson(await readZip(file));
   /* every record the restore must write: a PDF + a song record per live song, each set, each ink page */
-  const want = {stores: ['files', 'ink', 'sets', 'songs'], puts: 2 * data.songs.length + data.sets.length + Object.keys(data.ink).length};
+  const want = {stores: v3 ? ['colls', 'files', 'ink', 'sets', 'songs'] : ['files', 'ink', 'sets', 'songs'], puts: 2 * data.songs.length + data.sets.length + Object.keys(data.ink).length + (data.colls || []).length};
   const s = await seeded(ctx, TX_PROBE);
   try{
     const {page} = s;
@@ -584,9 +652,104 @@ async function loopOneTransaction(ctx){
     const show = l => l.map(t => `[${t.stores.join('+')}: ${t.puts} put${t.puts == 1 ? '' : 's'}]`).join(' ');
     assert(counted.length === 1, `restore wrote in ${counted.length} readwrite transactions, expected exactly 1: ${show(counted.slice(0, 12))}${counted.length > 12 ? ' …' : ''}`);
     const [one] = counted;
-    assert(one.stores.join() === want.stores.join(), `the restore transaction covers ${one.stores.join(', ')}, expected ${want.stores.join(', ')}`);
-    assert(one.puts === want.puts, `the restore transaction made ${one.puts} puts, expected ${want.puts} (${N} PDFs + ${N} songs + ${data.sets.length} set + ${Object.keys(data.ink).length} ink pages)`);
+    assert(one.stores.slice().sort().join() === want.stores.join(), `the restore transaction covers ${one.stores.join(', ')}, expected ${want.stores.join(', ')}`);
+    assert(one.puts === want.puts, `the restore transaction made ${one.puts} puts, expected ${want.puts} (${N} PDFs + ${N} songs + ${data.sets.length} set + ${(data.colls || []).length} collections + ${Object.keys(data.ink).length} ink pages)`);
     if(ctx.opts.verbose) console.log('  readwrite transactions during the restore: ' + show(rw));
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
+/* ---------- loop: a version 2 backup (made before collections) restores with no collections ---------- */
+async function loopV2(ctx){
+  const file = path.join(TMP, 'roundtrip-v2.zip');
+  await fsp.writeFile(file, await v2zip(4, {ink: true}));
+  assert((await libJson(await readZip(file))).version === 2, 'the generated backup is not version 2');
+  const s = await ctx.session();
+  try{
+    await s.goto();
+    const msg = await restoreZip(s.page, file);
+    assert(/^Restored 4 songs and 1 setlist\b/.test(msg), 'restore toast: ' + msg);
+    const A = await snapshot(s.page);
+    assert(Object.keys(A).includes('colls') && !Object.keys(A.colls).length, 'a version 2 restore made collections: ' + JSON.stringify(A.colls));
+    for(const x of [...Object.values(A.songs), ...Object.values(A.sets)]) assert(Array.isArray(x.colls) && x.colls.length === 0, 'no `colls: []` on a record restored from version 2: ' + JSON.stringify(x).slice(0, 160));
+    const {file: b3} = await backupNow(s.page);
+    const d = await libJson(await readZip(b3));
+    assert(d.version === 3 && Array.isArray(d.colls) && !d.colls.length, 'the backup of it: version ' + d.version + ', colls ' + JSON.stringify(d.colls));
+    await wipeReload(s);
+    await restoreZip(s.page, b3);
+    expectSame(A, await snapshot(s.page), 'version 2 restore (left) vs restore of its version 3 backup (right)');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
+/* ---------- loop: a field the app does not know survives (Sync compatibility 2 and 3) ----------
+   A song and a setlist carrying `zzz: 1` go through Edit, a collection tick, a backup and a restore, and through deleting the
+   collection, with the field intact; and deleting the collection moves `updated` on exactly the records that held it. */
+async function putRaw(page, store, id, fields){      // (no eval: the page's CSP forbids it, so the fields are data, not code)
+  await page.evaluate(([store, id, fields]) => new Promise((res, rej) => {
+    const r = indexedDB.open('setlist-stand');
+    r.onerror = () => rej(r.error);
+    r.onsuccess = () => {
+      const d = r.result, t = d.transaction(store, 'readwrite'), st = t.objectStore(store), g = st.get(id);
+      g.onsuccess = () => { st.put(Object.assign(g.result, fields), id); };
+      t.oncomplete = () => { d.close(); res(); }; t.onerror = () => rej(t.error);
+    };
+  }), [store, id, fields]);
+}
+async function loopUnknownFields(ctx){
+  const s = await seeded(ctx);
+  try{
+    const {page} = s;
+    const [one, two] = (await songs(page)).sort((a, b) => a.song < b.song ? -1 : 1).map(x => x.id);     // One-page, Three-page, Two-page by name: use the first two
+    await newSet(page, 'Unknown');
+    await addSongs(page, [(await songRec(page, one)).title]);
+    const setId = (await setNamed(page, 'Unknown')).id;
+    for(const [store, id] of [['songs', one], ['songs', two], ['sets', setId]]) await putRaw(page, store, id, {zzz: 1, zzzObj: {k: [1, 2]}});
+    await page.reload(); await page.waitForSelector('#libList [data-open]');       // load() runs upgradeSong / upgradeSet on the planted records
+    const keep = async what => {
+      for(const [store, id] of [['songs', one], ['songs', two], ['sets', setId]]){
+        const r = (await idbAll(page, store))[id];
+        assert(r && r.zzz === 1 && JSON.stringify(r.zzzObj) === '{"k":[1,2]}', `${what}: ${store} ${id} lost its unknown fields: ` + JSON.stringify(r));
+      }
+    };
+    await keep('after a reload (upgrade in place)');
+    const C = await makeColl(page, 'Keep');
+    /* Edit (title, plus a collection tick), then a tick on the setlist */
+    await toLibrary(page);
+    await page.click(`#libList [data-edit="${one}"]`);
+    await page.locator('.modal input[data-k=song]').fill('Edited Name');
+    await page.locator(`.modal fieldset.checks input[value="${C}"]`).check();
+    await page.click('.modal [data-ok]'); await noModal(page);
+    await tickSet(page, 'Unknown', [C]);
+    await waitFor(async () => sameSet((await songRec(page, one)).colls, [C]) && sameSet((await setNamed(page, 'Unknown')).colls, [C]), 'ticks not saved');
+    assert((await songRec(page, one)).song === 'Edited Name', 'edit not saved');
+    await keep('after Edit and a collection tick');
+    /* Copy keeps them too (it spreads the whole record) */
+    await toLibrary(page);
+    await page.click(`#libList [data-copy="${one}"]`);
+    await page.locator('.copyask input').fill('with field');
+    await page.click('.copyask [data-ok]'); await noModal(page);
+    const copy = await waitFor(async () => (await songs(page)).find(x => x.version === 'with field'), 'copy not saved');
+    assert(copy.zzz === 1 && sameSet(copy.colls, [C]), 'the copy lost the unknown field or the collection: ' + JSON.stringify(copy));
+    /* backup -> wipe -> restore */
+    const A = await snapshot(page);
+    const {file} = await backupNow(page);
+    const d = await libJson(await readZip(file));
+    assert(d.songs.find(x => x.id === one).zzz === 1 && d.sets.find(x => x.id === setId).zzz === 1, 'the backup lost the unknown fields');
+    await wipeReload(s);
+    await restoreZip(page, file);
+    expectSame(A, await snapshot(page), 'before the backup (left) vs after wipe + restore (right)');
+    await keep('after backup, wipe and restore');
+    /* deleting the collection: the records that held it get a new `updated`; the others do not; the field stays */
+    const before = {songs: await idbAll(page, 'songs'), sets: await idbAll(page, 'sets')};
+    await deleteColl(page, C);
+    await waitFor(async () => (await idbAll(page, 'colls'))[C]?.deleted === true, 'collection marker not saved');
+    const after = {songs: await idbAll(page, 'songs'), sets: await idbAll(page, 'sets')};
+    for(const store of ['songs', 'sets']) for(const [id, r] of Object.entries(after[store])){
+      const held = (before[store][id].colls || []).includes(C);
+      assert(held ? r.updated > before[store][id].updated && !r.colls.includes(C) : r.updated === before[store][id].updated, `${store} ${id} (${held ? 'held' : 'did not hold'} the collection): updated ${before[store][id].updated} -> ${r.updated}, colls ${JSON.stringify(r.colls)}`);
+    }
+    await keep('after deleting the collection');
     assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 }
@@ -597,6 +760,8 @@ export const loops = [
   {name: 'roundtrip: v1 backup upgrades and survives a round trip', run: loopV1},
   {name: 'roundtrip: real library round trip', needs: ['library'], run: loopRealLibrary},
   {name: 'roundtrip: converter output matches the MobileSheets backup it came from', needs: ['msb', 'library'], run: loopConverter},
+  {name: 'roundtrip: a version 2 backup restores with no collections, and its version 3 backup round trips', run: loopV2},
+  {name: 'roundtrip: unknown fields survive Edit, a collection tick, Copy, backup, restore and deleting the collection; `updated` moves on exactly the records that held it', run: loopUnknownFields},
   {name: 'roundtrip: restore all or nothing: truncated or CRC-damaged zip changes nothing', run: loopCorrupt},
   {name: 'roundtrip: restore all or nothing: a backup missing a PDF changes nothing', run: loopMissingPdf},
   {name: 'roundtrip: restore all or nothing: reload mid-restore leaves before or after, never partial', run: loopInterrupt},

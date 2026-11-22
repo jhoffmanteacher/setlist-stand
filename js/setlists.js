@@ -1,8 +1,9 @@
-import {$, esc, uid, ask, pick, armed, hooks, toast} from './util.js';
+import {$, esc, uid, ask, pick, armed, hooks, toast, form} from './util.js';
 import {load, state, songById, saveSet, markDeleted, liveItems} from './store.js';
 import {openViewer} from './viewer.js';
 import {printDialog} from './print.js';
 import {shareSet} from './share.js';
+import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 
 export let openSet = null;
 export const closeSet = () => { openSet = null; };
@@ -21,7 +22,7 @@ export function renderSetlists(v){
     const items = liveItems(st), n = songCount(st);
     let k = 0;
     v.innerHTML = `<div class="bar"><button data-allsets>&#8249; Setlists</button><h2>${esc(st.name)}</h2></div>
-      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-shareset ${n ? '' : 'disabled'}>Share</button><button data-dup>Duplicate</button><button data-renset>Rename</button></div>
+      <div class="bar"><button class="pri" data-play="${esc(st.id)}" ${n ? '' : 'disabled'}>Play setlist</button><button data-addto>Add songs</button><button data-addbreak>Add break</button><button data-print ${n ? '' : 'disabled'}>Print PDF</button><button data-shareset ${n ? '' : 'disabled'}>Share</button><button data-dup>Duplicate</button><button data-renset>Rename</button>${state.colls.length ? '<button data-setcolls>Collections</button>' : ''}</div>
       ${items.length ? `<ul class="list" id="items">${items.map((it, i) => {
         if(it.type === 'break') return `<li class="row brk"><button class="handle" aria-label="${MOVE_LABEL}">${HANDLE}</button><span class="num"></span><button class="main" data-renbreak="${esc(i)}"><span class="t">${esc(it.name)}<span class="tag">Break</span></span><span class="s">Tap to rename</span></button><div class="acts"><button data-rm="${esc(i)}">Remove</button></div></li>`;
         const s = songById(it.id); k++;
@@ -29,14 +30,16 @@ export function renderSetlists(v){
       }).join('')}</ul>`
       : `<div class="empty"><h2>Empty setlist</h2><p>Tap Add songs to pick charts from your library.</p></div>`}`;
   } else {
-    v.innerHTML = `<div class="bar"><button class="pri" data-newset>New setlist</button></div>` +
-      (sets.length ? `<ul class="list">${sets.map(st => { const n = songCount(st); const id = esc(st.id); return `<li class="row"><button class="main" data-set="${id}"><span class="t">${esc(st.name)}</span><span class="s">${esc(n)} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${id}" ${n ? '' : 'disabled'}>Play</button><button data-dupset="${id}">Duplicate</button><button data-delset="${id}">Delete</button></div></li>`; }).join('')}</ul>`
+    const shownSets = sets.filter(inShown), coll = shownColl();
+    v.innerHTML = pickerHtml() + `<div class="bar"><button class="pri" data-newset>New setlist</button></div>` +
+      (shownSets.length ? `<ul class="list">${shownSets.map(st => { const n = songCount(st); const id = esc(st.id); return `<li class="row"><button class="main" data-set="${id}"><span class="t">${esc(st.name)}</span><span class="s">${esc(n)} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${id}" ${n ? '' : 'disabled'}>Play</button><button data-dupset="${id}">Duplicate</button><button data-delset="${id}">Delete</button></div></li>`; }).join('')}</ul>`
+      : coll ? `<div class="empty"><h2>No setlists in ${esc(coll.name)} yet</h2><p>A new setlist joins ${esc(coll.name)} while it is shown.</p></div>`
       : `<div class="empty"><h2>No setlists yet</h2><p>Make one for each gig or rehearsal.</p></div>`);
   }
 }
 
 async function duplicate(st){
-  const copy = {id:uid(), name:st.name + ' copy', created:Date.now(), items:liveItems(st).map(it => it.type === 'break' ? {...it, id:uid()} : {...it})};
+  const copy = {id:uid(), name:st.name + ' copy', created:Date.now(), colls:[...(st.colls || [])], items:liveItems(st).map(it => it.type === 'break' ? {...it, id:uid()} : {...it})};
   await saveSet(copy); await load(); openSet = copy.id; hooks.render();
 }
 
@@ -45,7 +48,7 @@ export async function onClick(b, d){
   const {sets, songs} = state;
   if('newset' in d){
     const n = await ask('New setlist', '');
-    if(n){ const st = {id:uid(), name:n, items:[], created:Date.now()}; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
+    if(n){ const st = {id:uid(), name:n, items:[], colls:joinColls(), created:Date.now()}; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
     return true;
   }
   if(d.set){ openSet = d.set; hooks.render(); return true; }
@@ -61,7 +64,18 @@ export async function onClick(b, d){
   if('shareset' in d){ await shareSet(st); return true; }
   if('print' in d){ printDialog(st, items.filter(it => it.type === 'song').map(it => it.id)); return true; }
   if('dup' in d){ await duplicate(st); return true; }
-  if('addto' in d){ const add = await pick(songs.filter(s => !s.archived)); if(add.length){ items.push(...add.map(id => ({type:'song', id}))); await save(); } return true; }
+  if('addto' in d){
+    /* With a collection shown the list holds its songs, and "Show all songs" reaches the rest. */
+    const open = songs.filter(s => !s.archived), c = shownColl();
+    const add = await pick(c ? open.filter(inShown) : open, c ? {all:open} : {});
+    if(add.length){ items.push(...add.map(id => ({type:'song', id}))); await save(); }
+    return true;
+  }
+  if('setcolls' in d){
+    const r = await form('Collections of ' + st.name, [], {label:'Collections', options:collOptions(st)});
+    if(r){ st.colls = applyTicks(st, r.checks); await saveSet(st); await load(); hooks.render(); }
+    return true;
+  }
   if('addbreak' in d){ items.push({type:'break', id:uid(), name:'Break'}); await save(); return true; }
   if(d.renbreak){ const it = items[+d.renbreak]; const n = await ask('Rename break', it.name); if(n){ it.name = n; await save(); } return true; }
   if('renset' in d){ const n = await ask('Rename setlist', st.name); if(n){ st.name = n; await save(); } return true; }

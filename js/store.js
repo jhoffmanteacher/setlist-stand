@@ -1,14 +1,28 @@
 import {splitName, displayName, compareSongs} from './names.js';
 import {uid} from './util.js';
 
-/* Storage: IndexedDB `setlist-stand` (stores songs, files, sets, ink), with an in-memory fallback. */
+/* Storage: IndexedDB `setlist-stand`, with an in-memory fallback. STORE_NAMES is the ONE list of stores: the upgrade, the
+   memory fallback, backup, restore and the tests all read it, so a store added later is carried everywhere.
+   Version 1 had songs, files, sets, ink; version 2 adds colls (collections). An upgrade only creates the stores that are
+   missing, so a version 1 library keeps every record. */
+export const STORE_NAMES = ['songs', 'files', 'sets', 'ink', 'colls'];
+export const DB_VERSION = 2;
 export let MEM = null;
 let dbp;
 function db(){
   if(!dbp) dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('setlist-stand', 1);
-    r.onupgradeneeded = () => { for(const n of ['songs', 'files', 'sets', 'ink']) r.result.createObjectStore(n); };
-    r.onsuccess = () => res(r.result);
+    const r = indexedDB.open('setlist-stand', DB_VERSION);
+    r.onupgradeneeded = () => { for(const n of STORE_NAMES) if(!r.result.objectStoreNames.contains(n)) r.result.createObjectStore(n); };
+    /* A tab still running the older app (version 1) keeps the database open and cannot be told to let go: the upgrade waits
+       until that tab is closed. Say so (main.js shows it); when the tab closes, onsuccess follows and the message goes. */
+    r.onblocked = () => dispatchEvent(new Event('ss-db-blocked'));
+    r.onsuccess = () => {
+      const d = r.result;
+      /* A newer app in another tab wants to upgrade the database: let go at once so it is never blocked by this tab. */
+      d.onversionchange = () => { d.close(); dbp = null; dispatchEvent(new Event('ss-db-changed')); };
+      dispatchEvent(new Event('ss-db-open'));
+      res(d);
+    };
     r.onerror = () => rej(r.error);
   });
   return dbp;
@@ -85,16 +99,17 @@ export async function update(store, key, fn){
 /* Returns true when on-device storage works, false when it fell back to memory. */
 export async function openStore(){
   try{ await db(); return true; }
-  catch(e){ MEM = {songs:new Map(), files:new Map(), sets:new Map(), ink:new Map()}; return false; }
+  catch(e){ MEM = Object.fromEntries(STORE_NAMES.map(n => [n, new Map()])); return false; }
 }
 
 /* ---------- records ----------
-   song  {id, title (derived: "Song (version) - Artist"), song, artist, version, archived, pages, hash, added, updated}
-   set   {id, name, songs:[ids], created, updated}
+   song  {id, title (derived: "Song (version) - Artist"), song, artist, version, archived, colls:[collection ids], pages, hash, added, updated}
+   set   {id, name, items:[...], colls:[collection ids], created, updated}
+   coll  {id, name, created, updated}   (a collection: the band a song or setlist is played with; songs and sets list their collections in `colls`)
    ink   key "songId:page" -> {updated, strokes:[{id, t, c, w, p, updated} | {id, deleted:true, updated}]}
    A deleted song, set or stroke stays behind as {id, deleted:true, updated} so a later sync can tell
    "deleted" from "never had it". The UI never shows them. */
-export const state = {songs:[], sets:[]};   // live (not deleted) records only
+export const state = {songs:[], sets:[], colls:[]};   // live (not deleted) records only
 const now = () => Date.now();
 
 /* Fills in missing fields. Returns true when the record changed (so it should be saved). */
@@ -104,6 +119,7 @@ export function upgradeSong(s){
   if(typeof s.song !== 'string'){ const n = splitName(s.title || ''); s.song = n.song; s.artist = n.artist; s.version = n.version; }
   s.artist = s.artist || ''; s.version = s.version || '';
   s.archived = !!s.archived;
+  s.colls = cleanColls(s.colls);
   if(!s.updated) s.updated = s.added || now();
   s.title = displayName(s);
   return JSON.stringify(s) !== before;
@@ -115,23 +131,37 @@ export function upgradeSet(st){
   delete st.songs;
   st.items = st.items.filter(it => it && (it.type === 'break' || (it.type === 'song' && it.id)))
     .map(it => it.type === 'break' ? {type:'break', id:it.id || uid(), name:it.name || 'Break'} : {type:'song', id:it.id});
+  st.colls = cleanColls(st.colls);
   if(!st.updated) st.updated = st.created || now();
   return JSON.stringify(st) !== before;
 }
+/* A record's `colls`: a list of collection ids (strings, each once). Anything else (missing, not a list) is []. Ids of
+   collections that are gone or unknown are left in the record (another tablet's collection may not have arrived yet) and
+   ignored when a list is drawn (collsOf in js/collections.js). */
+export const cleanColls = v => Array.isArray(v) ? [...new Set(v.filter(x => typeof x === 'string' && x))] : [];
 /* A set's items minus songs that no longer exist. Breaks always stay. */
 export const liveItems = st => st.items.filter(it => it.type === 'break' || songById(it.id));
 export async function load(){
-  const songs = await all('songs'), sets = await all('sets');
-  for(const s of songs) if(upgradeSong(s)) await put('songs', s.id, s);
-  for(const st of sets) if(upgradeSet(st)) await put('sets', st.id, st);
+  const songs = await all('songs'), sets = await all('sets'), colls = await all('colls');
+  /* Records that needed filling in (a library from before collections gets `colls: []` on every song and setlist) are saved
+     together in ONE transaction; `updated` is not touched, since nothing the person did changed. */
+  const ops = [];
+  for(const s of songs) if(upgradeSong(s)) ops.push({store:'songs', key:s.id, value:s});
+  for(const st of sets) if(upgradeSet(st)) ops.push({store:'sets', key:st.id, value:st});
+  if(ops.length) await putAll(ops);
   state.songs = songs.filter(s => !s.deleted).sort(compareSongs);     // the lists sort again when they are drawn (compareSongs in js/names.js)
   state.sets = sets.filter(s => !s.deleted).sort((a, b) => b.created - a.created);
+  state.colls = colls.filter(c => c && !c.deleted && typeof c.name === 'string').sort(compareColls);
 }
+/* Collections A to Z by name (case and accents ignored, numbers as numbers), the same ties as everywhere: by id. */
+const COLL_COLLATOR = new Intl.Collator(undefined, {sensitivity:'base', numeric:true});
+export const compareColls = (a, b) => COLL_COLLATOR.compare(a.name, b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 export const songById = id => state.songs.find(s => s.id === id);
 export const saveSong = s => { s.title = displayName(s); s.updated = now(); return put('songs', s.id, s); };
-/* The record for a new song whose PDF (pages, hash) is about to be saved under its id. name: {song, artist, version}. */
-export function newSong(name, pages, hash){
-  const t = now(), s = {id:uid(), ...name, archived:false, pages, hash, added:t, updated:t};
+/* The record for a new song whose PDF (pages, hash) is about to be saved under its id. name: {song, artist, version};
+   colls: the collections it joins (joinColls() in js/collections.js; [] by default). */
+export function newSong(name, pages, hash, colls = []){
+  const t = now(), s = {id:uid(), ...name, archived:false, colls:[...colls], pages, hash, added:t, updated:t};
   s.title = displayName(s);
   return s;
 }

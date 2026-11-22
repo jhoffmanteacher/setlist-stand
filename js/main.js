@@ -11,11 +11,25 @@ import {startSplit, initSplit} from './split.js';
 import {importPackage} from './shareimport.js';
 import {takeReturn} from './googleauth.js';
 import {driveClick, announceSignIn} from './syncui.js';
+import {onClick as collClick, initShown} from './collections.js';
 
 /* FIRST, before anything else runs: if the page has just come back from Google's sign-in, read the answer and take the
    `#` part (it holds the token) off the address. Nothing else in the app reads the address. */
 const signIn = takeReturn();
 initErrors();      // first: the private problem log (Library → Problem log) catches anything that goes wrong after this
+
+/* The database is upgraded the first time this version opens it. A tab still running the OLDER app keeps it open and cannot be
+   told to let go, so the upgrade waits: say so in plain words (the message goes by itself when that tab is closed). A tab on this
+   version lets go at once when a newer one asks (js/store.js). */
+addEventListener('ss-db-blocked', () => {
+  const w = $('#warn'); if(!w || w.querySelector('[data-dbblocked]')) return;
+  w.insertAdjacentHTML('beforeend', '<p class="warn" role="alert" data-dbblocked>Setlist Stand is open in another tab or window, and it needs to be closed before this one can update your library. Close the other Setlist Stand tab; this one carries on by itself.</p>');
+});
+addEventListener('ss-db-open', () => { const m = document.querySelector('[data-dbblocked]'); if(m) m.remove(); });
+addEventListener('ss-db-changed', () => {
+  const w = $('#warn'); if(!w || w.querySelector('[data-dbchanged]')) return;
+  w.insertAdjacentHTML('beforeend', '<p class="warn" role="alert" data-dbchanged>Setlist Stand was updated in another tab. Reload this page before you change anything here.</p>');
+});
 
 let tab = 'lib';
 function render(){
@@ -40,6 +54,7 @@ $('#view').addEventListener('click', async e => {
   if('restore' in d) return $('#restoreFile').click();
   if('backup' in d || 'backupnow' in d) return backupNow(b);
   if(await driveClick(b, d)) return;
+  if(await collClick(b, d)) return;
   if(await libraryClick(b, d)) return;
   await setlistClick(b, d);
 });
@@ -105,7 +120,7 @@ async function applyResume(){
   if(!window.pdfjsLib) $('#warn').innerHTML += '<p class="warn">The PDF reader did not load. Reload the page.</p>';
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
   initViewer(); initInk(); initCrop(); initSetlists(); initSplit();
-  await load(); render();
+  await load(); initShown(); render();
   announceSignIn(signIn).catch(() => {});      // only when the page came back from a sign-in the person started
   await applyResume();
   ensureHashes().catch(() => {});

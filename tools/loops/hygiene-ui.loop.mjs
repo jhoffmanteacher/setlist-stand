@@ -160,7 +160,7 @@ async function cspLoop(ctx){
 /* ---------- (b) dialogs ---------- */
 async function checkDialog(page, what){
   const d = await page.evaluate(() => {
-    const box = document.querySelector('.modal [role=dialog]'); if(!box) return null;
+    const boxes = document.querySelectorAll('.modal [role=dialog]'), box = boxes[boxes.length - 1]; if(!box) return null;      // the top one, when a dialog opened another
     const lab = document.getElementById(box.getAttribute('aria-labelledby') || '');
     return {modal: box.getAttribute('aria-modal'), label: lab ? lab.textContent : null, labelTag: lab && lab.tagName,
       inside: box.contains(document.activeElement), inert: ['.app', '#viewer', '#cropper'].map(s => document.querySelector(s).inert)};
@@ -201,6 +201,40 @@ async function dialogLoop(ctx){
     await checkDialog(page, 'Edit dialog');
     await escapeBack(page, ed, 'Edit dialog');
     assert(!(await page.locator('.modal').count()), 'Edit dialog still open');
+
+    /* library Copy (a text field) */
+    const cp = `#libList [data-copy="${id}"]`;
+    await page.focus(cp); await page.keyboard.press('Enter');
+    await page.locator('.modal.copyask').waitFor();
+    await checkDialog(page, 'Copy dialog');
+    await escapeBack(page, cp, 'Copy dialog');
+
+    /* Collections: the manager, the name dialog on top of it, then the Edit dialog's tick boxes */
+    const mg = '#view [data-collmanage]';
+    await page.focus(mg); await page.keyboard.press('Enter');
+    await page.locator('.collmgr').waitFor();
+    await checkDialog(page, 'Collections manager');
+    await page.click('.collmgr [data-newcoll]');
+    await page.locator('.collname').waitFor();
+    await checkDialog(page, 'Collection name dialog');
+    await page.keyboard.press('Escape');                                   // Escape on the name dialog closes only that one
+    await page.waitForFunction(() => !document.querySelector('.collname') && !!document.querySelector('.collmgr'), null, {timeout: 5000})
+      .catch(() => { throw new Error('Escape on the collection name dialog did not close just that dialog'); });
+    assert(await page.evaluate(() => !!document.activeElement.closest('.collmgr')) && await page.evaluate(() => document.querySelector('.app').inert), 'after the name dialog closes, focus is not in the manager or the page is no longer inert');
+    await page.click('.collmgr [data-newcoll]');
+    await page.locator('.collname input').fill('Hygiene Band');
+    await page.keyboard.press('Enter');                                     // Enter saves from the text field
+    await page.waitForFunction(() => !document.querySelector('.collname'), null, {timeout: 5000});
+    await page.locator('.collmgr .mname', {hasText: 'Hygiene Band'}).waitFor();
+    await page.focus('.collmgr [data-mdel]'); await page.keyboard.press('Enter');    // first tap only arms it: nothing is deleted
+    assert(await page.locator('.collmgr .mname', {hasText: 'Hygiene Band'}).count() === 1, 'one tap on Delete deleted the collection');
+    await page.keyboard.press('Escape');                                    // Escape on the manager (Done)
+    await noModal(page).catch(() => { throw new Error('Escape did not close the Collections manager'); });
+    assert(await page.evaluate(() => document.activeElement === document.querySelector('[data-collmanage]')), 'focus did not return to the Collections button');
+    await page.focus(ed); await page.keyboard.press('Enter');
+    await page.locator('.modal fieldset.checks').waitFor();
+    await checkDialog(page, 'Edit dialog with Collections tick boxes');
+    await escapeBack(page, ed, 'Edit dialog with Collections tick boxes');
 
     /* library Share songs (checklist), then the package-saved dialog */
     const sh = '#view [data-sharesongs]';

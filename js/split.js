@@ -5,6 +5,7 @@ import {$, esc, toast, modal, busy, armed, hooks} from './util.js';
 import {state, putAll, load, sha256, newSong, ensureHashes} from './store.js';
 import {parseTypedTitle} from './importname.js';
 import {explainError} from './errors.js';
+import {joinColls} from './collections.js';
 import {readBookmarks, draftRows, sortRows, newRow, endOf, clampPage} from './songlist.js';
 import {makeSongPdf, usesLayerRules, budgetFor} from './songpdf.js';
 
@@ -235,7 +236,7 @@ async function addSongs(){
       /* Compared with the library as it was before this run: two songs on one page are the same bytes and both belong. */
       if(again || !known.has(hash)){
         const name = parseTypedTitle(title); if(!name.artist && artist) name.artist = artist;
-        const s = newSong(name, pages, hash);
+        const s = newSong(name, pages, hash, joinColls());
         /* the PDF and its song in ONE transaction, so a full tablet never leaves half a song behind */
         await putAll([{store:'files', key:s.id, value:new Blob([bytes], {type:'application/pdf'})}, {store:'songs', key:s.id, value:s}]);
         written += bytes.length;          // only what was written counts against the run's space budget

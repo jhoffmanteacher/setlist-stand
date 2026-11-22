@@ -123,9 +123,18 @@ export const fileHashes = page => page.evaluate(() => new Promise((res, rej) => 
     d.close(); res(out);
   };
 }));
-/* Everything that matters, as plain JSON: songs, sets, ink pages, and each PDF's hash. */
+/* The names of the database's stores, read from the database itself (so a store added to the app later is compared in every
+   loop that takes a snapshot without anyone remembering to list it here). */
+export const storeNames = page => page.evaluate(() => new Promise((res, rej) => {
+  const r = indexedDB.open('setlist-stand');
+  r.onerror = () => rej(r.error);
+  r.onsuccess = () => { const d = r.result, n = [...d.objectStoreNames]; d.close(); res(n); };
+}));
+/* Everything that matters, as plain JSON: every store (songs, sets, ink pages, collections...), and for `files` each PDF's hash. */
 export async function snapshot(page){
-  return {songs: await idbAll(page, 'songs'), sets: await idbAll(page, 'sets'), ink: await idbAll(page, 'ink'), files: await fileHashes(page)};
+  const out = {};
+  for(const n of await storeNames(page)) out[n] = n === 'files' ? await fileHashes(page) : await idbAll(page, n);
+  return out;
 }
 /* Drops fields that legitimately change between a backup and its restore (none today), so snapshots compare with deepEqual. */
 export function normalise(snap){ return JSON.parse(JSON.stringify(snap)); }

@@ -8,11 +8,12 @@ import {shareSongs} from './share.js';
 import {unique} from './shareimport.js';
 import {renderDrive} from './syncui.js';
 import {copySong} from './copysong.js';
+import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
 
 export function renderLibrary(v){
-  v.innerHTML = `<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button><button data-sharesongs>Share songs</button><button data-shareimport>Import a share package</button></div><div id="libNudge"></div><div id="libList"></div>
+  v.innerHTML = `${pickerHtml()}<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button><button data-split>Split a songbook</button><button data-sharesongs>Share songs</button><button data-shareimport>Import a share package</button></div><div id="libNudge"></div><div id="libList"></div>
     <label class="sw-row"><input type="checkbox" id="showArch" ${showArchived ? 'checked' : ''}>Show archived</label>
     <div class="bar" style="margin-top:12px"><button data-backup>Back up everything</button><button data-restore>Restore from backup</button></div>
     <p class="hint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
@@ -27,10 +28,12 @@ export function renderLibrary(v){
 const matches = s => (s.title + ' ' + s.song + ' ' + s.artist + ' ' + s.version).toLowerCase().includes(q.trim().toLowerCase());
 const pages = s => `${esc(s.pages)} page${s.pages == 1 ? '' : 's'}`;
 function renderLib(){
-  const sorted = [...state.songs].sort(compareSongs);      // A to Z by song name, when the list is drawn (the same for Archived and search)
+  const sorted = state.songs.filter(inShown).sort(compareSongs);      // A to Z by song name, when the list is drawn (the same for Archived and search); only the collection being shown
   const live = sorted.filter(s => !s.archived), arch = sorted.filter(s => s.archived);
-  const list = live.filter(matches), alist = arch.filter(matches);
-  let html = live.length
+  const list = live.filter(matches), alist = arch.filter(matches), coll = shownColl();
+  let html = coll && !live.length
+    ? `<div class="empty"><h2>No songs in ${esc(coll.name)} yet</h2><p>Add songs from your library to this collection.</p><button class="pri" data-addcollsongs="${esc(coll.id)}">Add songs to ${esc(coll.name)}</button></div>`
+    : live.length
     ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button><div class="acts"><button data-edit="${id}">Edit</button><button data-copy="${id}">Copy</button><button data-archive="${id}">Archive</button><button data-newversion="${id}">New version</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
     : `<div class="empty"><h2>No music yet</h2><p>Add PDF charts from your tablet's files or Drive. They're saved on this device.</p></div>`;
   if(showArchived){
@@ -74,7 +77,7 @@ export async function addFiles(fileList){
     if(dup && skipped) continue;
     let r;
     try{ r = await inspect(f); }catch(err){ unread.push(f.name); continue; }
-    const s = newSong(parseFileName(f.name), r.pages, r.hash), id = s.id;
+    const s = newSong(parseFileName(f.name), r.pages, r.hash, joinColls()), id = s.id;
     try{ await putAll([{store:'files', key:id, value:new Blob([r.buf], {type:'application/pdf'})}, {store:'songs', key:id, value:s}]); ok++; }
     catch(err){
       failed = items.filter(x => !(x.dup && skipped)).length - ok - unread.length;
@@ -152,7 +155,7 @@ async function runNewVersion(file, id, s){
     const {buf, pages:n, hash} = r, ops = [];
     let copy = null;
     if(old){
-      copy = newSong({song:s.song, artist:s.artist, version:oldVersion(s.version)}, s.pages, await sha256(old));
+      copy = newSong({song:s.song, artist:s.artist, version:oldVersion(s.version)}, s.pages, await sha256(old), s.colls || []);
       copy.id = unique(new Set([...state.songs.map(x => x.id), ...state.sets.map(x => x.id)]));
       copy.archived = true;
       if(s.crop !== undefined) copy.crop = JSON.parse(JSON.stringify(s.crop));
@@ -205,8 +208,9 @@ export async function onClick(b, d){
   if(d.open){ openViewer([{type:'song', id:d.open}], 0); return true; }
   if(d.edit){
     const s = songById(d.edit);
-    const r = await form('Edit song', [{key:'song', label:'Title', value:s.song}, {key:'artist', label:'Artist', value:s.artist}, {key:'version', label:'Version', value:s.version}]);
-    if(r && r.song){ s.song = r.song; s.artist = r.artist; s.version = r.version; await saveSong(s); await load(); hooks.render(); }
+    const r = await form('Edit song', [{key:'song', label:'Title', value:s.song}, {key:'artist', label:'Artist', value:s.artist}, {key:'version', label:'Version', value:s.version}],
+      {label:'Collections', options:collOptions(s)});
+    if(r && r.song){ s.song = r.song; s.artist = r.artist; s.version = r.version; s.colls = applyTicks(s, r.checks); await saveSong(s); await load(); hooks.render(); }
     return true;
   }
   if(d.copy){ await copySong(d.copy); return true; }

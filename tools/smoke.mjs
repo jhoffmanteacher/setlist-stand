@@ -333,7 +333,7 @@ async function stepBackup(t){
   const lj = zip.file('library.json'); assert(lj, 'zip has no library.json');
   const data = JSON.parse(await lj.async('string'));
   assert(data.app === 'setlist-stand', 'library.json app = ' + data.app);
-  assert(data.version === 2, 'library.json version = ' + data.version);
+  assert(data.version === 3, 'library.json version = ' + data.version);
   assert(data.songs.length === 2, 'library.json songs = ' + data.songs.length);
   assert(data.sets.length === 1, 'library.json sets = ' + data.sets.length);
   assert(songIds(data.sets[0]).length === 2, 'library.json set Gig items: ' + JSON.stringify(data.sets[0].items));
@@ -663,7 +663,7 @@ async function stepDelete(t){
   const dl = await download(page, () => page.click('#view [data-backup]'));
   const zip = await JSZip.loadAsync(await fsp.readFile(dl.file));
   const data = JSON.parse(await zip.file('library.json').async('string'));
-  assert(data.version === 2, 'backup version ' + data.version);
+  assert(data.version === 3, 'backup version ' + data.version);
   const m = data.songs.find(s => s.id === id);
   assert(m && m.deleted === true && m.updated > 0 && !('title' in m), 'backup lacks the deletion marker: ' + JSON.stringify(m));
   assert(!zip.file('files/' + id + '.pdf'), 'backup still has the deleted PDF');
@@ -1667,6 +1667,85 @@ async function stepShareImport(t){
   assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
 }
 
+async function stepCollections(t){
+  const {page} = t;
+  await toLibrary(page);
+  const n0 = await songCount(page);
+  const mgr = async fn => { await page.click('#view [data-collmanage]'); await page.locator('.collmgr').waitFor(); await fn(); await page.click('.collmgr [data-x]'); await page.waitForFunction(() => !document.querySelector('.modal')); };
+  const newColl = async name => {
+    await page.click('.collmgr [data-newcoll]');
+    await page.locator('.collname input').fill(name);
+    await page.click('.collname [data-ok]');
+    await page.waitForFunction(() => !document.querySelector('.collname'));
+    await page.locator('.collmgr .mname', {hasText: name}).waitFor();
+  };
+  await mgr(async () => { await newColl('Band A'); await newColl('Band B'); });
+  const colls = Object.values(await idbAll(page, 'colls')).filter(c => !c.deleted);
+  const A = colls.find(c => c.name === 'Band A').id, B = colls.find(c => c.name === 'Band B').id;
+  assert(colls.length === 2 && colls.every(c => c.created > 0 && c.updated >= c.created && Object.keys(c).sort().join() === 'created,id,name,updated'), 'collection records: ' + JSON.stringify(colls));
+  await mgr(async () => { await page.click(`.collmgr [data-mdef="${A}"]`); await page.locator(`.collmgr [data-mdef="${A}"]`, {hasText: 'Default'}).waitFor(); });
+  assert(await page.evaluate(() => localStorage.getItem('ss-default-coll')) === A, 'the default is not kept on this tablet');
+
+  /* the app opens on the default, shows only its songs; a new PDF joins it */
+  await page.reload();
+  await page.waitForSelector('.collbar [data-collpick]');
+  const pressed = async id => (await page.locator(`.collbar [data-collpick="${id}"]`).getAttribute('aria-pressed')) === 'true';
+  assert(await pressed(A) && !(await pressed(B)), 'the app did not open on the default collection');
+  assert((await page.locator('.collbar button').allTextContents()).join('|') === 'All|Band A (default)|Band B|Collections', 'picker: ' + (await page.locator('.collbar button').allTextContents()).join('|'));
+  assert(await songCount(page) === 0 && /No songs in Band A yet/.test(await page.locator('#libList').innerText()), 'Band A is not empty: ' + await page.locator('#libList').innerText());
+  await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+  const dup = await page.locator('.dupask [data-dupadd]').waitFor({timeout: 4000}).then(() => true, () => false);
+  if(dup) await page.click('.dupask [data-dupadd]');
+  await page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 1, null, {timeout: 15000});
+  const mine = Object.values(await idbAll(page, 'songs')).filter(x => !x.deleted).sort((a, b) => b.added - a.added)[0];
+  assert(JSON.stringify(mine.colls) === JSON.stringify([A]), 'the new PDF is not in the default collection: ' + JSON.stringify(mine.colls));
+
+  /* put it in both bands; a new setlist joins the shown collection; B shows only that song, on both tabs */
+  await page.click(`#libList [data-edit="${mine.id}"]`);
+  await page.locator('.modal fieldset.checks').waitFor();
+  assert(await page.locator(`.modal fieldset.checks input[value="${A}"]`).isChecked() && !(await page.locator(`.modal fieldset.checks input[value="${B}"]`).isChecked()), 'the Edit tick boxes do not show the song in Band A only');
+  await page.locator(`.modal fieldset.checks input[value="${B}"]`).check();
+  await page.click('.modal [data-ok]');
+  await waitFor(async () => (await songRec(page, s => s.id === mine.id)).colls.length === 2, 'the two collections were not saved');
+  await page.click('#tSets');
+  await page.click('#view [data-newset]');
+  await page.locator('.modal input[type=text]').fill('Band A Gig');
+  await page.click('.modal [data-ok]');
+  await page.waitForSelector('#view [data-addto]');
+  assert(JSON.stringify((await setByName(page, 'Band A Gig')).colls) === JSON.stringify([A]), 'a new setlist did not join the shown collection');
+  await page.click('#view [data-allsets]');
+  await page.click('#tLib');
+  await page.click(`.collbar [data-collpick="${B}"]`);
+  assert(await songCount(page) === 1 && await page.locator(`#libList [data-open="${mine.id}"]`).count() === 1, 'Band B does not show just the one song');
+  await page.click('#tSets');
+  assert(await pressed(B), 'the choice was not kept when the tab changed');
+  assert(await page.locator('#view [data-set]').count() === 0, 'Band B shows a setlist that is only in Band A');
+  await page.click(`.collbar [data-collpick="all"]`);
+  assert(await page.locator('#view [data-set]').count() >= 1, 'All does not show the setlist');
+
+  /* deleting Band B takes two taps, keeps the song (and its place in Band A), and leaves a marker */
+  const before = await songRec(page, s => s.id === mine.id);
+  await toLibrary(page);
+  await page.click('#view [data-collmanage]');
+  await page.locator('.collmgr').waitFor();
+  const del = page.locator(`.collmgr [data-mdel="${B}"]`);
+  await del.click();
+  assert(await del.textContent() === 'Songs stay in your library', 'first tap on Delete says "' + await del.textContent() + '"');
+  assert((await idbAll(page, 'colls'))[B].deleted !== true, 'one tap deleted the collection');
+  await del.click();
+  await page.waitForFunction(id => !document.querySelector(`.collmgr [data-mdel="${id}"]`), B, {timeout: 5000});
+  await page.click('.collmgr [data-x]');
+  const marker = (await idbAll(page, 'colls'))[B], after = await songRec(page, s => s.id === mine.id);
+  assert(marker.deleted === true && marker.updated > 0 && Object.keys(marker).sort().join() === 'deleted,id,updated', 'collection marker: ' + JSON.stringify(marker));
+  assert(JSON.stringify(after.colls) === JSON.stringify([A]) && after.updated > before.updated, 'the song after deleting Band B: ' + JSON.stringify({colls: after.colls, updated: [before.updated, after.updated]}));
+  assert((await idbAll(page, 'files'))[mine.id] && !Object.values(await idbAll(page, 'songs')).some(x => x.id === mine.id && x.deleted), 'deleting a collection removed a song or its PDF');
+  assert(await songCount(page) === n0 + 1 || await page.locator('.collbar [data-collpick="all"]').getAttribute('aria-pressed') === 'true', 'the library lost songs');
+  assert((await page.locator('.collbar button').allTextContents()).join('|') === 'All|Band A (default)|Collections', 'picker after the delete: ' + (await page.locator('.collbar button').allTextContents()).join('|'));
+  await page.click('.collbar [data-collpick="all"]');
+  assert(await songCount(page) === n0 + 1, `library shows ${await songCount(page)} songs under All, expected ${n0 + 1}`);
+  await page.evaluate(() => localStorage.removeItem('ss-default-coll'));
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -1701,6 +1780,7 @@ const STEPS = [
   ['28 split a songbook: bookmarks give the songs, each is added as its own PDF', stepSplitBook],
   ['29 share: songs from the Library and a setlist each download as a package with the PDFs, no annotations', stepShare],
   ['30 import a share package: the setlist comes back under a new name, songs already here are not added again', stepShareImport],
+  ['30b Collections: Band A and Band B, default opens on Band A, a new PDF joins it, a song in both, delete one keeps the song', stepCollections],
   ['31 no request left localhost during the run', stepNoExternal],
 ];
 
