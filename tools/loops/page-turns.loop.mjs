@@ -309,6 +309,7 @@ async function loopPhotoTurns(ctx){
 
     /* one page at a time: Echo page 1 (the page before the last), everything settled; then page 2 and at once on into Foxtrot */
     await open(false, 0, 1); await shown('Echo', [1]); await settle();
+    assert(JSON.stringify((await state()).prep) === '[1]', 'photo charts: the next song is not readied while the page before the last shows: ' + JSON.stringify(await state()));       // the old rule (only on the last page) leaves this empty, every time
     await page.click('#vNext'); await shown('Echo', [2]);
     await page.evaluate(() => window.__ready());
     await page.click('#vNext'); await shown('Foxtrot', [1]);

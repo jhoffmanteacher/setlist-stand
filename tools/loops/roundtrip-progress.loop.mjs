@@ -120,7 +120,8 @@ async function loopBackupProgress(ctx){
     await toastIs(page, /Restored \d+ song/, 'the big backup did not restore');
     await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 10000});
     const A = await snapshot(page);
-    assert(await page.evaluate(() => localStorage.getItem('ss-last-backup')) === null, 'setup: a backup time was already set');
+    assert(/^\d+$/.test(await page.evaluate(() => localStorage.getItem('ss-last-backup')) || ''), 'a restore does not count as a backup (the restored library would be reported as changed)');
+    await page.evaluate(() => localStorage.removeItem('ss-last-backup'));        // from here: no backup was ever made, to prove a stopped backup sets nothing
     await page.click('#tLib'); await page.waitForSelector('[data-backup]');
     let downloads = 0; page.on('download', () => { downloads++; });
 
