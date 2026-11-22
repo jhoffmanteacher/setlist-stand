@@ -8,6 +8,7 @@ import {shareSongs} from './share.js';
 import {unique} from './shareimport.js';
 import {renderDrive} from './syncui.js';
 import {copySong} from './copysong.js';
+import {renderNudge} from './nudge.js';
 import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
@@ -233,23 +234,11 @@ export async function onClick(b, d){
   return false;
 }
 
-/* ---------- data safety: backup reminder, storage status, problem log ----------
+/* ---------- data safety: storage status, problem log (the backup reminder is js/nudge.js) ----------
    All of it is read on the device. Every browser API is guarded: if one is missing, that line is simply left out. */
-const LAST_BACKUP = 'ss-last-backup', NUDGE_DAYS = 14;
-function lastBackup(){ try{ const t = Number(localStorage.getItem(LAST_BACKUP)); return t > 0 ? t : null; }catch(e){ return null; } }
-function daysAgo(t){
-  const day = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime(); };
-  return Math.max(0, Math.round((day(Date.now()) - day(t)) / 864e5));
-}
-const agoText = n => n == 0 ? 'today' : n == 1 ? 'yesterday' : `${n} days ago`;
-
 function renderSafety(){
-  const nudge = $('#libNudge'), last = $('#libLastBackup');
-  if(!nudge || !last) return;
-  const t = lastBackup(), n = t == null ? null : daysAgo(t);
-  const due = state.songs.length > 0 && (t == null || n > NUDGE_DAYS);
-  nudge.innerHTML = due ? `<div class="nudge" role="status"><span>${t == null ? 'You have not backed up yet.' : `Last backup: ${agoText(n)}.`}</span><button data-backupnow>Back up now</button></div>` : '';
-  last.textContent = !due && t != null ? `Last backup: ${agoText(n)}.` : '';
+  if(!$('#libLastBackup')) return;
+  renderNudge();                       // the backup reminder (js/nudge.js): shown after changes since the last backup
   renderProblems();
   renderStorage();
 }

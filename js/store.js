@@ -40,9 +40,21 @@ async function tx(store, mode, fn){
     t.onabort = () => rej(t.error || new Error('aborted'));     // a full disk at commit aborts without an error event
   });
 }
-export const put = (st, k, v) => MEM ? (MEM[st].set(k, v), Promise.resolve()) : tx(st, 'readwrite', s => s.put(v, k));
+/* The newest `updated` of any record in any store but `files` (songs, setlists, collections, ink pages, and deletion markers): what
+   the backup reminder compares with the time of the last backup (js/nudge.js). It is kept in memory as writes happen: put(),
+   putAll() and update() here are the only write paths, so each one tells seen() what it wrote, and load() / initChanged() read it
+   from the database at start. A record written with an `updated` that is not newer (a restore of old records, a hash filled in,
+   `colls: []` added by the upgrade) changes nothing; a plain delete (no marker, no `updated`) counts as now. */
+let newest = 0;
+export const newestChange = () => newest;
+function seen(u){
+  u = Number(u) || 0;
+  if(u > newest){ newest = u; dispatchEvent(new Event('ss-changed')); }
+}
+const seenRec = (st, v) => { if(st !== 'files' && v && typeof v === 'object') seen(v.updated); };
+export const put = async (st, k, v) => { await (MEM ? (MEM[st].set(k, v), Promise.resolve()) : tx(st, 'readwrite', s => s.put(v, k))); seenRec(st, v); };
 export const get = (st, k) => MEM ? Promise.resolve(MEM[st].get(k)) : tx(st, 'readonly', s => s.get(k));
-export const del = (st, k) => MEM ? (MEM[st].delete(k), Promise.resolve()) : tx(st, 'readwrite', s => s.delete(k));
+export const del = async (st, k) => { await (MEM ? (MEM[st].delete(k), Promise.resolve()) : tx(st, 'readwrite', s => s.delete(k))); if(st !== 'files') seen(Date.now()); };
 export const all = st => MEM ? Promise.resolve([...MEM[st].values()]) : tx(st, 'readonly', s => s.getAll());
 
 /* Every ink page key of a song ("id:1", "id:2", …). */
@@ -51,6 +63,10 @@ const inkRange = songId => [songId + ':', songId + ':￿'];
    part-way leaves the stores exactly as they were). Runs in order. ops:
    {store, key, value} saves, {store, key, delete:true} removes, {deleteInkFor:songId} removes every ink page of that song. */
 export async function putAll(ops){
+  await putAllRaw(ops);
+  for(const o of ops){ if(o.deleteInkFor != null || (o.delete && o.store !== 'files')) seen(Date.now()); else if(!o.delete) seenRec(o.store, o.value); }       // only a write that went through counts
+}
+async function putAllRaw(ops){
   const storeOf = o => o.deleteInkFor != null ? 'ink' : o.store;
   if(MEM){
     for(const o of ops){
@@ -82,12 +98,12 @@ export async function putAll(ops){
 /* Reads one record and writes fn(record) back in ONE transaction, so nothing written in between is lost.
    fn returns the new record, or undefined to leave it as it is. Resolves to what was written (or undefined). */
 export async function update(store, key, fn){
-  if(MEM){ const v = fn(MEM[store].get(key)); if(v !== undefined) MEM[store].set(key, v); return v; }
+  if(MEM){ const v = fn(MEM[store].get(key)); if(v !== undefined){ seenRec(store, v); MEM[store].set(key, v); } return v; }
   const d = await db();
   return new Promise((res, rej) => {
     const t = d.transaction(store, 'readwrite'), st = t.objectStore(store);
     let out;
-    t.oncomplete = () => res(out);
+    t.oncomplete = () => { if(out !== undefined) seenRec(store, out); res(out); };
     t.onerror = e => rej(txErr(t, e));
     t.onabort = () => rej(t.error || new Error('aborted'));
     const r = st.get(key);
@@ -161,6 +177,11 @@ export async function load(){
   state.songs = songs.filter(s => !s.deleted).sort(compareSongs);     // the lists sort again when they are drawn (compareSongs in js/names.js)
   state.sets = sets.filter(s => !s.deleted).sort((a, b) => b.created - a.created);
   state.colls = colls.filter(c => c && !c.deleted && typeof c.name === 'string').sort(compareColls);
+  for(const r of [...songs, ...sets, ...colls]) seenRec('songs', r);        // the newest change among the records read here (ink pages: initChanged)
+}
+/* Reads the ink pages' newest `updated` once at start (after the first draw: it must not slow the Library down). */
+export async function initChanged(){
+  for(const r of await all('ink')) seenRec('ink', r);
 }
 /* Collections A to Z by name (case and accents ignored, numbers as numbers), the same ties as everywhere: by id. */
 const COLL_COLLATOR = new Intl.Collator(undefined, {sensitivity:'base', numeric:true});

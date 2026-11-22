@@ -35,8 +35,13 @@ const DAY = 864e5;
 
 export const loops = [
 
-{name: 'hygiene: backup reminder shows when never or long ago backed up, and goes after a backup', async run(ctx){
+{name: 'hygiene: the backup reminder shows when something changed since the last backup (not by days), on Library and Setlists, and goes after a backup or a restore', async run(ctx){
   const s = await ctx.session(), page = s.page;
+  const tab = async t => { await page.click(t === 'lib' ? '#tLib' : '#tSets'); await page.waitForSelector(t === 'lib' ? '#libList' : '#view [data-newset]'); };
+  const gone = async what => page.waitForFunction(() => !document.querySelector('#libNudge .nudge'), null, {timeout: 5000})
+    .catch(async () => { throw new Error(what + ': the reminder is still shown: ' + await nudgeText(page)); });
+  const shown = async (what, re) => { await page.waitForFunction(() => !!document.querySelector('#libNudge .nudge'), null, {timeout: 5000}).catch(async () => { throw new Error(what + ': no reminder'); });
+    assert(re.test(await nudgeText(page)), what + ': ' + JSON.stringify(await nudgeText(page))); };
   try{
     await s.goto();
     assert(await nudgeText(page) === '', 'empty library shows a backup reminder: ' + await nudgeText(page));
@@ -44,35 +49,47 @@ export const loops = [
 
     await importFiles(page, [path.join(FIX, 'one-page.pdf')]);
     await waitSongs(page, 1);
-    assert(/^You have not backed up yet\.\s*Back up now$/.test(await nudgeText(page)), 'reminder after the first song: ' + JSON.stringify(await nudgeText(page)));
+    await shown('after the first song', /^You have not backed up yet\.\s*Back up now$/);
     assert(await page.locator('#libNudge').evaluate(n => n.compareDocumentPosition(document.querySelector('#libList')) & Node.DOCUMENT_POSITION_FOLLOWING), 'the reminder is not above the song list');
+    await tab('sets'); await shown('Setlists tab, never backed up', /^You have not backed up yet\./); await tab('lib');
 
-    /* a real backup through the Library button (a download) */
+    /* a real backup through the Library button (a download): the reminder goes, on both tabs */
     const t0 = Date.now();
     const dl = await backupNow(page);
     assert(fs.statSync(dl.file).size > 0, 'backup download is empty');
-    await page.waitForFunction(() => !document.querySelector('#libNudge .nudge'), null, {timeout: 5000})
-      .catch(async () => { throw new Error('reminder still shown after a backup: ' + await nudgeText(page)); });
+    await gone('after a backup');
     assert(await lastText(page) === 'Last backup: today.', 'hint after a backup: ' + JSON.stringify(await lastText(page)));
     const stored = Number(await page.evaluate(() => localStorage.getItem('ss-last-backup')));
     assert(stored >= t0 - 1000 && stored <= Date.now() + 1000, 'ss-last-backup is not the time of the backup: ' + stored);
+    await tab('sets'); await gone('Setlists tab after a backup'); await tab('lib');
 
-    /* 10 days ago: no reminder yet, just the quiet line */
-    await page.evaluate(t => localStorage.setItem('ss-last-backup', String(t)), Date.now() - 10 * DAY);
+    /* nothing changed since: a reload (even much later) shows nothing; time alone is not a reason */
     await s.goto();
-    assert(await nudgeText(page) === '', '10 days: reminder shown: ' + await nudgeText(page));
-    assert(await lastText(page) === 'Last backup: 10 days ago.', '10 days: hint ' + JSON.stringify(await lastText(page)));
+    assert(await nudgeText(page) === '', 'after a reload with nothing changed: ' + await nudgeText(page));
 
-    /* 20 days ago: the reminder, and its own button makes a backup */
-    await page.evaluate(t => localStorage.setItem('ss-last-backup', String(t)), Date.now() - 20 * DAY);
-    await s.goto();
-    assert(/^Last backup: 20 days ago\.\s*Back up now$/.test(await nudgeText(page)), '20 days: reminder ' + JSON.stringify(await nudgeText(page)));
-    assert(await lastText(page) === '', '20 days: quiet line shown as well: ' + await lastText(page));
+    /* a change (a rename) brings it back, without a reload, on both tabs, with the plain wording */
+    await page.click('#libList [data-edit]');
+    await page.locator('.modal input[data-k=song]').fill('Changed Name');
+    await page.click('.modal [data-ok]');
+    await shown('after a rename', /^Changes since your last backup \(today\)\.\s*Back up now$/);
+    await tab('sets'); await shown('Setlists tab after a change', /^Changes since your last backup \(today\)\./);
+    /* its own button makes a backup, and then it is gone */
     const dl2 = await download(page, () => page.click('#libNudge [data-backupnow]'));
     assert(/^setlist-stand-backup-.*\.zip$/.test(dl2.name), 'reminder button download name: ' + dl2.name);
-    await page.waitForFunction(() => !document.querySelector('#libNudge .nudge'), null, {timeout: 5000})
-      .catch(() => { throw new Error('reminder still shown after "Back up now"'); });
-    assert(await lastText(page) === 'Last backup: today.', 'hint after "Back up now": ' + JSON.stringify(await lastText(page)));
+    await gone('after "Back up now"');
+    /* a new setlist is a change too */
+    await page.click('#view [data-newset]');
+    await page.locator('.modal input[type=text]').fill('Reminder Test');
+    await page.click('.modal [data-ok]');
+    await page.waitForSelector('#view [data-addto]');
+    await shown('open setlist after a new setlist', /^Changes since your last backup/);
+    /* a restore of the backup counts as backed up until the next change */
+    await page.click('#view [data-allsets]'); await tab('lib');
+    await clearToast(page);
+    await page.setInputFiles('#restoreFile', dl2.file);
+    await waitToast(page, /^Restored/, 30000);
+    await gone('after a restore');
+    await tab('sets'); await gone('Setlists tab after a restore'); await tab('lib');
     noErrors(s);
   } finally { await s.close(); }
 }},

@@ -123,6 +123,8 @@ export async function restoreFrom(f, render){
     if(wasStopped()) return;
     job.lock('Saving to this tablet…');                 // the one write: from here Stop is gone, and Escape does nothing
     await putAll(ops);
+    /* A restored library counts as backed up until the next change: the restored records are not "changes since the last backup". */
+    try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}
   }catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
   /* The backup is written by now: a problem from here on must not say "Nothing was changed". */
   try{

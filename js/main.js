@@ -1,6 +1,6 @@
 import {initErrors, explainError} from './errors.js';
 import {$, esc, hooks} from './util.js';
-import {openStore, load, ensureHashes, songById} from './store.js';
+import {openStore, load, ensureHashes, initChanged, songById} from './store.js';
 import {renderLibrary, onClick as libraryClick, addFiles, newVersion} from './library.js';
 import {renderSetlists, onClick as setlistClick, closeSet, initSetlists} from './setlists.js';
 import {backupNow, restoreFrom} from './backup.js';
@@ -133,6 +133,7 @@ async function applyResume(){
   else pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
   initViewer(); initInk(); initCrop(); initSetlists(); initSplit();
   await load(); initShown(); ready = true; render();
+  initChanged().catch(() => {});             // after the first draw: the newest change among the ink pages, for the backup reminder
   announceSignIn(signIn).catch(() => {});      // only when the page came back from a sign-in the person started
   await applyResume();
   ensureHashes().catch(() => {});

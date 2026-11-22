@@ -323,6 +323,28 @@ function checkDb(M, db){
   return out;
 }
 
+/* ---------- the backup reminder ----------
+   Shown on the Library, the Setlists list and an open setlist when there are songs and either no backup was ever made or any record
+   (songs, sets, collections, ink pages, deletion markers; never the PDFs) has an `updated` later than the last backup. The
+   newest `updated` is read here from the stored records, not from the app's own tally (js/store.js keeps one in memory as it
+   writes), so a write path the tally misses shows up as a missing reminder. The time of the last backup is the app's own
+   (localStorage ss-last-backup). */
+function newestStored(db){
+  let n = 0;
+  for(const st of ['songs', 'sets', 'colls', 'ink']) for(const r of Object.values(db[st])) n = Math.max(n, Number(r && r.updated) || 0);
+  return n;
+}
+async function checkNudge(s, M){
+  if(!['lib', 'sets', 'set'].includes(M.ui.screen)) return [];
+  const db = await readDb(s.page);
+  const last = Number(await s.page.evaluate(() => localStorage.getItem('ss-last-backup'))) || null;
+  const want = liveSongs(M).length > 0 && (!last || newestStored(db) > last);
+  const got = await s.page.evaluate(() => { const e = document.querySelector('#libNudge .nudge span'); return e ? e.textContent : null; });
+  if(!want) return got === null ? [] : [`backup reminder shown ("${got}"), expected none (songs ${liveSongs(M).length}, last backup ${last}, newest change ${newestStored(db)})`];
+  const wantText = last ? /^Changes since your last backup \((today|yesterday|\d+ days ago)\)\.$/ : /^You have not backed up yet\.$/;
+  return got !== null && wantText.test(got) ? [] : [`backup reminder is ${got === null ? 'missing' : `"${got}"`}, expected ${last ? 'Changes since your last backup' : 'You have not backed up yet'} (last backup ${last}, newest change ${newestStored(db)})`];
+}
+
 /* ---------- the viewer ---------- */
 const sheetOf = (page, pn) => page.evaluate(pn => {
   const ink = document.querySelector(`#stage .ink[data-pn="${pn}"]`); if(!ink) return null;
@@ -588,6 +610,9 @@ A.copySong = {w: 1.5, plan: (M, r) => {
       pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, colls: [...song.colls], deleted: false});
     a.got = 'copy ' + M.songs[M.songs.length - 1].label;
   }};
+A.backup = {w: 1.2, plan: M => liveSongs(M).length || liveSets(M).length ? {} : null,
+  desc: () => 'Back up everything (a download); the reminder goes',
+  async run(s, M){ await toLib(s, M); await backupNow(s.page); }};
 A.newSet = {w: 1.5, plan: (M, r) => ({name: r.pick(SET_NAMES)}),
   desc: a => `new setlist "${a.name}"`,
   async run(s, M, a){
@@ -1119,6 +1144,8 @@ async function runCase(ctx, seed, c, log){
     if(p.length) fail(`${label}: IndexedDB differs from the model:\n    ${p.join('\n    ')}`);
     p = await settle(() => checkScreen(s, M), 2000);
     if(p.length) fail(`${label}: the screen differs from the model:\n    ${p.join('\n    ')}`);
+    p = await settle(() => checkNudge(s, M), 2500);
+    if(p.length) fail(`${label}: the backup reminder differs from the model:\n    ${p.join('\n    ')}`);
     if(full){ p = await fullCheck(s, M); if(p.length) fail(`${label}: full screen check:\n    ${p.join('\n    ')}`); }
     if(s.errors.length) fail(`${label}: page errors: ${s.errors.join(' | ')}`);
   };

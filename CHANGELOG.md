@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-21: A backup reminder after you change something
+- **Backup reminder:** the app now reminds you to back up when you have changed something since your last backup, instead of after 14 days. It says "Changes since your last backup (today)." with a **Back up now** button, on both Library and Setlists, and it appears as soon as you save a change (a mark, a rename, a new setlist...). After a backup it goes away. It never shows while you are playing a song.
+- A restored library counts as backed up until your next change. If you have songs and have never backed up, it still says "You have not backed up yet."
+
 ## 2026-11-21: Add songs to a setlist in the order you tap them
 - **Add songs in order:** in a setlist, tap songs in the order you want them. Each one gets a number, and they are added to the setlist in that order. Tap a numbered song again to take it off; the ones after it move up. The button says how many ("Add 3").
 - **Search box:** every song list (Add songs, Share songs, Add songs to a collection) has a search box at the top. Songs you have already picked keep their number while the search hides them. The on-screen keyboard does not pop up until you tap the search box.

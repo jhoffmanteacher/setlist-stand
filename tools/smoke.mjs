@@ -1802,6 +1802,46 @@ async function stepPickOrder(t){
   assert((await setTitles()).length === 3, 'Cancel added songs');
 }
 
+async function stepBackupReminder(t){
+  const {page} = t;
+  const nudge = () => page.evaluate(() => { const e = document.querySelector('#libNudge .nudge span'); return e ? e.textContent : null; });
+  const wantNudge = async what => { await waitFor(async () => (await nudge()) !== null, what + ': no reminder'); assert(/^Changes since your last backup \(today\)\.$/.test(await nudge()), what + ': ' + await nudge()); };
+  const noNudge = async what => { await page.waitForFunction(() => !document.querySelector('#libNudge .nudge'), null, {timeout: 5000}).catch(() => { throw new Error(what + ': the reminder is still shown: ' + '' ); }); };
+  await toLibrary(page);
+  await download(page, () => page.click('#view [data-backup]'));
+  await noNudge('after a backup');
+  /* one stroke is a change: the reminder shows on the Library and on Setlists, never in the viewer */
+  await openSong(page, 'Pick A');
+  await page.click('#vAnn');
+  await drawOn(page, page.locator('#stage .sheet').first());
+  await page.click('#tDone');
+  assert(await page.evaluate(() => { const v = document.querySelector('#viewer').getBoundingClientRect(); return !document.querySelector('#viewer .nudge') && [...document.querySelectorAll('.nudge')].every(n => { const r = n.getBoundingClientRect(); return !r.width || document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('#viewer'); }); }), 'the reminder shows over the viewer');
+  await page.click('#vBack');
+  await page.click('#tLib');
+  await wantNudge('Library after a stroke');
+  await page.click('#tSets');
+  await wantNudge('Setlists after a stroke');
+  const dl = await download(page, () => page.click('#libNudge [data-backupnow]'));
+  await noNudge('after Back up now');
+  await page.click('#tLib'); await noNudge('Library after Back up now');
+  /* renaming a setlist brings it back */
+  await page.click('#tSets');
+  await page.locator('#view [data-set]', {hasText: 'Order Test'}).first().click();
+  await page.waitForSelector('#view [data-renset]');
+  await page.click('#view [data-renset]');
+  await page.locator('.modal input[type=text]').fill('Order Test Renamed');
+  await page.click('.modal [data-ok]');
+  await wantNudge('open setlist after a rename');
+  /* restoring a backup counts as backed up */
+  await page.click('#view [data-allsets]');
+  await toLibrary(page);
+  await page.setInputFiles('#restoreFile', dl.file);
+  await page.waitForFunction(() => /^Restored/.test(document.querySelector('#toast').textContent), null, {timeout: 30000});
+  await noNudge('after a restore');
+  await page.click('#tSets'); await noNudge('Setlists after a restore');
+  await page.click('#tLib');
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -1838,6 +1878,7 @@ const STEPS = [
   ['30 import a share package: the setlist comes back under a new name, songs already here are not added again', stepShareImport],
   ['30b Collections: Band A and Band B, default opens on Band A, a new PDF joins it, a song in both, delete one keeps the song', stepCollections],
   ['30c Add songs in tap order: numbers, untap renumbers, Add N, setlist ends in that order; search keeps numbers', stepPickOrder],
+  ['30d Backup reminder: after a backup none; a stroke or a rename brings it back on Library and Setlists, never in the viewer; a restore clears it', stepBackupReminder],
   ['31 no request left localhost during the run', stepNoExternal],
 ];
 

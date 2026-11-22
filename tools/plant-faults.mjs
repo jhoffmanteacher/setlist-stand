@@ -489,6 +489,17 @@ const FAULTS = [
     loop: 'dialogs trap focus', why: 'the search box takes focus when the dialog opens, so the iPad keyboard covers the list'},
   {id: 'pick-count-ignores-hidden', file: 'js/util.js', find: "ok.textContent = ordered ? `${button} ${order.length}` : button;", replace: "ok.textContent = ordered ? `${button} ${box.querySelectorAll('input:checked').length}` : button;",
     loop: 'model.loop', why: 'while a search hides numbered songs the button counts only the ones on the screen'},
+  /* backup reminder after changes */
+  {id: 'nudge-put-unseen', file: 'js/store.js', find: "seenRec(st, v); };", replace: "};",
+    loop: 'the backup reminder shows', why: 'a rename or a drawn stroke (a plain save) does not count as a change, so the reminder never comes'},
+  {id: 'nudge-putall-unseen', file: 'js/store.js', find: "else if(!o.delete) seenRec(o.store, o.value); }", replace: "}",
+    loop: 'model.loop', why: 'what is saved together (a copy, an import, a delete) does not count as a change'},
+  {id: 'nudge-restore-not-clean', file: 'js/backup.js', find: "    try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}\n  }catch(err){ return stop(explainError(err, 'Could not restore", replace: "  }catch(err){ return stop(explainError(err, 'Could not restore",
+    loop: 'the backup reminder shows', why: 'right after a restore the app says the restored library has changes since the last backup'},
+  {id: 'nudge-not-on-setlists', file: 'js/setlists.js', find: "  renderNudge();                       // the backup reminder, under the bar (js/nudge.js)\n", replace: "",
+    loop: 'the backup reminder shows', why: 'the reminder shows on the Library only'},
+  {id: 'nudge-by-days', file: 'js/nudge.js', find: "return state.songs.length > 0 && (t == null || newestChange() > t);", replace: "return state.songs.length > 0 && (t == null || Date.now() - t > 14 * 864e5);",
+    loop: 'the backup reminder shows', why: 'the old rule: the reminder waits 14 days and ignores changes'},
 ];
 
 const args = process.argv.slice(2);
