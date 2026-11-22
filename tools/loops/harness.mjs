@@ -228,6 +228,12 @@ export async function openShareMenu(page, item){
   const m = await openMenu(page, 'Share / Import');
   await m.box.locator(`[data-item="${item}"]`).click();
 }
+/* An open setlist's More box (the Setlists tab, a setlist open): open it and tap one item ('gig', 'print', 'share', 'dup',
+   'rename' or 'colls'). */
+export async function openSetMenu(page, item){
+  const m = await openMenu(page, 'More');
+  await m.box.locator(`[data-item="${item}"]`).click();
+}
 /* The Back up / Sync box: open it and tap one item ('backup', 'restore', 'sync' or 'drive'). */
 export async function openBackupMenu(page, item){
   const m = await openMenu(page, 'Back up / Sync');

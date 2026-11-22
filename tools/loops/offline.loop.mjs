@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, TMP, assert, sleep, idbAll, PDFDocument, JSZip, restoreZip, openBackupMenu} from './harness.mjs';
+import {FIX, TMP, assert, sleep, idbAll, PDFDocument, JSZip, restoreZip, openBackupMenu, openSetMenu} from './harness.mjs';
 import {cacheName, precachePaths, waitInstalled, navCounter, goOffline, throttleProxy, until} from './site-copy.mjs';
 
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
@@ -166,7 +166,7 @@ export const loops = [
       await add('Three-page');
       const set = Object.values(await idbAll(page, 'sets')).find(x => x.name === 'Offline gig' && !x.deleted);
       assert(set && set.items.map(i => i.type).join() === 'song,break,song', 'set items ' + JSON.stringify(set && set.items));
-      await page.click('#view [data-print]');
+      await openSetMenu(page, 'print');
       await page.locator('.modal #pInk').setChecked(true);
       const pdf = await download(page, () => page.locator('.modal [data-ok]').click());
       if(await page.locator('.modal').count()){ await page.locator('.modal [data-x]').click(); }

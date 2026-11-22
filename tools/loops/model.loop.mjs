@@ -47,7 +47,7 @@
 */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, sha256, idbAll, snapshot, diff, restoreZip, backupNow, wipe, sleep} from './harness.mjs';
+import {FIX, sha256, idbAll, snapshot, diff, restoreZip, backupNow, wipe, sleep, openSetMenu} from './harness.mjs';
 
 const NAME = 'model: random action sequences match the model, survive reload and a backup round trip';
 const DEFAULT_CASES = 10, ACTIONS = 22, FULL_EVERY = 6;   // ~100 s: sized so a full run does not hog the Mac (see CLAUDE.md)
@@ -796,7 +796,7 @@ async function gigDialogUI(s, M, st){
   const page = s.page;
   await openSetUI(s, M, st);
   const before = (await idbAll(page, 'sets'))[st.id];
-  await page.click('#view [data-gig]');
+  await openSetMenu(page, 'gig');
   const m = page.locator('.modal'), box = m.locator('input[type=date]');
   await box.waitFor({timeout: 5000});
   if(await box.inputValue() !== (st.gig || '')) throw new Error(`the Gig date dialog of ${st.label} shows "${await box.inputValue()}", model ${fmt(st.gig || '')}`);
@@ -944,7 +944,7 @@ A.dupSet = {w: 1.2, plan: (M, r) => { const st = setPick(M, r, () => true); retu
   desc: a => `duplicate ${a.set} (${a.inside ? 'inside the setlist' : 'from the list'})`,
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
-    if(a.inside){ await openSetUI(s, M, st); await s.page.click('#view [data-dup]'); }
+    if(a.inside){ await openSetUI(s, M, st); await openSetMenu(s.page, 'dup'); }
     else { await toSets(s, M); await revealSet(s, M, st); await s.page.click(`#view [data-dupset="${st.id}"]`); }
     await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, st.name + ' copy', {timeout: 5000});
     const known = new Set(M.sets.map(x => x.id));
@@ -965,7 +965,7 @@ A.renameSet = {w: 1, plan: (M, r) => { const st = setPick(M, r, () => true); ret
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
     await openSetUI(s, M, st);
-    await s.page.click('#view [data-renset]');
+    await openSetMenu(s.page, 'rename');
     await askFill(s.page, a.name);
     await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, a.name, {timeout: 5000});
     st.name = a.name;
@@ -1113,7 +1113,7 @@ A.setColls = {w: 1.5, plan: (M, r) => { const st = setPick(M, r, () => true); if
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
     await openSetUI(s, M, st);
-    await s.page.click('#view [data-setcolls]');
+    await openSetMenu(s.page, 'colls');
     await s.page.locator('.modal fieldset.checks').waitFor({timeout: 5000});
     await setTicks(s, M, st, a.ticks, st.label);
   }};

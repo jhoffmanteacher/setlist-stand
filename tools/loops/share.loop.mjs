@@ -9,7 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, assert, sha256, fileHashes, snapshot, normalise, diff, download, openShareMenu} from './harness.mjs';
+import {FIX, assert, sha256, fileHashes, snapshot, normalise, diff, download, openShareMenu, openSetMenu} from './harness.mjs';
 import {CROPS, songsOf, importFixtures, buildLibrary, closeDone, readPackage} from './share-lib.mjs';
 
 /* what one package song must equal: the library's record, and the fixture file its PDF came from */
@@ -45,8 +45,8 @@ async function loopExport(ctx){
     /* ---- a setlist, from the setlist screen ---- */
     await page.click('#tSets');
     await page.click('#view [data-set]');
-    await page.waitForSelector('#view [data-shareset]');
-    const pk = await readPackage((await download(page, () => page.click('#view [data-shareset]'))).file);
+    await page.waitForSelector('#view [data-setmenu]');
+    const pk = await readPackage((await download(page, () => openSetMenu(page, 'share'))).file);
     const done = await closeDone(page);
     assert(/3 songs are in/.test(done) && /Gig Friday - Setlist Stand share\.zip/.test(done), 'done dialog: ' + done);
     checkClean(pk, 'setlist package');

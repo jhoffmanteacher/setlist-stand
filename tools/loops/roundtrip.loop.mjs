@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, snapshot, diff, restoreZip, backupNow, wipe, JSZip, PDFDocument} from './harness.mjs';
+import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, snapshot, diff, restoreZip, backupNow, wipe, JSZip, PDFDocument, openSetMenu} from './harness.mjs';
 
 /* ---------- small UI helpers (approaches copied from tools/smoke.mjs) ---------- */
 const liveOf = v => (v && Array.isArray(v.strokes) ? v.strokes : []).filter(s => !s.deleted);
@@ -160,7 +160,7 @@ async function tickSet(page, name, ids){
   await toLibrary(page);
   await page.click('#tSets');
   await page.locator('#view [data-set]', {hasText: name}).click();
-  await page.click('#view [data-setcolls]');
+  await openSetMenu(page, 'colls');
   await tickIn(page, ids);
 }
 const sameSet = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());

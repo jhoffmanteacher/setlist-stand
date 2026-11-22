@@ -12,7 +12,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, assert, sha256, snapshot, normalise, diff, download, idbAll} from './harness.mjs';
+import {FIX, assert, sha256, snapshot, normalise, diff, download, idbAll, openSetMenu} from './harness.mjs';
 import {importFixtures, buildLibrary, closeDone, readPackage, songsOf} from './share-lib.mjs';
 
 const bytesOf = f => Array.from(fs.readFileSync(path.join(FIX, f)));
@@ -289,8 +289,8 @@ async function loopShare(ctx){
     await page.reload(); await page.waitForSelector('#libList [data-open]');
     aBefore = normalise(await snapshot(page));
     assert(Object.values(aBefore.songs).filter(x => !x.deleted).every(x => x.colls.length === 2), 'the test library does not have its collections');
-    await page.click('#tSets'); await page.click('#view [data-set]'); await page.waitForSelector('#view [data-shareset]');
-    const dl = await download(page, () => page.click('#view [data-shareset]'));
+    await page.click('#tSets'); await page.click('#view [data-set]'); await page.waitForSelector('#view [data-setmenu]');
+    const dl = await download(page, () => openSetMenu(page, 'share'));
     await closeDone(page);
     setFile = dl.file;
     const pk = await readPackage(setFile);

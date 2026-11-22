@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-22: A More menu on an open setlist
+- An open setlist now shows Play setlist, Add songs, Add break and **More**. Gig date, Download PDF, Share, Duplicate, Rename and Collections are in the More menu, each with a short line saying what it does. Download PDF and Share are greyed when the setlist has no songs.
+- Nothing about how any of them works has changed.
+
 ## 2026-11-22: Gig-date fill-in waits for a sync
 - **Fill in gig dates after a sync:** if you use Google Drive, the offer to fill in gig dates from setlist names now comes only right after a sync (within 10 minutes of one). Before, a tablet that had not synced for a while could fill in a date on an out-of-date copy of a setlist, and a later sync could then put that old copy over a newer one from your other tablet. If you never use Drive, nothing changes.
 

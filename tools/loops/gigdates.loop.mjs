@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, snapshot, diff, download, backupNow, restoreZip, wipe} from './harness.mjs';
+import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, snapshot, diff, download, backupNow, restoreZip, wipe, openSetMenu} from './harness.mjs';
 import {importFixtures, songsOf, closeDone, readPackage} from './share-lib.mjs';
 import {openTablet, syncTap, reportCounts} from './sync-two.mjs';
 import * as G from '../../js/gigdate.js';
@@ -95,7 +95,7 @@ async function openSet(page, id){
   if(!await page.locator(`#view [data-set="${id}"]`).count())
     for(let i = 0; i < 50 && await page.locator('#view button[data-grp][aria-expanded="false"]').count(); i++) await page.locator('#view button[data-grp][aria-expanded="false"]').first().click();
   await page.click(`#view [data-set="${id}"]`);
-  await page.waitForSelector('#view [data-gig]');
+  await page.waitForSelector('#view [data-setmenu]');
 }
 const gigline = page => page.evaluate(() => document.querySelector('#view .gigline')?.textContent ?? null);
 async function wipeReload(s){
@@ -322,7 +322,7 @@ async function loopList(ctx){
     await openSet(page, U);
     assert(await gigline(page) === null, 'an undated setlist shows a date line');
     const before = (await idbAll(page, 'sets'))[U];
-    await page.click('#view [data-gig]');
+    await openSetMenu(page, 'gig');
     await page.locator('.modal input[type=date]').waitFor();
     assert(await page.locator('.modal input[type=date]').inputValue() === '', 'the Gig date box of an undated setlist is not empty');
     assert(await page.locator('.modal [data-clear]').isDisabled(), 'Clear is offered for a setlist with no date');
@@ -333,7 +333,7 @@ async function loopList(ctx){
 
     const step = async (what, act, wantGig) => {
       const prev = (await idbAll(page, 'sets'))[U];
-      await page.click('#view [data-gig]');
+      await openSetMenu(page, 'gig');
       await page.locator('.modal input[type=date]').waitFor();
       await act();
       await noModal(page);
@@ -560,7 +560,7 @@ async function loopBackups(ctx){
     const before = await snapshot(page);
     await toSets(page);
     await openSet(page, st.id);
-    pkgFile = (await download(page, () => page.click('#view [data-shareset]'))).file;
+    pkgFile = (await download(page, () => openSetMenu(page, 'share'))).file;
     await closeDone(page);
     pk = await readPackage(pkgFile);
     const keys = [];
@@ -690,7 +690,7 @@ async function loopSync(ctx){
       const {page} = t, prev = await recOf(t);
       await toSets(page);
       await openSet(page, st.id);
-      await page.click('#view [data-gig]');
+      await openSetMenu(page, 'gig');
       await page.locator('.modal input[type=date]').waitFor();
       await act(page);
       await noModal(page);

@@ -7,7 +7,7 @@
  */
 import path from 'node:path';
 import fsp from 'node:fs/promises';
-import {FIX, assert, sleep, idbAll, onScreen, download} from './harness.mjs';
+import {FIX, assert, sleep, idbAll, onScreen, download, openSetMenu} from './harness.mjs';
 
 const BLACK = '#1a1a1a', TEXT = 'Coda ♯ hold';
 const fmt = o => JSON.stringify(o, (k, v) => typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v);
@@ -436,7 +436,7 @@ async function loopPenWidths(ctx){
     await page.locator('.modal .pick input').first().check();
     await page.click('.modal [data-ok]');
     await page.waitForFunction(() => document.querySelectorAll('#items > li.row').length === 1, null, {timeout: 5000});
-    await page.click('#view [data-print]');
+    await openSetMenu(page, 'print');
     const m = page.locator('.modal'); await m.waitFor();
     await m.locator('#pInk').setChecked(true);
     const dl = await download(page, () => m.locator('[data-ok]').click());

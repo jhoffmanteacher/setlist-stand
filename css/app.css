@@ -198,6 +198,7 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
 .menuitem{white-space:normal;display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:64px;padding:10px 16px;text-align:left}
 .menuitem b{font-size:20px}
 .menuitem span{font-size:16px;color:var(--mute);font-weight:400}
+.menuitem:disabled{opacity:.4}
 .syncdel{list-style:none;margin:0;padding:0;max-height:45vh;overflow:auto;overflow-wrap:anywhere}
 
 /* songbook splitter: the list of songs on the left, the book's pages on the right (stacked in portrait) */

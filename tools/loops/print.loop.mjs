@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, fileHashes, download, requireUmd, JSZip, snapshot, diff} from './harness.mjs';
+import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, fileHashes, download, requireUmd, JSZip, snapshot, diff, openSetMenu} from './harness.mjs';
 
 const PL = requireUmd(path.join(ROOT, 'vendor', 'pdf-lib.min.js'));
 const PW = 612, PH = 792;                                  // fixture page size (letter, points)
@@ -246,7 +246,7 @@ async function setOf(page, name, ids){
   for(const id of ids) await addSong(page, songs[id].title);
 }
 async function printSet(page, withInk){
-  await page.click('#view [data-print]');
+  await openSetMenu(page, 'print');
   const m = page.locator('.modal');
   await m.waitFor();
   await m.locator('#pInk').setChecked(withInk);
@@ -310,7 +310,7 @@ const idbPut = (page, store, key, value, b64) => page.evaluate(([store, key, val
 const dialogText = page => page.locator('.modal').textContent().catch(() => '(closed)');
 /* Print through the real dialog up to the protected-charts question; returns its list items and buttons. */
 async function askProtected(page, withInk){
-  await page.click('#view [data-print]');
+  await openSetMenu(page, 'print');
   const m = page.locator('.modal');
   await m.waitFor();
   await m.locator('#pInk').setChecked(withInk);
@@ -358,7 +358,7 @@ async function openSetById(page, id){
 async function downloadOne(page, withInk, how){
   let dl;
   if(how === 'plain'){
-    await page.click('#view [data-print]');
+    await openSetMenu(page, 'print');
     const m = page.locator('.modal');
     await m.waitFor();
     await m.locator('#pInk').setChecked(withInk);
@@ -924,7 +924,7 @@ export const loops = [
       st.id = await newSetId(page, st.name);
       for(const k of st.items) if(k === '-') await addBreak(page); else await addSong(page, songs0[id[k]].title);
       if(st.key === 'gig'){
-        await page.click('#view [data-gig]');
+        await openSetMenu(page, 'gig');
         await page.locator('.modal input[type=date]').fill(gig);
         await page.click('.modal [data-ok]');
         await waitFor(async () => (await idbAll(page, 'sets'))[st.id].gig === gig, 'gig date not saved');

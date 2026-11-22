@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {FIX, TMP, assert, sha256, sleep, idbAll, download} from './harness.mjs';
+import {FIX, TMP, assert, sha256, sleep, idbAll, download, openSetMenu} from './harness.mjs';
 import {makeSiteCopy, removeCopy, intercept, cacheName, precachePaths, waitInstalled, askUpdate, until} from './site-copy.mjs';
 
 const RED = '#d62828';
@@ -132,7 +132,7 @@ async function renderBack(page, bytes){
   }, Buffer.from(bytes).toString('base64'));
 }
 async function openPrint(page, withInk = true){
-  await page.click('#view [data-print]');
+  await openSetMenu(page, 'print');
   const m = page.locator('.modal');
   await m.waitFor();
   await m.locator('#pInk').setChecked(withInk);

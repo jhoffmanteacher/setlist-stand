@@ -757,6 +757,16 @@ const FAULTS = [
     loop: 'hygiene-ui backup menu', why: 'Sync with Google Drive says "Keep your tablets the same" on a tablet where Drive was never connected'},
   {id: 'gig-fill-no-fresh-sync-wait', file: 'js/gigui.js', find: '  if(driveSetUp() && !(lastSync() > 0 && Date.now() - lastSync() < FRESH_MS)) return;      // see above\n', replace: '',
     loop: 'gigdates 6', why: 'a tablet that has not synced lately fills in gig dates on its old copies: they are stamped newer and win the next sync over the other tablet\'s changes'},
+  {id: 'setmenu-item-wrong-action', file: 'js/setlists.js', find: "if(id === 'rename') return renameSet(st, save);", replace: "if(id === 'rename') return changeGig(st);",
+    loop: 'hygiene-ui setlist menu', why: 'Rename in the open setlist\'s More box opens the Gig date dialog instead'},
+  {id: 'setmenu-print-on-when-empty', file: 'js/setlists.js', find: "hint: 'Save the songs as one PDF', disabled: !n}", replace: "hint: 'Save the songs as one PDF', disabled: false}",
+    loop: 'hygiene-ui setlist menu', why: 'Download PDF in the More box is on for a setlist with no songs (it used to be greyed)'},
+  {id: 'setmenu-old-gig-button-kept', file: 'js/setlists.js', find: '<button data-addbreak>Add break</button><button data-setmenu>More</button></div>', replace: '<button data-addbreak>Add break</button><button data-setmenu>More</button><button data-gig>Gig date</button></div>',
+    loop: 'hygiene-ui setlist menu', why: 'the old Gig date button is left in the open setlist\'s bar next to More'},
+  {id: 'setmenu-focus-lost-after-redraw', file: 'js/setlists.js', find: "const mb = document.querySelector('#view [data-setmenu]'); if(mb) mb.focus();", replace: '',
+    loop: 'hygiene-ui setlist menu', why: 'after Rename or Duplicate redraws the setlist screen, the focus is left on nothing instead of on the new More button'},
+  {id: 'setmenu-gig-hint-no-date', file: 'js/setlists.js', find: "hint: gigOf(st) ? `${gigLong(gigOf(st))} (tap to change)` : 'Set or change the date of this gig'}", replace: "hint: 'Set or change the date of this gig'}",
+    loop: 'hygiene-ui setlist menu', why: 'the Gig date item no longer shows the date that is set, in the screen\'s own words'},
 ];
 
 const args = process.argv.slice(2);

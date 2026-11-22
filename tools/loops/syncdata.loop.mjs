@@ -17,7 +17,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, TMP, JSZip, assert, idbAll, snapshot, diff} from './harness.mjs';
+import {FIX, TMP, JSZip, assert, idbAll, snapshot, diff, openSetMenu} from './harness.mjs';
 
 const YEAR = 365 * 864e5;
 const H64 = 'ab'.repeat(32);
@@ -117,11 +117,11 @@ async function loopStamps(ctx){
     const openSet = async id => { await page.click('#tSets'); await page.click(`#view [data-set="${id}"]`); await page.waitForSelector('#view [data-addto]'); };
     const ask = async v => { const i = page.locator('.modal input[type=text]'); await i.waitFor({timeout: 5000}); await i.fill(v); await page.click('.modal [data-ok]'); await noModal(page); };
 
-    await edit('rename a setlist', [['sets', S1.id]], async () => { await openSet(S1.id); await page.click('#view [data-renset]'); await ask('Gig renamed'); });
+    await edit('rename a setlist', [['sets', S1.id]], async () => { await openSet(S1.id); await openSetMenu(page, 'rename'); await ask('Gig renamed'); });
     await edit('add a break to a setlist', [['sets', S1.id]], async () => { await openSet(S1.id); await page.click('#view [data-addbreak]'); });
     await edit('remove a song from a setlist', [['sets', S2.id]], async () => { await openSet(S2.id); await page.click('#view [data-rm="1"]'); });
     await edit("a setlist's collections", [['sets', S3.id]], async () => {
-      await openSet(S3.id); await page.click('#view [data-setcolls]');
+      await openSet(S3.id); await openSetMenu(page, 'colls');
       await page.locator('.modal fieldset.checks label', {hasText: 'Keep Band'}).locator('input').check();
       await page.click('.modal [data-ok]'); await noModal(page);
     });

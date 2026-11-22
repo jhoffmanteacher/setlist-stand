@@ -4,7 +4,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, download, backupNow, wipe, restoreZip, PDFDocument, openShareMenu, openBackupMenu, driveBox, WEBKIT} from './harness.mjs';
+import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, download, backupNow, wipe, restoreZip, PDFDocument, openShareMenu, openBackupMenu, driveBox, WEBKIT, openSetMenu} from './harness.mjs';
 import {installFakeGoogle} from './fake-google.mjs';
 
 const FIXTURES = ['one-page.pdf', 'two-page.pdf', 'three-page.pdf'];
@@ -117,7 +117,7 @@ async function cspLoop(ctx){
     await newSet(page, 'Gig', ['One-page', 'Three-page']);
     await page.click('#view [data-addbreak]');
     await page.waitForFunction(() => document.querySelectorAll('#items > li.row').length === 3);
-    await page.click('#view [data-print]');
+    await openSetMenu(page, 'print');
     await page.locator('.modal #pInk').setChecked(true);
     const pdf = await download(page, () => page.click('.modal [data-ok]'));
     if(await page.locator('.modal').count()){ await page.locator('.modal [data-x]').waitFor({timeout: 8000}); await page.click('.modal [data-x]'); }
@@ -178,6 +178,12 @@ async function checkDialog(page, what){
       assert(inside, `${what}: focus left the dialog after ${key} x${i + 1}`);
     }
   }
+}
+/* The setlist's More box by keyboard: focus the button, Enter, then Enter on the item. */
+async function viaKeys(page, more, item){
+  await page.focus(more); await page.keyboard.press('Enter');
+  await page.locator('.modal.menubox').waitFor();
+  await page.focus(`.modal.menubox [data-item="${item}"]`); await page.keyboard.press('Enter');
 }
 async function escapeBack(page, opener, what){
   await page.keyboard.press('Escape');
@@ -371,13 +377,13 @@ async function gigDialogLoop(ctx){
     await page.locator('.modal input[type=text]').fill('Hygiene Gig');
     await page.focus('.modal input[type=text]'); await page.keyboard.press('Enter');
     await noModal(page).catch(() => { throw new Error('New setlist: Enter in the name field did not save'); });
-    await page.waitForSelector('#view [data-gig]');
+    await page.waitForSelector('#view [data-setmenu]');
     let [st] = await sets();
     assert(st && st.name === 'Hygiene Gig' && st.gig === '2026-12-05', 'New setlist: Enter in the name field saved ' + JSON.stringify(st));
 
     /* Gig date: the dialog shows the date; a changed box then Escape changes nothing */
-    const gb = '#view [data-gig]';
-    await page.focus(gb); await page.keyboard.press('Enter');
+    const gb = '#view [data-setmenu]';
+    await viaKeys(page, gb, 'gig');
     await page.locator('.modal input[type=date]').waitFor();
     assert(await page.locator('.modal input[type=date]').inputValue() === '2026-12-05', 'Gig date dialog shows ' + await page.locator('.modal input[type=date]').inputValue());
     await checkDialog(page, 'Gig date dialog');
@@ -386,7 +392,7 @@ async function gigDialogLoop(ctx){
     let [now] = await sets();
     assert(JSON.stringify(now) === JSON.stringify(st), 'Escape on the Gig date dialog changed the setlist: ' + JSON.stringify(now));
     /* Cancel by Enter changes nothing either, Clear stays a real button */
-    await page.focus(gb); await page.keyboard.press('Enter');
+    await viaKeys(page, gb, 'gig');
     await page.locator('.modal input[type=date]').fill('2027-01-09');
     await page.focus('.modal [data-x]'); await page.keyboard.press('Enter');
     await noModal(page);
@@ -400,7 +406,7 @@ async function gigDialogLoop(ctx){
     await page.locator('.modal input[type=text]').fill('Sf October 18 2026');
     await page.keyboard.press('Enter');
     await noModal(page);
-    await page.waitForSelector('#view [data-gig]');
+    await page.waitForSelector('#view [data-setmenu]');
     assert(!(await page.locator('.modal').count()), 'the fill-in came up over an open setlist');
     const before = await sets();
     await page.focus('#tSets'); await page.keyboard.press('Enter');
@@ -442,8 +448,8 @@ async function downloadDialogLoop(ctx){
     const before = JSON.stringify(await liveSets(page));
 
     /* Download <name> on an open setlist */
-    const pb = '#view [data-print]';
-    await page.focus(pb); await page.keyboard.press('Enter');
+    const pb = '#view [data-setmenu]';
+    await viaKeys(page, pb, 'print');
     await page.locator('.modal h2', {hasText: 'Download Dl B'}).waitFor({timeout: 5000}).catch(() => { throw new Error('the Download Dl B dialog did not open'); });
     await checkDialog(page, 'Download <name> dialog');
     await escapeBack(page, pb, 'Download <name> dialog');
@@ -640,6 +646,101 @@ async function shareMenuLoop(ctx){
   }
 }
 
+/* ---------- (e2) the open setlist's More box (Jonathan, 2026-11-22: the setlist bar was crowded) ---------- */
+const SETMENU_ITEMS = (gigHint, colls = true) => [
+  ['gig', 'Gig date', gigHint],
+  ['print', 'Download PDF', 'Save the songs as one PDF'],
+  ['share', 'Share', 'Send this setlist and its songs as one file'],
+  ['dup', 'Duplicate', 'Make a copy of this setlist'],
+  ['rename', 'Rename', 'Change the name'],
+  ...(colls ? [['colls', 'Collections', 'Choose which collections it is in']] : [])];
+async function setMenuLoop(ctx){
+  for(const [w, h] of [[1280, 800], [800, 1280]]){
+    const s = await ctx.session({viewport: {width: w, height: h}});
+    const at = `${w}x${h}`, more = '#view [data-setmenu]';
+    try{
+      const {page} = s;
+      await s.goto();
+      await importFixtures(page);
+      /* a collection, so the Collections item is there */
+      await page.click('[data-collmanage]'); await page.locator('.collmgr').waitFor();
+      await page.click('.collmgr [data-newcoll]'); await page.locator('.collname input').fill('Menu Band'); await page.keyboard.press('Enter');
+      await page.locator('.collmgr .mname', {hasText: 'Menu Band'}).waitFor(); await page.keyboard.press('Escape'); await noModal(page);
+
+      /* an EMPTY setlist: the bar, the old buttons gone, Download PDF and Share greyed */
+      await page.click('#tSets'); await page.click('#view [data-newset]');
+      await page.locator('.modal input[type=text]').fill('Empty menu'); await page.click('.modal [data-ok]');
+      await page.waitForSelector(more);
+      const bar = await page.locator('#view .bar').nth(1).locator('button').allTextContents();
+      assert(JSON.stringify(bar) === JSON.stringify(['Play setlist', 'Add songs', 'Add break', 'More']), `${at}: the bar holds ${JSON.stringify(bar)}`);
+      assert(JSON.stringify(await page.locator('#view .bar').first().locator('button').allTextContents()) === JSON.stringify(['‹ Setlists']), `${at}: the top row changed`);
+      for(const gone of ['[data-print]', '[data-shareset]', '[data-dup]', '[data-renset]', '[data-gig]', '[data-setcolls]'])
+        assert(await page.locator('#view ' + gone).count() === 0, `${at}: the setlist screen still has ${gone}`);
+      assert(await page.locator('#view [data-play]').isDisabled(), `${at}: Play setlist is on for an empty setlist`);
+      const barH = await page.locator('#view .bar').nth(1).locator('button').evaluateAll(bs => bs.map(b => b.getBoundingClientRect().height));
+      assert(barH.every(x => x >= 44), `${at}: a bar button is under 44 px: ${JSON.stringify(barH)}`);
+      await checkMenuBox(page, more, 'More', 'Empty menu', SETMENU_ITEMS('Set or change the date of this gig'), at);
+      await page.focus(more); await page.keyboard.press('Enter'); await page.locator('.modal.menubox').waitFor();
+      const off = await page.locator('.modal.menubox [data-item]').evaluateAll(bs => bs.map(b => [b.dataset.item, b.disabled]));
+      assert(JSON.stringify(off) === JSON.stringify([['gig', false], ['print', true], ['share', true], ['dup', false], ['rename', false], ['colls', false]]), `${at}: disabled items of an empty setlist ${JSON.stringify(off)}`);
+      await page.keyboard.press('Escape'); await noModal(page);
+
+      /* songs and a date: Download PDF and Share on, the date in the Gig date hint in the screen's own words */
+      await page.click('#view [data-addto]'); await page.locator('.modal .pick').waitFor();
+      for(const t of ['One-page', 'Two-page']) await page.locator('.modal .pick label', {hasText: t}).locator('input').check();
+      await page.click('.modal [data-ok]');
+      await page.waitForFunction(() => document.querySelectorAll('#items > li.row').length === 2);
+      await openSetMenu(page, 'gig');
+      await page.locator('.modal input[type=date]').fill('2026-12-05'); await page.click('.modal [data-ok]'); await noModal(page);
+      await page.locator('#view .gigline').waitFor();
+      const line = await page.locator('#view .gigline').textContent();
+      assert(/2026/.test(line) && /5/.test(line), `${at}: the gig line reads ${line}`);
+      await checkMenuBox(page, more, 'More', 'Empty menu', SETMENU_ITEMS(`${line} (tap to change)`), at + ' dated');
+      await page.focus(more); await page.keyboard.press('Enter'); await page.locator('.modal.menubox').waitFor();
+      const on = await page.locator('.modal.menubox [data-item]').evaluateAll(bs => bs.map(b => b.disabled));
+      assert(on.every(x => !x), `${at}: an item is off for a setlist with songs: ${JSON.stringify(on)}`);
+      await page.keyboard.press('Escape'); await noModal(page);
+      const backOnMore = async what => assert(await waitFor(async () => page.evaluate(sel => document.activeElement === document.querySelector(sel), more), `${at}: ${what}: focus is not on More; it is on ` + await page.evaluate(() => document.activeElement && document.activeElement.outerHTML.slice(0, 80))), what);
+
+      /* each item starts its own action; closing the dialog gives the focus back to More */
+      await viaKeys(page, more, 'gig');
+      await page.locator('.modal input[type=date]').waitFor();
+      assert(await page.locator('.modal input[type=date]').inputValue() === '2026-12-05', `${at}: Gig date opened with another date`);
+      await escapeBack(page, more, `${at} Gig date from the box`);
+      await viaKeys(page, more, 'print');
+      await page.locator('.modal h2', {hasText: 'Download Empty menu'}).waitFor({timeout: 5000});
+      await escapeBack(page, more, `${at} Download PDF from the box`);
+      await viaKeys(page, more, 'colls');
+      await page.locator('.modal h2', {hasText: 'Collections of Empty menu'}).waitFor({timeout: 5000});
+      await page.locator('.modal fieldset.checks').waitFor();
+      await escapeBack(page, more, `${at} Collections from the box`);
+      const sharePk = await download(page, () => viaKeys(page, more, 'share'));
+      assert(/Setlist Stand share\.zip$/.test(sharePk.name), `${at}: Share saved ${sharePk.name}`);
+      await page.locator('.modal h2', {hasText: 'Package saved'}).waitFor({timeout: 8000});
+      await page.keyboard.press('Escape'); await noModal(page);
+      await backOnMore('Share from the box, after Done');
+      await viaKeys(page, more, 'rename');
+      await page.locator('.modal h2', {hasText: 'Rename setlist'}).waitFor({timeout: 5000});
+      await escapeBack(page, more, `${at} Rename from the box`);
+      const nameBefore = (await liveSets(page)).map(x => x.name).sort().join('|');
+      assert(nameBefore === 'Empty menu', `${at}: the dialogs changed a setlist: ${nameBefore}`);
+
+      /* Rename saves: the screen is drawn again, and the focus lands on the new More button */
+      await viaKeys(page, more, 'rename');
+      await page.locator('.modal input[type=text]').fill('Menu renamed'); await page.keyboard.press('Enter'); await noModal(page);
+      await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Menu renamed');
+      await backOnMore('Rename saved');
+      /* Duplicate makes the copy and opens it, with the focus on its More button */
+      await viaKeys(page, more, 'dup');
+      await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Menu renamed copy', null, {timeout: 5000});
+      await backOnMore('Duplicate');
+      const names = (await liveSets(page)).map(x => x.name).sort();
+      assert(JSON.stringify(names) === JSON.stringify(['Menu renamed', 'Menu renamed copy']), `${at}: the setlists are ${JSON.stringify(names)}`);
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); }
+  }
+}
+
 /* ---------- (f) the Back up / Sync box and the Google Drive box ---------- */
 const NOT_SET_UP = 'Sync keeps your songs, setlists and collections the same on your tablets, through your own Google Drive. Not synced on this tablet yet. Sync is not a backup.';
 /* The Google Drive box as it is drawn: its heading, the status sentence, the buttons (data name and text) and their heights, the
@@ -783,6 +884,7 @@ export const loops = [
   {name: 'hygiene: gig-date dialogs (New setlist with a date, Gig date, the fill-in) trap focus; Escape and Cancel change nothing; Enter in the name saves', run: gigDialogLoop},
   {name: 'hygiene: download dialogs (Download <name>, Download all, its busy box) trap focus; Escape cancels or stops and downloads nothing', run: downloadDialogLoop},
   {name: 'hygiene-ui share menu: the Library bar has one Share / Import button; its box lists three items, traps focus, closes on Escape and Cancel, and each item starts its action (also on a portrait tablet)', run: shareMenuLoop},
+  {name: 'hygiene-ui setlist menu: an open setlist shows Play setlist, Add songs, Add break and More; the box lists Gig date, Download PDF, Share, Duplicate, Rename and Collections with hints, greys Download PDF and Share when empty, traps focus, gives focus back on Escape, Cancel and after Rename or Duplicate, and each item starts its action (also on a portrait tablet)', run: setMenuLoop},
   {name: 'hygiene-ui backup menu: the Library bar has a Back up / Sync button and its bottom only a read-only Drive line; the box lists four items, traps focus, closes on Escape and Cancel, each item starts its action, and the Google Drive box shows not connected, connected and sign-in ended and stays right while open (also on a portrait tablet)', run: backupMenuLoop},
   {name: 'hygiene: setlist rows reorder with arrow keys; tablet CSS (overscroll, touch-action, safe areas)', run: reorderLoop},
 ];

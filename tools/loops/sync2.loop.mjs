@@ -31,7 +31,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, assert, sleep, diff, sha256, PDFDocument, backupNow, restoreZip, idbAll, normalise, snapshot} from './harness.mjs';
+import {FIX, assert, sleep, diff, sha256, PDFDocument, backupNow, restoreZip, idbAll, normalise, snapshot, openSetMenu} from './harness.mjs';
 import {buildLibrary, NOTE} from './share-lib.mjs';
 import {openTablet, makeFromBackup, syncTap, tapSync, finishSync, libraryOf, readDrive, reportCounts, clockOf, setClock, takeWrites, halfSongs} from './sync-two.mjs';
 import {newModel, addTablet, copyTablet, localEdit, localNew, localDelete, adopt, sync, compareTablet, compareDrive, KINDS, pdfName, titleOf, canonHash} from './sync-model.mjs';
@@ -100,7 +100,7 @@ async function newVersionUi(t, id, file){
   await page.click('.modal.nvask [data-ok]');
   await waitToast(page, /^New version in place/);
 }
-async function openSetUi(page, id){ await showAll(page, '#tSets'); if(await page.locator('[data-allsets]').count()) await page.click('[data-allsets]'); await page.click(`#view [data-set="${id}"]`); await page.waitForSelector('#view [data-renset]'); }
+async function openSetUi(page, id){ await showAll(page, '#tSets'); if(await page.locator('[data-allsets]').count()) await page.click('[data-allsets]'); await page.click(`#view [data-set="${id}"]`); await page.waitForSelector('#view [data-setmenu]'); }
 async function moveRowDown(t, setId, row){
   const {page} = t;
   await openSetUi(page, setId); await clearToast(page);
@@ -112,7 +112,7 @@ async function moveRowDown(t, setId, row){
 async function renameSetUi(t, setId, name){
   const {page} = t;
   await openSetUi(page, setId);
-  await page.click('[data-renset]');
+  await openSetMenu(page, 'rename');
   await page.locator('.modal input').fill(name);
   await page.click('.modal [data-ok]'); await noModal(page);
   await page.click('[data-allsets]');

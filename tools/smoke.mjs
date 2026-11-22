@@ -279,8 +279,15 @@ function checkHosts(t){
   assert(!bad.length, 'requests to non-localhost hosts: ' + [...new Set(bad)].slice(0, 5).join(', '));
 }
 
+/* An open setlist's More menu (the Gig date, Download PDF, Share, Duplicate, Rename and Collections items): open it, tap one. */
+async function setMenu(page, item){
+  await page.click('#view [data-setmenu]');
+  const box = page.locator('.modal.menubox'); await box.waitFor();
+  await box.locator(`[data-item="${item}"]`).click();
+}
+
 async function printSet(page, withInk){
-  await page.click('#view [data-print]');
+  await setMenu(page, 'print');
   const m = page.locator('.modal');
   await m.waitFor();
   await m.locator('#pInk').setChecked(withInk);
@@ -316,7 +323,7 @@ async function stepSetlist(t){
   await row.waitFor();
   assert(/2 songs/.test(await row.innerText()), 'setlist row does not say 2 songs');
   await row.click();
-  await page.waitForSelector('#view [data-print]:not([disabled])');
+  await page.waitForSelector('#view [data-play]:not([disabled])');
 
   const out = {};
   for(const withInk of [true, false]){
@@ -865,7 +872,7 @@ async function stepSetItems(t){
 
   /* Duplicate from the setlist screen */
   await openSetNamed(page, 'Show');
-  await page.click('#view [data-dup]');
+  await setMenu(page, 'dup');
   await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Show copy', null, {timeout: 5000})
     .catch(async () => { throw new Error('Duplicate did not open "Show copy"; heading: ' + await page.locator('#view h2').textContent()); });
   const cp = await setByName(page, 'Show copy');
@@ -1640,7 +1647,7 @@ async function stepShare(t){
   await tick('Three-page', 'Two-page');
   await page.click('.modal [data-ok]');
   await page.waitForFunction(() => document.querySelectorAll('#view [data-playat]').length === 2);
-  const b = await download(page, () => page.click('#view [data-shareset]'));
+  const b = await download(page, () => setMenu(page, 'share'));
   const pb = await read(b);
   assert(pb.names.join() === 'files/s1.pdf,files/s2.pdf,share.json', 'setlist package entries: ' + pb.names);
   assert(pb.share.setlist && pb.share.setlist.name === 'Share check' && pb.share.setlist.items.length === 2, 'setlist package: ' + JSON.stringify(pb.share.setlist));
@@ -1833,8 +1840,8 @@ async function stepBackupReminder(t){
   /* renaming a setlist brings it back */
   await page.click('#tSets');
   await page.locator('#view [data-set]', {hasText: 'Order Test'}).first().click();
-  await page.waitForSelector('#view [data-renset]');
-  await page.click('#view [data-renset]');
+  await page.waitForSelector('#view [data-setmenu]');
+  await setMenu(page, 'rename');
   await page.locator('.modal input[type=text]').fill('Order Test Renamed');
   await page.click('.modal [data-ok]');
   await wantNudge('open setlist after a rename');
@@ -1896,10 +1903,10 @@ async function stepGigDates(t){
 
   /* set, change, Cancel and clear on an open setlist; the date in words shows in .gigline */
   await page.locator('#view [data-set]').filter({has: page.locator('.t', {hasText: exactText('Gd None')})}).click();
-  await page.waitForSelector('#view [data-gig]');
+  await page.waitForSelector('#view [data-setmenu]');
   assert(!(await page.locator('#view .gigline').count()), 'a setlist with no date shows a gig line');
   const long = g => page.evaluate(g => { const [a, b, c] = g.split('-').map(Number); return new Intl.DateTimeFormat(undefined, {weekday:'long', year:'numeric', month:'long', day:'numeric'}).format(new Date(a, b - 1, c)); }, g);
-  const gigBox = async (fn) => { await page.click('#view [data-gig]'); await page.locator('.modal input[type=date]').waitFor(); await fn(); await page.waitForFunction(() => !document.querySelector('.modal')); };
+  const gigBox = async (fn) => { await setMenu(page, 'gig'); await page.locator('.modal input[type=date]').waitFor(); await fn(); await page.waitForFunction(() => !document.querySelector('.modal')); };
   const line = async (g, what) => {
     const w = await long(g);
     await waitFor(async () => (await page.locator('#view .gigline').count()) && (await page.locator('#view .gigline').textContent()) === w, `${what}: .gigline is not "${w}"`);
@@ -1998,8 +2005,10 @@ async function stepDownloads(t){
   /* one setlist: the button reads Download PDF, the dialog "Download <name>", the file "<gig> <name>.pdf" */
   await make('Dl Pair', gig, true, true);
   let before = await snap();
-  assert((await page.locator('#view [data-print]').textContent()) === 'Download PDF', 'the button reads ' + await page.locator('#view [data-print]').textContent());
-  await page.click('#view [data-print]');
+  await page.click('#view [data-setmenu]');
+  const dlItem = page.locator('.modal.menubox [data-item="print"]'); await dlItem.waitFor();
+  assert((await dlItem.locator('b').textContent()) === 'Download PDF', 'the item reads ' + await dlItem.locator('b').textContent());
+  await dlItem.click();
   const h = await page.locator('.modal h2').textContent();
   assert(h === 'Download Dl Pair', 'single download dialog title: ' + h);
   await page.keyboard.press('Escape');
