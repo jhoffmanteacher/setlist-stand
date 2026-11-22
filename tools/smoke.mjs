@@ -1746,6 +1746,62 @@ async function stepCollections(t){
   await page.evaluate(() => localStorage.removeItem('ss-default-coll'));
 }
 
+async function stepPickOrder(t){
+  const {page} = t;
+  await toLibrary(page);
+  const n0 = await songCount(page);
+  const files = ['Pick C', 'Pick A', 'Pick B'].map(n => { const f = path.join(TMP, n + '.pdf'); fs.copyFileSync(path.join(FIX, 'one-page.pdf'), f); return f; });
+  await page.setInputFiles('#file', files);
+  if(await page.locator('.dupask [data-dupadd]').waitFor({timeout: 4000}).then(() => true, () => false)) await page.click('.dupask [data-dupadd]');
+  await page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, n0 + 3, {timeout: 15000});
+  await page.click('#tSets');
+  if(await page.locator('#view [data-allsets]').count()) await page.click('#view [data-allsets]');
+  await page.click('#view [data-newset]');
+  await page.locator('.modal input[type=text]').fill('Order Test');
+  await page.click('.modal [data-ok]');
+  await page.waitForSelector('#view [data-addto]');
+  const row = n => page.locator('.modal .pick label', {hasText: new RegExp('^\\d*' + n + '(, \\d+)?$')});
+  const badges = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.modal .pick label')].map(l => [l.querySelector('.pt').textContent, l.querySelector('.badge').textContent])));
+  const setTitles = async () => { const st = await setByName(page, 'Order Test'), all = await idbAll(page, 'songs'); return songIds(st).map(id => all[id].title); };
+
+  /* tap C, A, B; untap A (B moves up); tap A again: C1 B2 A3, "Add 3", added in that order */
+  await page.click('#view [data-addto]');
+  await page.locator('.modal .pick').waitFor();
+  assert(await page.evaluate(() => !document.activeElement.matches('input')), 'the search box took focus when the dialog opened (the tablet keyboard would pop up)');
+  assert(await page.locator('.modal [data-ok]').isDisabled() && await page.locator('.modal [data-ok]').textContent() === 'Add 0', 'the button before any tap: ' + await page.locator('.modal [data-ok]').textContent());
+  for(const n of ['Pick C', 'Pick A', 'Pick B']) await row(n).locator('input').check();
+  assert(JSON.stringify([(await badges())['Pick C'], (await badges())['Pick A'], (await badges())['Pick B']]) === '["1","2","3"]', 'numbers after C, A, B: ' + JSON.stringify(await badges()));
+  await row('Pick A').locator('input').uncheck();
+  let b = await badges();
+  assert(b['Pick C'] === '1' && b['Pick A'] === '' && b['Pick B'] === '2', 'after untapping A: ' + JSON.stringify(b));
+  await row('Pick A').locator('input').check();
+  b = await badges();
+  assert(b['Pick C'] === '1' && b['Pick B'] === '2' && b['Pick A'] === '3', 'after tapping A again: ' + JSON.stringify(b));
+  assert(await row('Pick C').locator('.vh').textContent() === ', 1', 'the row has no number in its label for a screen reader');
+  assert(await page.locator('.modal [data-ok]').textContent() === 'Add 3', 'the button says "' + await page.locator('.modal [data-ok]').textContent() + '"');
+  await page.click('.modal [data-ok]');
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  await waitFor(async () => (await setTitles()).length === 3, 'the three songs were not added');
+  assert(JSON.stringify(await setTitles()) === '["Pick C","Pick B","Pick A"]', 'the setlist order after the pick: ' + JSON.stringify(await setTitles()));
+
+  /* search: a number stays while the search hides its song, and the count still counts it; Cancel adds nothing */
+  await page.click('#view [data-addto]');
+  await page.locator('.modal .pick').waitFor();
+  await row('Pick A').locator('input').check();
+  await page.fill('.modal .pickq', 'Pick C');
+  assert(await page.locator('.modal .pick label').count() === 1, 'the search shows ' + await page.locator('.modal .pick label').count() + ' songs for "Pick C"');
+  await row('Pick C').locator('input').check();
+  await page.fill('.modal .pickq', '');
+  b = await badges();
+  assert(b['Pick A'] === '1' && b['Pick C'] === '2', 'numbers after the search was cleared: ' + JSON.stringify(b));
+  assert(await page.locator('.modal [data-ok]').textContent() === 'Add 2', 'the count after a search: ' + await page.locator('.modal [data-ok]').textContent());
+  await page.fill('.modal .pickq', 'zzqx-no-song');
+  assert(/No songs match/.test(await page.locator('.modal .pick').innerText()), 'a search with no match says nothing');
+  await page.click('.modal [data-x]');
+  await page.waitForFunction(() => !document.querySelector('.modal'));
+  assert((await setTitles()).length === 3, 'Cancel added songs');
+}
+
 async function stepNoExternal(t){ checkHosts(t); }
 
 const STEPS = [
@@ -1781,6 +1837,7 @@ const STEPS = [
   ['29 share: songs from the Library and a setlist each download as a package with the PDFs, no annotations', stepShare],
   ['30 import a share package: the setlist comes back under a new name, songs already here are not added again', stepShareImport],
   ['30b Collections: Band A and Band B, default opens on Band A, a new PDF joins it, a song in both, delete one keeps the song', stepCollections],
+  ['30c Add songs in tap order: numbers, untap renumbers, Add N, setlist ends in that order; search keeps numbers', stepPickOrder],
   ['31 no request left localhost during the run', stepNoExternal],
 ];
 

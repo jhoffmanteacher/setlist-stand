@@ -1,5 +1,5 @@
 /* Small helpers shared by every module. */
-import {compareSongs} from './names.js';
+import {compareSongs, songMatches} from './names.js';
 
 /* The Content-Security-Policy in index.html forbids eval. pdf.js would otherwise probe it with new Function(""), which
    the browser reports as a policy violation; isEvalSupported:false makes it draw glyphs without compiled code.
@@ -139,26 +139,56 @@ export function form(title, fields, checks){
     m.onkeydown = e => { if(e.key === 'Enter' && e.target.matches('input[type=text]')){ e.preventDefault(); done(true); } if(e.key === 'Escape') done(false); };
   });
 }
-/* A checklist of songs: resolves to the ticked ids (in the list's A to Z order). The title and the button can be changed
-   ({title, button}); the defaults are the setlist's "Add songs". `all` (optional): a longer list of songs; a "Show all songs"
-   switch then swaps the short list (`songs`) for it, and a song ticked in one stays ticked in the other. */
-export function pick(songs, {title = 'Add songs', button = 'Add', needOne = false, all = null} = {}){
+/* A checklist of songs with a search box: resolves to the ticked ids. The title and the button can be changed ({title, button});
+   the defaults are the setlist's "Add songs". The list is A to Z (compareSongs).
+   - ordered: true (only "Add songs" on a setlist): each song tapped gets the next number (1, 2, 3...), shown where the tick box is;
+     tapping a numbered song takes its number away and the songs after it move up one; the button reads "Add N" and waits for a
+     song; the ids come back in number order. A song can be picked once per dialog. Without it the ids come back in list order.
+   - all: a longer list of songs; a "Show all songs" switch then swaps the short list (`songs`) for it. A song ticked in one stays
+     ticked in the other.
+   - the search box narrows the list (songMatches in js/names.js, the Library's own match); songs ticked or numbered keep their tick
+     or number while a search hides them, and the button still counts them. It does not take focus when the dialog opens (the
+     on-screen keyboard of a tablet would cover the list): focus starts on the dialog itself.
+   Every row is a real checkbox; with numbers its label ends ", N" for a screen reader. Nothing is returned until the button. */
+export function pick(songs, {title = 'Add songs', button = 'Add', needOne = false, all = null, ordered = false} = {}){
   const sorted = list => [...list].sort(compareSongs);          // A to Z by song name, like the library (items carry song, artist, version, or just a title)
-  const short = sorted(songs), long = all ? sorted(all) : short, ticked = new Set();
+  const short = sorted(songs), long = all ? sorted(all) : short, order = [];       // order: the ids picked, in the order they were tapped
+  let showAll = false, q = '';
   return new Promise(res => {
-    const rows = list => list.map(s => `<label><input type="checkbox" value="${esc(s.id)}" ${ticked.has(s.id) ? 'checked' : ''}>${esc(s.title)}</label>`).join('') || '<p>Your library is empty. Add PDFs first.</p>';
-    const m = modal(`<h2>${esc(title)}</h2>${all ? '<label class="sw-row"><input type="checkbox" data-showall>Show all songs</label>' : ''}<div class="pick">${rows(short)}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>${esc(button)}</button></div>`);
+    const rows = () => {
+      const list = (showAll ? long : short).filter(s => songMatches(s, q));
+      if(!list.length) return `<p>${(showAll ? long : short).length ? 'No songs match.' : 'Your library is empty. Add PDFs first.'}</p>`;
+      return list.map(s => { const n = order.indexOf(s.id) + 1;
+        return `<label${ordered ? ' class="po"' : ''}><input type="checkbox" value="${esc(s.id)}" ${n ? 'checked' : ''}>${ordered ? `<span class="badge" aria-hidden="true">${n || ''}</span>` : ''}<span class="pt">${esc(s.title)}</span>${ordered && n ? `<span class="vh">, ${n}</span>` : ''}</label>`; }).join('');
+    };
+    const m = modal(`<h2>${esc(title)}</h2><input type="search" class="pickq" aria-label="Search songs" placeholder="Search songs" autocomplete="off" autocapitalize="off" spellcheck="false">${all ? '<label class="sw-row"><input type="checkbox" data-showall>Show all songs</label>' : ''}<div class="pick">${rows()}</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>${esc(button)}</button></div>`);
     const ok = m.querySelector('[data-ok]'), box = m.querySelector('.pick');
-    const sync = () => { if(needOne) ok.disabled = !ticked.size; };
-    sync();                                                                           // the button waits for a tick
+    m.firstElementChild.focus();                       // modal() puts focus in the first field, which is the search box: the tablet keyboard must not pop up by itself
+    const sync = () => {
+      ok.textContent = ordered ? `${button} ${order.length}` : button;
+      if(needOne || ordered) ok.disabled = !order.length;                              // the button waits for a pick
+    };
+    sync();
+    /* numbers are rewritten in place (no redraw, so the list keeps its scroll position and the focus stays on the row) */
+    const renumber = () => {
+      if(!ordered) return;
+      for(const l of box.querySelectorAll('label.po')){
+        const n = order.indexOf(l.querySelector('input').value) + 1;
+        l.querySelector('.badge').textContent = n || '';
+        let v = l.querySelector('.vh');
+        if(n){ if(!v){ v = document.createElement('span'); v.className = 'vh'; l.append(v); } v.textContent = ', ' + n; } else if(v) v.remove();
+      }
+    };
+    m.addEventListener('input', e => { if(e.target.matches('.pickq')){ q = e.target.value; box.innerHTML = rows(); } });
     m.addEventListener('change', e => {
-      if(e.target.matches('[data-showall]')){ box.innerHTML = rows(e.target.checked ? long : short); return; }
+      if(e.target.matches('[data-showall]')){ showAll = e.target.checked; box.innerHTML = rows(); return; }
       if(!e.target.matches('.pick input')) return;
-      if(e.target.checked) ticked.add(e.target.value); else ticked.delete(e.target.value);
-      sync();
+      const id = e.target.value, i = order.indexOf(id);
+      if(e.target.checked && i < 0) order.push(id); else if(!e.target.checked && i >= 0) order.splice(i, 1);
+      renumber(); sync();
     });
     m.querySelector('[data-x]').onclick = () => { m.remove(); res([]); };
-    m.querySelector('[data-ok]').onclick = () => { const ids = long.filter(s => ticked.has(s.id)).map(s => s.id); m.remove(); res(ids); };
+    ok.onclick = () => { const ids = ordered ? [...order] : long.filter(s => order.includes(s.id)).map(s => s.id); m.remove(); res(ids); };
   });
 }
 /* two-tap confirm instead of confirm() */

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-21: Add songs to a setlist in the order you tap them
+- **Add songs in order:** in a setlist, tap songs in the order you want them. Each one gets a number, and they are added to the setlist in that order. Tap a numbered song again to take it off; the ones after it move up. The button says how many ("Add 3").
+- **Search box:** every song list (Add songs, Share songs, Add songs to a collection) has a search box at the top. Songs you have already picked keep their number while the search hides them. The on-screen keyboard does not pop up until you tap the search box.
+
 ## 2026-11-21: Collections: one for each band
 - **Collections:** the Library and Setlists now have a row of buttons under the tabs: **All**, one button for each collection, and **Collections**. A collection is a group you name yourself, like "Friday Band" or "Jazz Trio". Tap one and both tabs show only that band's songs and setlists. Your choice stays when you switch between Library and Setlists.
 - **Make and manage them:** tap **Collections** to make a new one, rename it, add songs to it, or delete it. Deleting a collection (two taps) never deletes a song, a PDF, your marks or a setlist: they just leave that collection.

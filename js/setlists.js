@@ -67,7 +67,7 @@ export async function onClick(b, d){
   if('addto' in d){
     /* With a collection shown the list holds its songs, and "Show all songs" reaches the rest. */
     const open = songs.filter(s => !s.archived), c = shownColl();
-    const add = await pick(c ? open.filter(inShown) : open, c ? {all:open} : {});
+    const add = await pick(c ? open.filter(inShown) : open, c ? {all:open, ordered:true} : {ordered:true});
     if(add.length){ items.push(...add.map(id => ({type:'song', id}))); await save(); }
     return true;
   }

@@ -236,6 +236,31 @@ async function dialogLoop(ctx){
     await checkDialog(page, 'Edit dialog with Collections tick boxes');
     await escapeBack(page, ed, 'Edit dialog with Collections tick boxes');
 
+    /* a setlist's Add songs (numbers, a search box): focus starts on the dialog, not the search box; Escape adds nothing */
+    await page.click('#tSets');
+    await page.click('#view [data-newset]');
+    await page.locator('.modal input[type=text]').fill('Pick Dialog');
+    await page.click('.modal [data-ok]');
+    await page.waitForSelector('#view [data-addto]');
+    const at = '#view [data-addto]';
+    await page.focus(at); await page.keyboard.press('Enter');
+    await page.locator('.modal .pick').waitFor();
+    assert(await page.evaluate(() => !document.activeElement.matches('input')), 'Add songs: the search box took focus when the dialog opened');
+    await checkDialog(page, 'Add songs dialog (numbered, with a search box)');
+    const labels = page.locator('.modal .pick label input');
+    await labels.nth(1).check(); await labels.nth(0).check();
+    assert(await page.locator('.modal [data-ok]').textContent() === 'Add 2', 'Add songs: the button count after two taps: ' + await page.locator('.modal [data-ok]').textContent());
+    await page.fill('.modal .pickq', 'zzqx-nothing');
+    assert(await page.locator('.modal [data-ok]').textContent() === 'Add 2', 'Add songs: the count changed while a search hid the numbered songs');
+    await page.keyboard.press('Escape');                                    // Escape in the search box cancels the whole dialog
+    await noModal(page).catch(() => { throw new Error('Add songs: Escape did not close the dialog'); });
+    assert(await page.locator('#items > li.row').count() === 0, 'Add songs: Escape added songs');
+    assert(await page.evaluate(sel => document.activeElement === document.querySelector(sel), at), 'Add songs: focus did not return to the Add songs button');
+    await page.click('#view [data-allsets]');
+    await page.click('#view [data-delset]'); await page.click('#view [data-delset]');           // the setlist was only for this check
+    await page.waitForFunction(() => !document.querySelector('#view [data-set]'), null, {timeout: 5000});
+    await page.click('#tLib');
+
     /* library Share songs (checklist), then the package-saved dialog */
     const sh = '#view [data-sharesongs]';
     await page.focus(sh); await page.keyboard.press('Enter');

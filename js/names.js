@@ -93,3 +93,12 @@ export function compareSongs(a, b) {
     || COLLATOR.compare(text(a.version), text(b.version))
     || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
+
+/* The search match used by the Library's search box and by the song pickers ("Add songs", "Share songs", "Add songs to a collection"):
+   a song (or a picker item) matches when the text typed is somewhere in its title, song, artist or version, case ignored. An empty
+   search matches everything. */
+export function songMatches(s, q) {
+  const needle = String(q ?? '').trim().toLowerCase();
+  if (!needle) return true;
+  return [s.title, s.song, s.artist, s.version].map(text).join(' ').toLowerCase().includes(needle);
+}

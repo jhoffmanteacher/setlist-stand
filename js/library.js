@@ -1,7 +1,7 @@
 import {$, esc, toast, form, armed, hooks, modal, busy, pdfPageCount} from './util.js';
 import {putAll, get, load, state, songById, saveSong, newSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
-import {displayName, compareSongs} from './names.js';
+import {displayName, compareSongs, songMatches} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
@@ -25,7 +25,7 @@ export function renderLibrary(v){
   renderSafety();
   renderDrive();
 }
-const matches = s => (s.title + ' ' + s.song + ' ' + s.artist + ' ' + s.version).toLowerCase().includes(q.trim().toLowerCase());
+const matches = s => songMatches(s, q);
 const pages = s => `${esc(s.pages)} page${s.pages == 1 ? '' : 's'}`;
 function renderLib(){
   const sorted = state.songs.filter(inShown).sort(compareSongs);      // A to Z by song name, when the list is drawn (the same for Archived and search); only the collection being shown

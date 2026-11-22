@@ -616,9 +616,12 @@ A.addSongs = {w: 4, plan: (M, r) => {
       if(!c.length) break;
       chosen.push(r.pick(c));
     }
-    return {set: st.label, songs: chosen.map(x => x.label), cl, showAll};
+    /* the order the songs are tapped in: a shuffle of the chosen ones (the setlist gets them in THAT order); a search typed after the taps, which hides some
+       rows but must not lose a number or the count */
+    const tap = chosen.map(x => x.label).sort(() => r() - .5);
+    return {set: st.label, songs: tap, cl, showAll, search: r.chance(.4) ? r.pick(['a', 'e', 'o', 'the', 'bar', 'z', '2']) : null};
   },
-  desc: a => `add ${a.songs.join(', ')} to ${a.set} (picker${a.cl ? `, ${a.cl} shown${a.showAll ? ', Show all songs' : ''}` : ''})`,
+  desc: a => `add ${a.songs.join(', ')} to ${a.set} (tapped in that order${a.search ? `, search "${a.search}"` : ''}${a.cl ? `, ${a.cl} shown${a.showAll ? ', Show all songs' : ''}` : ''})`,
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set), page = s.page;
     if(a.cl){                                   // pick the collection under the tabs, then open the setlist from that list
@@ -635,12 +638,31 @@ A.addSongs = {w: 4, plan: (M, r) => {
     const listed = await page.locator('.modal .pick input').evaluateAll(els => els.map(e => e.value));
     const want = libSongs(M).filter(x => needAll || inShownM(M, x)).sort(byName).map(x => x.id);
     if(JSON.stringify(listed) !== JSON.stringify(want)) throw new Error(`picker lists ${listed.map(id => M.songs.find(x => x.id === id)?.label)}, expected ${want.map(id => M.songs.find(x => x.id === id)?.label)} (non-archived, library order${M.shown ? (needAll ? ', all songs' : ', the shown collection') : ''})`);
-    for(const l of a.songs) await page.check(`.modal .pick input[value="${songOf(M, l).id}"]`);
+    const readBadges = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.modal .pick label')].map(l => [l.querySelector('input').value, l.querySelector('.badge').textContent])));
+    for(const [i, l] of a.songs.entries()){
+      await page.check(`.modal .pick input[value="${songOf(M, l).id}"]`);
+      const got = await readBadges();
+      if(got[songOf(M, l).id] !== String(i + 1)) throw new Error(`after tapping ${l} (the ${i + 1}th) its number is "${got[songOf(M, l).id]}"`);
+      if(await page.locator('.modal [data-ok]').textContent() !== `Add ${i + 1}`) throw new Error(`the button says "${await page.locator('.modal [data-ok]').textContent()}" after ${i + 1} taps`);
+    }
+    if(a.search){
+      /* the rows the search keeps are the ones whose title, song, artist or version holds it; their numbers stay; the button still counts the hidden ones */
+      await page.fill('.modal .pickq', a.search);
+      const q = a.search.toLowerCase(), pool = libSongs(M).filter(x => a.showAll || inShownM(M, x));
+      const want = pool.filter(x => [titleOf(x), x.song, x.artist, x.version].join(' ').toLowerCase().includes(q)).sort(byName).map(x => x.id);
+      const shownNow = await page.locator('.modal .pick input').evaluateAll(els => els.map(e => e.value));
+      if(JSON.stringify(shownNow) !== JSON.stringify(want)) throw new Error(`the search "${a.search}" lists ${shownNow.map(id => M.songs.find(x => x.id === id)?.label)}, expected ${want.map(id => M.songs.find(x => x.id === id)?.label)}`);
+      const got = await readBadges();
+      for(const id of shownNow){ const k = a.songs.findIndex(l => songOf(M, l).id === id); if(got[id] !== (k < 0 ? '' : String(k + 1))) throw new Error(`during the search, ${M.songs.find(x => x.id === id)?.label} shows number "${got[id]}"`); }
+      if(await page.locator('.modal [data-ok]').textContent() !== `Add ${a.songs.length}`) throw new Error('the button count changed while a search hid some numbered songs');
+      await page.fill('.modal .pickq', '');
+      const all = await readBadges();
+      a.songs.forEach((l, i) => { if(all[songOf(M, l).id] !== String(i + 1)) throw new Error(`after clearing the search ${l} shows "${all[songOf(M, l).id]}", expected ${i + 1}`); });
+    }
     await page.click('.modal [data-ok]');
     await noModal(page);
-    /* added in the picker's (library) order, not in the order ticked */
-    const add = a.songs.map(l => songOf(M, l)).sort(byName);
-    st.items.push(...add.map(x => ({type: 'song', label: x.label})));
+    /* added at the end in the order they were tapped (number order), not in list order */
+    st.items.push(...a.songs.map(l => ({type: 'song', label: songOf(M, l).label})));
   }};
 A.addBreak = {w: 2.5, plan: (M, r) => { const st = setPick(M, r, x => x.items.length <= 6); return st ? {set: st.label} : null; },
   desc: a => `add a break to ${a.set}`,

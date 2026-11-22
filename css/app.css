@@ -107,6 +107,13 @@ fieldset.checks legend{padding:0;margin-bottom:4px}
 .pick{overflow:auto;border-top:1px solid var(--line)}
 .pick label{display:flex;gap:12px;align-items:center;min-height:50px;border-bottom:1px solid var(--line);cursor:pointer}
 .pick input{width:22px;height:22px;flex:none}
+.pickq{min-height:48px;border-radius:10px;border:1px solid var(--line);background:var(--bg);padding:0 12px;font-size:16px;color:var(--ink)}
+.pick label.po{position:relative}
+.pick label.po input{position:absolute;left:0;top:50%;width:34px;height:34px;margin:-17px 0 0;opacity:0;cursor:pointer}
+.pick .badge{flex:none;width:34px;height:34px;border-radius:50%;border:2px solid var(--mute);display:grid;place-items:center;font-weight:700;font-size:16px;pointer-events:none;color:#fff}
+.pick label.po input:checked + .badge{background:var(--acc);border-color:var(--acc)}
+.pick label.po input:focus-visible + .badge{outline:3px solid var(--ink);outline-offset:2px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .box input[type=text]{min-height:48px;border-radius:10px;border:1px solid var(--line);background:var(--bg);padding:0 12px;font-size:16px}
 .btns{display:flex;justify-content:flex-end;gap:8px}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#eeeae2;color:#17181c;padding:10px 16px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;font-weight:600}
