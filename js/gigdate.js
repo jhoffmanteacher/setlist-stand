@@ -79,7 +79,7 @@ export const fillCandidates = sets => sets.filter(st => !st.deleted && !gigOf(st
    then looks as it always did, without headers. A group with nothing in it is left out. */
 export function groupSets(sets, today = todayStr()){
   if(!sets.some(gigOf)) return null;
-  const year = +today.slice(0, 4), by = (a, b) => b.created - a.created || (a.id < b.id ? -1 : 1);
+  const year = +today.slice(0, 4), by = (a, b) => (Number(b.created) || 0) - (Number(a.created) || 0) || (a.id < b.id ? -1 : 1);
   const upcoming = [], thisYear = [], none = [], earlier = new Map();
   for(const st of sets){
     const g = gigOf(st);

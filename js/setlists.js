@@ -101,7 +101,7 @@ export async function onClick(b, d){
   if(d.renbreak){ const it = items[+d.renbreak]; const n = await ask('Rename break', it.name); if(n){ it.name = n; await save(); } return true; }
   if('gig' in d){
     const r = await gigDialog('Gig date of ' + st.name, st.gig);
-    if(r){ if(r.gig) st.gig = r.gig; else delete st.gig; await saveSet(st); await load(); hooks.render(); }
+    if(r && (r.gig || undefined) !== st.gig){ if(r.gig) st.gig = r.gig; else delete st.gig; await saveSet(st); await load(); hooks.render(); }
     return true;
   }
   if('renset' in d){ const n = await ask('Rename setlist', st.name); if(n){ st.name = n; await save(); } return true; }

@@ -24,10 +24,14 @@ export function gigDialog(title, current){
 /* New setlist: a name (required) and an optional gig date. Resolves to {name, gig|null} or null. */
 export function newSetDialog(){
   return new Promise(res => {
-    const m = modal(`<h2>New setlist</h2><label class="fld"><span>Name</span><input type="text" maxlength="200" data-name></label><label class="fld"><span>Gig date (optional)</span><input type="date" data-gig min="${YEAR_MIN}-01-01" max="${YEAR_MAX}-12-31"></label><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
+    const m = modal(`<h2>New setlist</h2><label class="fld"><span>Name</span><input type="text" maxlength="200" data-name></label><label class="fld"><span>Gig date (optional)</span><input type="date" data-gig min="${YEAR_MIN}-01-01" max="${YEAR_MAX}-12-31"></label><p class="warn" role="alert" data-err hidden>That is not a date this app can keep. Pick a day from 1900 to 2999, or leave the date empty.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
     const name = m.querySelector('[data-name]'), date = m.querySelector('[data-gig]');
     const done = v => { m.remove(); res(v); };
-    const save = () => { const n = name.value.trim(); if(n) done({name:n, gig:date.value ? validGig(date.value) : null}); else name.focus(); };
+    const save = () => {
+      const n = name.value.trim(), g = date.value ? validGig(date.value) : null;
+      if(date.value && !g){ m.querySelector('[data-err]').hidden = false; date.focus(); return; }     // a typed year the box lets through but that is not a real date
+      if(n) done({name:n, gig:g}); else name.focus();
+    };
     m.querySelector('[data-x]').onclick = () => done(null);
     m.querySelector('[data-ok]').onclick = save;
     m.onkeydown = e => { if(e.key === 'Enter' && e.target.matches('input')){ e.preventDefault(); save(); } if(e.key === 'Escape') done(null); };
@@ -53,6 +57,7 @@ export function fillDialog(cands){
 const FILL_KEY = 'ss-gig-fill';
 let asking = false, answered = false;           // `answered` also holds when the browser will not keep the key
 export async function offerFill(){
+  await new Promise(r => setTimeout(r, 60));           // a screen that draws and then opens its own dialog (the sync report) gets there first
   let done = answered;
   try{ done = done || !!localStorage.getItem(FILL_KEY); }catch(e){}
   if(done || asking || document.querySelector('.modal')) return;
@@ -69,13 +74,13 @@ export async function offerFill(){
     for(const {set, gig} of picked){
       const now = await get('sets', set.id);
       if(!now || now.deleted || now.updated !== set.updated || gigOf(now)) continue;
-      ops.push({store:'sets', key:now.id, value:{...now, gig, updated:stamp(now)}});   // stamp(): an edit to an existing record never goes backwards (js/store.js)
+      ops.push({store:'sets', key:now.id, value:{...now, gig, updated:stamp(now)}, ifUpdated:now.updated});   // stamp(): an edit to an existing record never goes backwards (js/store.js)
     }
     try{
-      if(ops.length) await putAll(ops);
+      if(ops.length) await putAll(ops);                    // ifUpdated: a setlist another tab changed in between makes the whole write refuse
       answer();                                            // only once the write went through: a full tablet is asked again
-      await load(); hooks.render();
-      toast(!ops.length ? 'Nothing needed filling in.' : ops.length == 1 ? 'Gig date filled in.' : `${ops.length} gig dates filled in.`);
-    }catch(err){ toast(explainError(err, 'Could not fill in the gig dates. Nothing was changed.')); }
+    }catch(err){ toast(explainError(err, 'Could not fill in the gig dates. Nothing was changed.')); return; }
+    try{ await load(); hooks.render(); }catch(err){}       // written by now: a problem drawing must not say "Nothing was changed"
+    toast(!ops.length ? 'Nothing needed filling in.' : ops.length == 1 ? 'Gig date filled in.' : `${ops.length} gig dates filled in.`);
   } finally { asking = false; }
 }

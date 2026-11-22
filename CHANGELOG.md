@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-22: Gig dates on setlists
+- **Gig dates:** each setlist can have a gig date. Set it when you make the setlist, or with the new **Gig date** button on an open setlist (you can change or clear it there). The date shows under the setlist's name, and in the list before the song count. The Setlists list now shows upcoming gigs first, then this year's past gigs, then setlists with no date; earlier years are folded away until you tap their year. With no dated setlists the list looks as it always did.
+- **Names that already hold a date:** the first time you open Setlists after this update, setlists whose name clearly holds a full date (like "Sf October 18 2026") are offered as gig dates, each with a tick box. Nothing is filled in unless you tap **Fill in**, and names never change. Names with no year, no day, or a day that does not exist ("February 31") are left alone.
+- **Backups and sharing:** a backup carries the dates. A share package does not (a setlist you import has no date). Duplicate does not copy the date either.
+
 ## 2026-11-22: Sync your songs and setlists between your tablets
 - **Sync button.** In the Library, tap **Sync**. It sends what you changed on this tablet to your own Google Drive and brings down what you changed on your other tablet: songs (details, crop, archive, and the PDF itself), setlists and collections. Pen marks and text notes do not sync yet; they are the next step.
 - **Only when you tap.** Nothing syncs by itself. After you close or reload the app you sign in to Google again when you tap Sync (the sign-in is not kept on the tablet).
