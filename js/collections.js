@@ -1,5 +1,6 @@
+import {deleteOps} from './deleteops.js';
 import {esc, uid, modal, armed, toast, hooks, pick} from './util.js';
-import {state, putAll, load} from './store.js';
+import {state, putAll, load, stamp} from './store.js';
 import {explainError} from './errors.js';
 
 /* Collections: the band (or group) a song or setlist is played with. Jonathan names each one and can rename it; one song or
@@ -101,14 +102,13 @@ async function renameColl(id){
   const c = state.colls.find(x => x.id === id); if(!c) return;
   const name = await askName('Rename collection', c.name, id);
   if(!name || name === c.name) return;
-  await write([{store:'colls', key:id, value:{...c, name, updated:Date.now()}}], 'Could not save the new name. Nothing was changed.');
+  await write([{store:'colls', key:id, value:{...c, name, updated:stamp(c)}}], 'Could not save the new name. Nothing was changed.');
 }
 /* Deleting a collection removes its id from every song and setlist that holds it (each gets a new `updated`) in the same
-   write as the collection's own deletion marker. Nothing else is touched. */
+   write as the collection's own deletion marker. Nothing else is touched. Every record is stamped over its own last `updated`
+   (stamp in js/store.js). */
 async function deleteColl(id){
-  const t = Date.now(), ops = [{store:'colls', key:id, value:{id, deleted:true, updated:t}}];
-  for(const s of state.songs) if((s.colls || []).includes(id)) ops.push({store:'songs', key:s.id, value:{...s, colls:s.colls.filter(x => x !== id), updated:t}});
-  for(const st of state.sets) if((st.colls || []).includes(id)) ops.push({store:'sets', key:st.id, value:{...st, colls:st.colls.filter(x => x !== id), updated:t}});
+  const ops = await deleteOps('coll', id);       // the marker, and the collection id taken off every song and setlist that had it (js/deleteops.js, shared with sync)
   try{ await putAll(ops); }
   catch(err){ toast(explainError(err, 'Could not delete the collection. Nothing was changed.')); return false; }
   if(getDefault() === id) setDefault(null);
@@ -123,8 +123,7 @@ export async function addSongsTo(id){
   if(!rest.length){ toast(state.songs.length ? `Every song is already in ${c.name}.` : 'Your library is empty. Add PDFs first.'); return; }
   const ids = new Set(await pick(rest, {title:'Add songs to ' + c.name, button:'Add', needOne:true}));
   if(!ids.size) return;
-  const t = Date.now();
-  await write(state.songs.filter(s => ids.has(s.id)).map(s => ({store:'songs', key:s.id, value:{...s, colls:[...(s.colls || []), id], updated:t}})), 'Could not add the songs. Nothing was changed.');
+  await write(state.songs.filter(s => ids.has(s.id)).map(s => ({store:'songs', key:s.id, value:{...s, colls:[...(s.colls || []), id], updated:stamp(s)}})), 'Could not add the songs. Nothing was changed.');
 }
 
 /* ---------- the manager dialog ---------- */

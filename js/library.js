@@ -1,11 +1,12 @@
 import {$, esc, toast, form, armed, hooks, modal, busy, pdfPageCount} from './util.js';
-import {putAll, get, load, state, songById, saveSong, newSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes} from './store.js';
+import {putAll, get, load, state, songById, saveSong, newSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes, stamp} from './store.js';
 import {parseFileName} from './importname.js';
 import {displayName, compareSongs, songMatches} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
 import {unique} from './shareimport.js';
+import {deleteOps} from './deleteops.js';
 import {renderDrive} from './syncui.js';
 import {copySong} from './copysong.js';
 import {renderNudge} from './nudge.js';
@@ -169,7 +170,7 @@ async function runNewVersion(file, id, s){
       if(p > n) ops.push({store:'ink', key, delete:true});                                       // that page no longer exists
       else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []))});     // keep deletion markers for the pages that remain
     }
-    ops.push({store:'songs', key:id, value:{...s, pages:n, hash, title:displayName(s), updated:Date.now()}});
+    ops.push({store:'songs', key:id, value:{...s, pages:n, hash, title:displayName(s), updated:stamp(s)}});
     /* load() makes new records: a different one here means the song was edited or deleted while the dialogs were open
        (do not bring it back). Checked last, with no wait between it and putAll, because the reads above take time. */
     const cur = await get('songs', id);          // the stored record too: another tab's edit or delete never reaches this tab's list
@@ -223,10 +224,9 @@ export async function onClick(b, d){
   if(d.del){
     if(!armed(b)) return true;
     const s = songById(d.del); if(!s) return true;
-    /* One transaction: the PDF and ink go, the song becomes a deletion marker and the setlists that had it are updated. */
-    const t = Date.now(), isIt = it => it.type === 'song' && it.id === s.id;
-    const ops = [{store:'files', key:s.id, delete:true}, {deleteInkFor:s.id}, {store:'songs', key:s.id, value:{id:s.id, deleted:true, updated:t}}];
-    for(const st of state.sets) if(st.items.some(isIt)) ops.push({store:'sets', key:st.id, value:{...st, items:st.items.filter(it => !isIt(it)), updated:t}});
+    /* One transaction: the PDF and ink go, the song becomes a deletion marker and the setlists that had it are updated (js/deleteops.js,
+       shared with sync's "Delete here"; each record gets a time later than its own last one, so the deletion beats what it was made from). */
+    const ops = await deleteOps('song', s.id);
     try{ await putAll(ops); }
     catch(err){ toast(explainError(err)); }
     await load(); hooks.render(); return true;

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-22: Sync your songs and setlists between your tablets
+- **Sync button.** In the Library, tap **Sync**. It sends what you changed on this tablet to your own Google Drive and brings down what you changed on your other tablet: songs (details, crop, archive, and the PDF itself), setlists and collections. Pen marks and text notes do not sync yet; they are the next step.
+- **Only when you tap.** Nothing syncs by itself. After you close or reload the app you sign in to Google again when you tap Sync (the sign-in is not kept on the tablet).
+- **If you changed the same thing on both tablets,** the newer change is kept and the report names it ("changed on both tablets"). A chart is never lost: if a sync would replace a chart with a different one, the old chart and its marks are kept in Archived.
+- **Deleted on your other tablet?** The app lists what was deleted there and asks: **Delete here** (two taps) or **Keep**. Nothing is deleted here until you tap, and a missing file in Drive never deletes anything. A kept song goes back to your other tablet, but not back into the setlists it was taken out of.
+- **A report that stays until you tap OK:** what was sent and got, what changed on both tablets, and anything it skipped, by name, with the reason. Stop works at any time; what was done before is kept and nothing is half saved.
+- **The reminder line** now also says "Changes since your last sync" with a Sync button. Sync is not a backup: it never clears the backup reminder, and a mistake syncs to your other tablet too. The first time, a short note says so and says to restore a backup on your second tablet before its first sync, so your songs match instead of doubling.
+- **Drive folder:** renaming the "Setlist Stand" folder in Google Drive is harmless now: the app finds its folder by a private mark, not by its name.
+- **Small fixes:** a damaged crop no longer shows a blank page, and a crop saved on a song that came from a restore no longer stops with an error.
+
 ## 2026-11-21: Faster turns into charts that are big photos
 - **Faster turns into photo charts:** charts that are scanned photos now turn as quickly as the others. The app used to start getting the next song ready only when you reached the last page of a song; a big photo page takes about four times as long to draw as a text page, so turning straight on from the last page waited. It now starts one page earlier. Nothing is stored in a smaller size and the pages are as sharp as before.
 

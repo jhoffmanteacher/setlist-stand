@@ -39,7 +39,9 @@ async function apply(whole){
   if(!st) return;
   const song = V.song, rect = {x:round(st.rect.x), y:round(st.rect.y), w:round(st.rect.w), h:round(st.rect.h)}, pn = st.pn;
   const full = rect.x <= .002 && rect.y <= .002 && rect.w >= .996 && rect.h >= .996;
-  song.crop = song.crop || {all:null, pages:{}};
+  const plain = x => !!x && typeof x === 'object' && !Array.isArray(x);
+  if(!plain(song.crop)) song.crop = {all:null, pages:{}};                                    // a crop that came damaged (a sync, a restore) is replaced by the new one
+  if(!plain(song.crop.pages)) song.crop.pages = {};
   if(whole){ song.crop = {all:full ? null : rect, pages:{}}; }
   else if(full && !song.crop.all) delete song.crop.pages[pn];
   else song.crop.pages[pn] = rect;      // also when "no crop" is wanted on a page of a cropped song: the full rect overrides

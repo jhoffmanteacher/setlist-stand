@@ -183,6 +183,8 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
 .plog{width:100%;min-height:180px;font:13px/1.4 ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);padding:8px;resize:vertical;white-space:pre}
 .box ul.locked{margin:0;padding-left:20px;overflow-wrap:anywhere}
 .duplist{margin:0;padding-left:20px;max-height:40vh;overflow:auto;overflow-wrap:anywhere}
+.syncrep p{margin:0 0 10px}
+.syncdel{list-style:none;margin:0;padding:0;max-height:45vh;overflow:auto;overflow-wrap:anywhere}
 
 /* songbook splitter: the list of songs on the left, the book's pages on the right (stacked in portrait) */
 #splitter{position:fixed;inset:0;z-index:20;background:var(--bg);color:var(--ink);display:flex;flex-direction:column;overscroll-behavior:none}

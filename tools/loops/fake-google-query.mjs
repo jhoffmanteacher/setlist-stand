@@ -229,3 +229,45 @@ export function readPageToken(tok, query){
   }catch(e){}
   throw new DriveError(400, 'invalid', 'Invalid Value', {locationType: 'parameter', location: 'pageToken'});
 }
+
+/* ---------- multipart/related upload bodies (uploadType=multipart) ---------- */
+/* Binary safe: works on a Buffer and never turns the media part into text. Returns [{headers (lower-case names), body: Buffer}].
+   The boundary is the one in the request's Content-Type (quoted or not). A part may say Content-Transfer-Encoding: base64
+   (decoded here); any other encoding but binary/7bit/8bit is not modelled. */
+export function parseMultipart(contentType, buf){
+  const bad = msg => new DriveError(400, 'badRequest', msg);
+  const m = /^\s*multipart\/related\s*;(?:[^;]*;)*?\s*boundary\s*=\s*(?:"([^"]+)"|([^\s;]+))/i.exec(contentType || '');
+  if(!m) throw bad('Invalid multipart request: Content-Type must be multipart/related with a boundary.');
+  const dash = Buffer.from('--' + (m[1] || m[2])), crlfDash = Buffer.concat([Buffer.from('\r\n'), dash]);
+  /* A delimiter line is the boundary followed by CRLF, or by two dashes at the end; anything else is part of the data. */
+  const delimAt = (from, key) => {
+    for(let i = buf.indexOf(key, from); i >= 0; i = buf.indexOf(key, i + 1)){
+      const rest = buf.subarray(i + key.length, i + key.length + 2).toString('latin1');
+      if(rest === '--' || rest === '\r\n' || rest[0] === ' ' || rest[0] === '\t') return i;
+    }
+    return -1;
+  };
+  const parts = [];
+  let at = delimAt(0, dash);
+  if(at < 0) throw bad('Invalid multipart request: the boundary was not found.');
+  for(;;){
+    at += dash.length;
+    if(buf.subarray(at, at + 2).toString('latin1') === '--') return parts;                 // closing delimiter
+    const eol = buf.indexOf('\r\n', at); if(eol < 0) throw bad('Invalid multipart request: unterminated.');
+    const start = eol + 2, end = delimAt(start - 2, crlfDash);                           // the CRLF before a delimiter belongs to the delimiter
+    if(end < 0) throw bad('Invalid multipart request: the closing boundary is missing.');
+    const raw = buf.subarray(start, end);
+    let headers = {}, body = raw;
+    if(raw.subarray(0, 2).toString('latin1') === '\r\n') body = raw.subarray(2);          // no headers at all
+    else{
+      const split = raw.indexOf('\r\n\r\n'); if(split < 0) throw bad('Invalid multipart request: a part has no body.');
+      for(const line of raw.subarray(0, split).toString('latin1').split('\r\n')){ const i = line.indexOf(':'); if(i > 0) headers[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim(); }
+      body = raw.subarray(split + 4);
+    }
+    const enc = (headers['content-transfer-encoding'] || 'binary').toLowerCase();
+    if(enc === 'base64') body = Buffer.from(body.toString('latin1').replace(/\s+/g, ''), 'base64');
+    else if(!['binary', '7bit', '8bit'].includes(enc)) throw new NotModelled(`fake-google: Content-Transfer-Encoding ${enc} in a multipart part is not modelled`);
+    parts.push({headers, body: Buffer.from(body)});
+    at = end + 2;                                                                         // onto the next delimiter's dashes
+  }
+}

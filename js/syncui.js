@@ -1,11 +1,16 @@
-/* The Google Drive control in the Library: Connect, "Connected until ...", Test connection, Disconnect, and what the app
-   says when it comes back from Google. Part 1 only signs in and tests a folder; nothing is copied to Drive yet.
-   Everything here happens only when a button is tapped (or when the page returns from a sign-in the person started). */
-import {$, esc, toast, modal} from './util.js';
+/* The Google Drive control in the Library: Sync, Connect, "Connected until ...", Test connection, Disconnect, "Last synced", and
+   what the app says when it comes back from Google. Everything here happens only when a button is tapped (or when the page
+   returns from a sign-in the person started, to carry on with what they had tapped). Sync itself is js/sync.js; its boxes are
+   js/syncdialogs.js. The sign-in is kept in memory only (js/googleauth.js), so after a reload, an app update or a closed app the
+   person taps Sync (or Connect) and signs in again. */
+import {$, esc, toast, modal, busy, hooks} from './util.js';
 import {explainError, logProblem} from './errors.js';
 import {FOLDER_NAME} from './driveconfig.js';
 import {beginSignIn, cancelSignIn, signInState, getToken, disconnect} from './googleauth.js';
 import {testConnection} from './drive.js';
+import {load} from './store.js';
+import {runSync, Stopped, Failed, lastSync, blankReport} from './sync.js';
+import {introDialog, deletionDialog, reportDialog, failureText} from './syncdialogs.js';
 
 const clock = t => {
   const d = new Date(t), time = d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
@@ -30,12 +35,13 @@ function refocus(){
 
 export function renderDrive(){
   const el = $('#libDrive'); if(!el) return;
-  const s = signInState();
+  const s = signInState(), t = lastSync();
+  const last = t ? `Last synced ${esc(clock(t))}.` : 'Not synced on this tablet yet.';
   const html = s.state === 'connected'
-    ? `<p class="hint" data-drivestatus>Connected to Google Drive until ${esc(clock(s.until))}.</p><div class="bar"><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button></div>`
+    ? `<p class="hint" data-drivestatus>Connected to Google Drive until ${esc(clock(s.until))}. ${last}</p><div class="bar"><button class="pri" data-syncnow>Sync</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button></div>`
     : s.state === 'expired'
-    ? `<p class="hint warnline" data-drivestatus>Your Google sign-in ran out at ${esc(clock(s.until))}. Tap Connect again.</p><div class="bar"><button data-driveconnect>Connect again</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button></div>`
-    : `<div class="bar"><button data-driveconnect>Connect Google Drive</button></div><p class="hint" data-drivestatus>Connect your own Google Drive so your library can follow you between tablets. Nothing is copied yet.</p>`;
+    ? `<p class="hint warnline" data-drivestatus>Your Google sign-in ran out at ${esc(clock(s.until))}. Tap Sync or Connect again. ${last}</p><div class="bar"><button class="pri" data-syncnow>Sync</button><button data-driveconnect>Connect again</button><button data-drivetest>Test connection</button><button data-drivedisconnect>Disconnect</button></div>`
+    : `<div class="bar"><button class="pri" data-syncnow>Sync</button><button data-driveconnect>Connect Google Drive</button></div><p class="hint" data-drivestatus>Sync keeps your songs, setlists and collections the same on your tablets, through your own Google Drive. ${last} Sync is not a backup.</p>`;
   /* only when something changed: a dialog gives focus back to the button that opened it, so that button must still be there */
   if(el.dataset.shown === html) return;
   el.dataset.shown = html; el.innerHTML = html;
@@ -71,7 +77,8 @@ function connectDialog(then = 'connect'){
 
 /* The sign-in ran out (or was taken back): say so, and offer to sign in again for what the person was doing. */
 function signedOutDialog(then){
-  leaveDialog(modal(`<h2>Sign in again</h2><p>Your Google sign-in has run out. Tap Connect again. Nothing was changed.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Connect again</button></div>`), then);
+  const sync = then === 'sync';
+  leaveDialog(modal(`<h2>${sync ? 'Sign in to sync' : 'Sign in again'}</h2><p>${sync ? 'Sync needs you to sign in to Google first. You come back to this app afterwards and the sync starts by itself.' : 'Your Google sign-in has run out. Tap Connect again. Nothing was changed.'}</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>${sync ? 'Continue' : 'Connect again'}</button></div>`), then);
 }
 
 const files = n => `${n} file${n === 1 ? '' : 's'}`;
@@ -97,6 +104,34 @@ async function runTest(){
   }finally{ document.body.classList.remove('busy'); renderDrive(); }
 }
 
+/* ---------- Sync ---------- */
+const INTRO = 'ss-sync-intro';          // localStorage: the first-time note was read (this tablet only)
+const seenIntro = () => { try{ return localStorage.getItem(INTRO) === '1'; }catch(e){ return false; } };
+let syncing = false;                    // one run at a time
+async function syncNow(){
+  if(syncing) return;
+  if(!seenIntro()){ if(!(await introDialog())) return; try{ localStorage.setItem(INTRO, '1'); }catch(e){} }
+  if(!getToken()){ renderDrive(); return signedOutDialog('sync'); }         // sign in first; the sync carries on by itself when the page comes back
+  syncing = true;
+  const job = busy('Syncing', 'Looking at your Google Drive…');
+  const ac = new AbortController(), watch = setInterval(() => { if(job.stopped) ac.abort(); }, 150);
+  let rep = blankReport(), state = 'done', failure = '';
+  try{ rep = await runSync({say:job.say, stopped:() => job.stopped, signal:ac.signal, decide:deletionDialog}); }
+  catch(err){
+    if(err instanceof Stopped){ state = 'stopped'; rep = err.report; }
+    else{
+      state = 'failed'; if(err instanceof Failed) rep = err.report;
+      const cause = err instanceof Failed ? err.cause : err;
+      failure = failureText(cause);
+      if(!(cause && cause.plain)) logProblem('sync', String(cause && cause.message || cause).slice(0, 200), {quiet:true});
+    }
+  }finally{ clearInterval(watch); job.close(); syncing = false; }
+  try{ await load(); }catch(e){}
+  hooks.render(); renderDrive();
+  const m = reportDialog(rep, state, failure), ok = m.querySelector('[data-ok]'), closeIt = ok.onclick;
+  ok.onclick = () => { closeIt(); refocus(); };            // the Sync button that opened it was redrawn meanwhile: focus goes to the Drive line
+}
+
 function disconnectDialog(){
   const m = modal(`<h2>Disconnect Google Drive?</h2><p>This tablet forgets the sign-in. Your songs on this tablet and the "${esc(FOLDER_NAME)}" folder in your Drive are not touched. To take the app's access away completely, use the security page of your Google account.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Disconnect</button></div>`);
   m.querySelector('[data-x]').onclick = () => m.remove();
@@ -107,6 +142,7 @@ function disconnectDialog(){
 export async function driveClick(b, d){
   if('driveconnect' in d){ connectDialog('connect'); return true; }
   if('drivetest' in d){ await runTest(); return true; }
+  if('syncnow' in d){ await syncNow(); return true; }
   if('drivedisconnect' in d){ disconnectDialog(); return true; }
   return false;
 }
@@ -118,7 +154,6 @@ const RETURN_FAILED = {
   mismatch: 'This sign-in answer did not match the sign-in started here (another window may have started its own), so it was ignored. Nothing was changed. Tap Connect and try again.',
   short: 'Google gave a sign-in that ends right away, so it was not used. Nothing was changed. Try again.',
   scope: 'Google did not give this app permission to use its Drive folder. Nothing was changed. Tap Connect and allow it.',
-  storage: 'This browser would not keep the sign-in. Nothing was changed.',
   bad: "Google's answer was not what the app expected. Nothing was changed. Try again.",
 };
 /* After the page came back from Google (main.js passes what takeReturn() found). */
@@ -128,6 +163,7 @@ export async function announceSignIn(r){
   if(r.ok){
     toast('Connected to Google Drive.');
     if(r.then === 'test') await runTest();            // the person had tapped Test connection: carry on with it
+    else if(r.then === 'sync') await syncNow();       // ...or Sync
     return;
   }
   const t = r.kind === 'error' ? `Google could not sign you in (${r.code}). Nothing was changed.` : RETURN_FAILED[r.kind];

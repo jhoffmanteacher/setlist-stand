@@ -6,20 +6,26 @@
    and only then keeps the token. There is no refresh token in this flow: the token lasts about an hour, then the person
    signs in again.
 
-   Keys (this tablet only, never in a backup or a share package):
-     ss-google          {token, exp}            exp = when the token ends (ms)
+   The token is kept IN MEMORY ONLY (Jonathan, 2026-11-21): this app shares its address (jhoffmanteacher.github.io) with
+   other sites, and anything written to storage there could be read by a flaw in any of them. So closing the app, reloading
+   it or tapping "Updated. Tap to reload" forgets the sign-in, and the person signs in again. The answer that comes back
+   from Google is read once, from the address, by takeReturn() and held in `held` below.
+   The one thing kept in storage is the note for the trip (this tablet only, never in a backup or a share package):
      ss-google-pending  {state, t, then}        the trip in progress; removed as soon as an answer comes back
+   (An older version kept the token itself in `ss-google`; it is removed when this file loads.)
    The token is never logged, shown, put in an address or written anywhere else. getToken() is the only reader. */
 import {CLIENT_ID, SCOPE, AUTH_URL, redirectUri} from './driveconfig.js';
 
-const TOKEN_KEY = 'ss-google', PENDING_KEY = 'ss-google-pending';
+const OLD_TOKEN_KEY = 'ss-google', PENDING_KEY = 'ss-google-pending';
+let held = null;                      // {token, exp} while signed in; {token:null, exp} after it ran out; null when not signed in
 const TRIP_MS = 15 * 60e3;            // an answer for a trip older than this is not believed
 export const MARGIN_MS = 60e3;        // a token with less than this left is not used (a request could outlive it)
 const MAX_LIFE_S = 86400;             // Google gives about an hour; anything longer than a day is not believed
-const THEN = ['connect', 'test'];     // what the person had tapped: carried over the trip so it can carry on afterwards
+const THEN = ['connect', 'test', 'sync'];     // what the person had tapped: carried over the trip so it can carry on afterwards
 
 const read = key => { try{ const v = JSON.parse(localStorage.getItem(key) || 'null'); return v && typeof v === 'object' && !Array.isArray(v) ? v : null; }catch(e){ return null; } };
 const drop = key => { try{ localStorage.removeItem(key); }catch(e){} };
+drop(OLD_TOKEN_KEY);                  // a token an older version of the app left in storage goes now
 const fresh = t => { const age = Date.now() - Number(t); return age >= -60e3 && age <= TRIP_MS; };      // a note is believed for 15 minutes (a minute of clock slack)
 const randomState = () => [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
 
@@ -42,7 +48,7 @@ export function beginSignIn(then = 'connect'){
      {ok:true, then, until}   connected; `until` is when the token ends
      {ok:false, kind, code?}  nothing was kept. kind: denied | error | foreign (no sign-in started in this window) | late
                             (started over 15 minutes ago) | mismatch (the answer is not for the sign-in started here) |
-                            short | scope | storage | bad
+                            short | scope | bad
    The `#` part is taken off the address FIRST, before anything can fail, so the token is never left in the address bar
    or the history. */
 export function takeReturn(){
@@ -69,7 +75,7 @@ export function takeReturn(){
   const scope = p.get('scope');
   if(scope !== null && !scope.split(/\s+/).includes(SCOPE)) return {ok:false, kind:'scope'};   // the permission was not given
   const exp = Date.now() + life * 1000;
-  try{ localStorage.setItem(TOKEN_KEY, JSON.stringify({token, exp})); }catch(e){ return {ok:false, kind:'storage'}; }
+  held = {token, exp};
   return {ok:true, then:THEN.includes(trip.then) ? trip.then : 'connect', until:exp};
 }
 
@@ -80,17 +86,18 @@ addEventListener('pageshow', e => { if(e.persisted) drop(PENDING_KEY); });
 
 /* The token, only if it has more than a minute left; otherwise null (the person must sign in again). */
 export function getToken(){
-  const t = read(TOKEN_KEY);
-  return t && typeof t.token === 'string' && t.exp - Date.now() > MARGIN_MS ? t.token : null;
+  return held && held.token && held.exp - Date.now() > MARGIN_MS ? held.token : null;
 }
-/* For the Library line: {state:'none'} | {state:'connected', until} | {state:'expired', until}. Never the token. */
+/* For the Library line: {state:'none'} | {state:'connected', until} | {state:'expired', until}. Never the token. A token that has
+   ended is let go of here, so only the time it ended is kept (for "ran out at ..."). */
 export function signInState(){
-  const t = read(TOKEN_KEY);
-  if(!t || typeof t.token !== 'string' || !Number.isFinite(t.exp)) return {state:'none'};
-  return {state:t.exp - Date.now() > MARGIN_MS ? 'connected' : 'expired', until:t.exp};
+  if(!held || !Number.isFinite(held.exp)) return {state:'none'};
+  if(held.exp - Date.now() > MARGIN_MS) return {state:'connected', until:held.exp};
+  held = {token:null, exp:held.exp};
+  return {state:'expired', until:held.exp};
 }
 /* Google said the token is no good (it was taken back, or ended early): forget it. */
-export const forgetToken = () => drop(TOKEN_KEY);
+export const forgetToken = () => { held = null; };
 /* Disconnect: forget the sign-in on this tablet. Google is not told (that would be a third address); the person can remove
    the app's access from their Google account's security page. */
-export function disconnect(){ drop(TOKEN_KEY); drop(PENDING_KEY); }
+export function disconnect(){ held = null; drop(PENDING_KEY); }

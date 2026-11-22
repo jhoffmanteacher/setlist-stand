@@ -45,30 +45,53 @@ async function tx(store, mode, fn){
    putAll() and update() here are the only write paths, so each one tells seen() what it wrote, and load() / initChanged() read it
    from the database at start. A record written with an `updated` that is not newer (a restore of old records, a hash filled in,
    `colls: []` added by the upgrade) changes nothing; a plain delete (no marker, no `updated`) counts as now. */
-let newest = 0;
+let newest = 0, newestRec = 0;
 export const newestChange = () => newest;
-function seen(u){
+/* The same for songs, setlists and collections only: the records a Drive sync carries (ink is not synced yet), for the sync reminder. */
+export const newestRecordChange = () => newestRec;
+const RECORD_STORES = new Set(['songs', 'sets', 'colls']);
+/* A record dated in the future (it came from a tablet with a wrong clock): READING it (at start, after a reload of the library) says
+   nothing about when anything changed here, so it is ignored; WRITING it is a change made now, so a date more than a day ahead counts as now.
+   Either way it can never sit above every real change and hide them, and it cannot keep a reminder on. */
+const AHEAD = 864e5;
+function seen(u, isRecord, read){
+  const now = Date.now();
   u = Number(u) || 0;
-  if(u > newest){ newest = u; dispatchEvent(new Event('ss-changed')); }
+  if(u > now){ if(read) return; if(u > now + AHEAD) u = now; }       // a date still in the future cannot be a change that already happened: reading it counts for nothing
+  let moved = false;
+  if(u > newest){ newest = u; moved = true; }
+  if(isRecord && u > newestRec){ newestRec = u; moved = true; }
+  if(moved) dispatchEvent(new Event('ss-changed'));
 }
-const seenRec = (st, v) => { if(st !== 'files' && v && typeof v === 'object') seen(v.updated); };
+const seenRec = (st, v, read) => { if(st !== 'files' && v && typeof v === 'object') seen(v.updated, RECORD_STORES.has(st), read); };
 export const put = async (st, k, v) => { await (MEM ? (MEM[st].set(k, v), Promise.resolve()) : tx(st, 'readwrite', s => s.put(v, k))); seenRec(st, v); };
 export const get = (st, k) => MEM ? Promise.resolve(MEM[st].get(k)) : tx(st, 'readonly', s => s.get(k));
-export const del = async (st, k) => { await (MEM ? (MEM[st].delete(k), Promise.resolve()) : tx(st, 'readwrite', s => s.delete(k))); if(st !== 'files') seen(Date.now()); };
+export const del = async (st, k) => { await (MEM ? (MEM[st].delete(k), Promise.resolve()) : tx(st, 'readwrite', s => s.delete(k))); if(st !== 'files') seen(Date.now(), RECORD_STORES.has(st)); };
 export const all = st => MEM ? Promise.resolve([...MEM[st].values()]) : tx(st, 'readonly', s => s.getAll());
 
 /* Every ink page key of a song ("id:1", "id:2", …). */
 const inkRange = songId => [songId + ':', songId + ':￿'];
 /* Writes many records in ONE transaction: all of them are saved or none are (a reload, a full disk or a crash
    part-way leaves the stores exactly as they were). Runs in order. ops:
-   {store, key, value} saves, {store, key, delete:true} removes, {deleteInkFor:songId} removes every ink page of that song. */
-export async function putAll(ops){
+   {store, key, value} saves, {store, key, delete:true} removes, {deleteInkFor:songId} removes every ink page of that song.
+   A save or remove may carry `ifUpdated` (a number, or null for "not there"): the record at (store, key) must, at the moment of
+   writing, have exactly that `updated` (null: no record, or one with no `updated`). It is checked inside the same transaction,
+   before anything is written; one that does not match writes NOTHING and putAll rejects with an Error named 'StaleWrite' (sync:
+   a record changed by another tab or another tablet's run since it was read is never written over). */
+export async function putAll(ops, {fromSync = false} = {}){
   await putAllRaw(ops);
-  for(const o of ops){ if(o.deleteInkFor != null || (o.delete && o.store !== 'files')) seen(Date.now()); else if(!o.delete) seenRec(o.store, o.value); }       // only a write that went through counts
+  /* What a sync itself writes (records that came down) is in step with Drive already, so it is not a change to sync; it IS a change since the last
+     backup, made now whatever date the record carries. */
+  if(fromSync){ if(ops.some(o => o.store !== 'files' && o.deleteInkFor == null)) seen(Date.now(), false); return; }
+  for(const o of ops){ if(o.deleteInkFor != null) seen(Date.now(), false); else if(o.delete && o.store !== 'files') seen(Date.now(), RECORD_STORES.has(o.store)); else if(!o.delete) seenRec(o.store, o.value); }       // only a write that went through counts
 }
+const hasCheck = o => o.deleteInkFor == null && o.ifUpdated !== undefined;
+const fresh = (o, cur) => o.ifUpdated === null ? cur === undefined || cur === null || cur.updated == null : !!cur && cur.updated === o.ifUpdated;
+function staleWrite(o){ const e = new Error(`${o.store} ${o.key} changed since it was read. Nothing was written.`); e.name = 'StaleWrite'; return e; }
 async function putAllRaw(ops){
   const storeOf = o => o.deleteInkFor != null ? 'ink' : o.store;
   if(MEM){
+    for(const o of ops) if(hasCheck(o) && !fresh(o, MEM[o.store].get(o.key))) throw staleWrite(o);     // every check before any write
     for(const o of ops){
       if(o.deleteInkFor != null){ const [lo, hi] = inkRange(o.deleteInkFor); for(const k of [...MEM.ink.keys()]) if(k >= lo && k <= hi) MEM.ink.delete(k); }
       else if(o.delete) MEM[o.store].delete(o.key);
@@ -80,12 +103,19 @@ async function putAllRaw(ops){
   const d = await db();
   await new Promise((res, rej) => {
     const stores = [...new Set(ops.map(storeOf))], t = d.transaction(stores, 'readwrite');
+    let stale = null;
     t.oncomplete = () => res();
-    t.onerror = e => rej(txErr(t, e));
-    t.onabort = () => rej(t.error || new Error('aborted'));
+    t.onerror = e => rej(stale || txErr(t, e));
+    t.onabort = () => rej(stale || t.error || new Error('aborted'));
     /* A key range delete is one request, so it stays in order with the puts around it (a cursor would not).
        A request that throws (say a value that cannot be stored) aborts the whole transaction: the earlier ops are undone too. */
     try{
+      /* The checks are the first requests of the transaction, so each read sees the records as they were before any op here;
+         a mismatch aborts the transaction, which undoes every write queued after it. */
+      for(const o of ops) if(hasCheck(o)){
+        const r = t.objectStore(o.store).get(o.key);
+        r.onsuccess = () => { if(!stale && !fresh(o, r.result)){ stale = staleWrite(o); try{ t.abort(); }catch(e){} rej(stale); } };
+      }
       for(const o of ops){
         const st = t.objectStore(storeOf(o));
         if(o.deleteInkFor != null) st.delete(IDBKeyRange.bound(...inkRange(o.deleteInkFor)));
@@ -153,7 +183,7 @@ export function upgradeSet(st){
   if(!Array.isArray(st.items)) st.items = (Array.isArray(st.songs) ? st.songs : []).map(id => ({type:'song', id}));
   delete st.songs;
   st.items = st.items.filter(it => it && (it.type === 'break' || (it.type === 'song' && it.id)))
-    .map(it => it.type === 'break' ? {type:'break', id:it.id || uid(), name:it.name || 'Break'} : {type:'song', id:it.id});
+    .map(it => it.type === 'break' ? {...it, type:'break', id:it.id || uid(), name:it.name || 'Break'} : {...it, type:'song', id:it.id});    // a row keeps any field this version does not know
   st.colls = cleanColls(st.colls);
   if(!st.updated) st.updated = st.created || now();
   return JSON.stringify(st) !== before;
@@ -177,17 +207,21 @@ export async function load(){
   state.songs = songs.filter(s => !s.deleted).sort(compareSongs);     // the lists sort again when they are drawn (compareSongs in js/names.js)
   state.sets = sets.filter(s => !s.deleted).sort((a, b) => b.created - a.created);
   state.colls = colls.filter(c => c && !c.deleted && typeof c.name === 'string').sort(compareColls);
-  for(const r of [...songs, ...sets, ...colls]) seenRec('songs', r);        // the newest change among the records read here (ink pages: initChanged)
+  for(const r of [...songs, ...sets, ...colls]) seenRec('songs', r, true);        // the newest change among the records read here (ink pages: initChanged)
 }
 /* Reads the ink pages' newest `updated` once at start (after the first draw: it must not slow the Library down). */
 export async function initChanged(){
-  for(const r of await all('ink')) seenRec('ink', r);
+  for(const r of await all('ink')) seenRec('ink', r, true);
 }
 /* Collections A to Z by name (case and accents ignored, numbers as numbers), the same ties as everywhere: by id. */
 const COLL_COLLATOR = new Intl.Collator(undefined, {sensitivity:'base', numeric:true});
 export const compareColls = (a, b) => COLL_COLLATOR.compare(a.name, b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 export const songById = id => state.songs.find(s => s.id === id);
-export const saveSong = s => { s.title = displayName(s); s.updated = now(); return put('songs', s.id, s); };
+/* The `updated` of an edit to a record that already exists: now, or one millisecond after the version it was made from when
+   that one is later (a copy from a tablet whose clock is ahead), so an edit always beats the version it was made from.
+   A brand-new record has nothing to beat (stamp(null) is now). Every edit of an existing song, setlist or collection uses it. */
+export const stamp = prev => Math.max(Date.now(), (Number(prev && prev.updated) || 0) + 1);
+export const saveSong = s => { s.title = displayName(s); s.updated = stamp(s); return put('songs', s.id, s); };
 /* The record for a new song whose PDF (pages, hash) is about to be saved under its id. name: {song, artist, version};
    colls: the collections it joins (joinColls() in js/collections.js; [] by default). */
 export function newSong(name, pages, hash, colls = []){
@@ -195,8 +229,9 @@ export function newSong(name, pages, hash, colls = []){
   s.title = displayName(s);
   return s;
 }
-export const saveSet = st => { st.updated = now(); return put('sets', st.id, st); };
-export const markDeleted = (store, id) => put(store, id, {id, deleted:true, updated:now()});
+export const saveSet = st => { st.updated = stamp(st); return put('sets', st.id, st); };
+/* The marker is stamped over the record as it is stored, read and written in one transaction. */
+export const markDeleted = async (store, id) => { await update(store, id, prev => ({id, deleted:true, updated:stamp(prev)})); };
 
 /* SHA-256 of the PDF bytes, as hex. Used later to spot the same chart twice. */
 export async function sha256(buf){
@@ -292,7 +327,18 @@ export function reconcile(prev, next){
 
 /* Crop: a song has `crop: {all: rect|null, pages: {"2": rect}}` where rect = {x, y, w, h} as fractions of the full page
    (x, y = the top-left corner of the part that is kept). A page's own crop wins over the song-wide one. */
-export const cropOf = (song, pn) => (song && song.crop && ((song.crop.pages && song.crop.pages[pn]) || song.crop.all)) || null;
+/* A usable crop rectangle: numbers inside the page, at least CROP_MIN wide and high (the editor cannot make a smaller one), ending no
+   later than the page edge (give or take rounding). The one rule, for cropOf below and for cleanCrop. */
+const saneRect = r => isObj(r) && [r.x, r.y, r.w, r.h].every(Number.isFinite) && r.x >= 0 && r.y >= 0 && r.x <= 1 && r.y <= 1
+  && r.w >= CROP_MIN && r.h >= CROP_MIN && r.x + r.w <= 1.001 && r.y + r.h <= 1.001;
+/* A damaged rectangle (from a restore or a sync: records are kept whole, never cleaned) is ignored, never drawn: the page shows
+   uncropped instead of blank. A page's own crop that is damaged falls back to the song-wide one. */
+export const cropOf = (song, pn) => {
+  const c = song && song.crop;
+  if(!c) return null;
+  const own = c.pages && c.pages[pn];
+  return saneRect(own) ? own : saneRect(c.all) ? c.all : null;
+};
 
 /* The smallest part of a page a crop may keep: the editor in js/crop.js cannot make a box smaller than this. */
 export const CROP_MIN = .08;
@@ -302,11 +348,7 @@ export const CROP_MIN = .08;
    counted, and the song keeps its other crops (a bad margin must not cost a whole package). crop is null if nothing is left. */
 export function cleanCrop(c, pages){
   let dropped = 0;
-  const rect = r => {
-    const ok = isObj(r) && [r.x, r.y, r.w, r.h].every(Number.isFinite) && r.x >= 0 && r.y >= 0 && r.x <= 1 && r.y <= 1
-      && r.w >= CROP_MIN && r.h >= CROP_MIN && r.x + r.w <= 1.001 && r.y + r.h <= 1.001;
-    return ok ? {x:r.x, y:r.y, w:r.w, h:r.h} : null;
-  };
+  const rect = r => saneRect(r) ? {x:r.x, y:r.y, w:r.w, h:r.h} : null;
   if(c == null) return {crop:null, dropped:0};
   if(!isObj(c)) return {crop:null, dropped:1};
   const all = c.all == null ? null : rect(c.all);

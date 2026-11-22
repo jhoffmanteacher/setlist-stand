@@ -44,6 +44,29 @@ const settled = (page, what = 'the Library did not come back') => until(() => pa
 const authCount = g => g.requests.filter(r => r.kind === 'auth').length;
 const driveCalls = g => g.requests.filter(r => r.kind === 'drive');
 const pageErrors = s => s.errors.filter(e => e.startsWith('pageerror'));
+/* The sign-in is kept in memory only, so "connected" is read from the screen (the Library's Drive line), never from storage. */
+const driveLine = page => page.locator('#libDrive').textContent();
+const isConnected = async page => /Connected to Google Drive until/.test(await driveLine(page));
+const offersConnect = async page => /Connect Google Drive/.test(await driveLine(page)) && !/Connected to Google Drive|ran out/.test(await driveLine(page));
+/* Time passing, without touching any storage: the page's own clock (Date.now, new Date) is held at the real time plus `ms`; timers keep
+   running. The Library line is then redrawn the way the app does when the tablet is picked up again (a visibilitychange). */
+async function clockAhead(page, ms, {redraw = true} = {}){
+  await page.clock.setFixedTime(Date.now() + ms);
+  if(redraw) await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+}
+/* Everything the page can store, read back: localStorage, sessionStorage and every IndexedDB database (all stores), as text. */
+const everyStore = page => page.evaluate(async () => {
+  const out = {ls: Object.keys(localStorage).map(k => k + '=' + localStorage.getItem(k)), ss: Object.keys(sessionStorage).map(k => k + '=' + sessionStorage.getItem(k)), idb: [], dom: document.documentElement.outerHTML, cache: []};
+  const dbs = indexedDB.databases ? await indexedDB.databases() : [];
+  for(const {name} of dbs){
+    const db = await new Promise((res, rej) => { const r = indexedDB.open(name); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    for(const st of [...db.objectStoreNames]) out.idb.push(name + '/' + st + '=' + JSON.stringify(await new Promise((res, rej) => { const r = db.transaction(st).objectStore(st).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })));
+    db.close();
+  }
+  try{ for(const c of await caches.keys()) for(const q of await (await caches.open(c)).keys()) out.cache.push(q.url); }catch(e){}
+  return out;
+});
+const holdsText = (stores, text) => [...stores.ls, ...stores.ss, ...stores.idb, ...stores.cache, stores.dom].some(v => String(v).includes(text));
 const problems = async page => JSON.parse((await ls(page))['ss-problems'] || '[]');
 
 /* Taps Connect (or Connect again in an open dialog), goes to the stand-in, comes back; returns once the Library is drawn. */
@@ -138,28 +161,50 @@ async function loopConnect(ctx){
       const hist = await cdp.send('Page.getNavigationHistory'); await cdp.detach();
       for(const e of hist.entries) assert(!/access_token/.test(e.url) && !e.url.includes('#'), 'the history keeps the answer: ' + e.url);
     }
-    const kept = await ls(page), tok = google.issued.at(-1), saved = JSON.parse(kept['ss-google']);
-    assert(saved.token === tok && Math.abs(saved.exp - (Date.now() + 3599e3)) < 120e3, 'the stored token or its end time is wrong');
+    /* connected, and the token is in NO storage at all: it lives in the page's memory only */
+    const kept = await ls(page), tok1 = google.issued.at(-1);
+    assert(!('ss-google' in kept), 'the sign-in was written to the key ss-google');
     assert(!('ss-google-pending' in kept), 'the one-time note was left behind');
-    assert(/Connected to Google Drive until/.test(await page.locator('#libDrive').textContent()), 'the Library does not say connected');
+    assert(await isConnected(page), 'the Library does not say connected');
+    const shown = await page.evaluate(() => { const f = d => d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}), n = Date.now(); return [-60e3, 0, 60e3].map(x => f(new Date(n + 3599e3 + x))); });
+    const lineNow = await driveLine(page);
+    assert(shown.some(t => lineNow.includes(t)), `the Library's end time is not about an hour away: "${lineNow}" (expected ${shown.join(' or ')})`);
+    const scanned = await everyStore(page);
+    assert(!holdsText(scanned, tok1), 'the token is in storage (localStorage, sessionStorage, a database, a cache) or in the page');
+    assert(!scanned.ls.some(x => x.startsWith('ss-google=')) && !scanned.ss.some(x => /^ss-google=/.test(x)), 'a key ss-google exists');
+    assert(!JSON.stringify(await snapshot(page)).includes(tok1), 'the token is in the library database');
     assert(driveCalls(google).length === 0, 'Drive was called before Test connection was tapped');
     const after = normalise(await snapshot(page));
     assert(!diff(before, after).length, 'signing in changed the library: ' + diff(before, after).join(' | '));
 
-    /* still connected after a reload (a closed and reopened app) */
+    /* the opposite of "still connected after a reload": a reload (a closed and reopened app, or "Updated. Tap to reload") forgets the sign-in */
     await page.reload(); await settled(page); await sleep(400);
-    assert(/Connected to Google Drive until/.test(await page.locator('#libDrive').textContent()), 'connected state lost on reload');
+    assert(await offersConnect(page), 'after a reload the Library does not offer Connect: ' + await driveLine(page));
+    assert(!(await page.locator('[data-drivetest]').count()) && !(await page.locator('[data-drivedisconnect]').count()), 'after a reload the Library still offers Test connection or Disconnect');
     assert(driveCalls(google).length === 0, 'Drive was called by opening the app (only a button may do that)');
+    assert(!holdsText(await everyStore(page), tok1), 'the token is in storage after a reload');
+    /* a token an older version of the app left in storage goes when the app opens, and is never used */
+    await page.evaluate(() => localStorage.setItem('ss-google', JSON.stringify({token: 'ya29.old' + 'o'.repeat(60), exp: Date.now() + 3000e3})));
+    await page.reload(); await settled(page); await sleep(400);
+    assert(!('ss-google' in await ls(page)), 'an old ss-google key was left in storage');
+    assert(await offersConnect(page), 'an old ss-google key was taken as a sign-in: ' + await driveLine(page));
+    assert(driveCalls(google).length === 0 && !(await page.locator('[data-drivetest]').count()), 'an old ss-google key was used');
 
-    /* the test, then the token is searched for everywhere it must never be */
+    /* sign in again, then the test, then the token is searched for everywhere it must never be */
+    await trip(h);
+    const tok = google.issued.at(-1);
+    assert(tok !== tok1 && await isConnected(page), 'not connected after signing in again');
     assert(/Connected\. Folder 'Setlist Stand' is ready \(0 files\)/.test(await runTest(page)), 'the test connection result');
     const calls = driveCalls(google);
     assert(calls.length >= 2 && calls.every(c => c.authorization === 'Bearer ' + tok && !c.tokenInUrl), 'a Drive call lacked the Authorization header, or put the token in the address');
     assert(google.requests.every(r => !r.tokenInUrl), 'the token was sent in an address');
     assert(s.requests.every(u => !u.includes(tok)), 'the token is in a requested address');
-    const stores = await page.evaluate(() => ({ls: Object.entries(localStorage).filter(([k]) => k !== 'ss-google').map(([, v]) => v), ss: Object.keys(sessionStorage).map(k => sessionStorage.getItem(k)), dom: document.documentElement.outerHTML}));
-    assert(![...stores.ls, ...stores.ss, stores.dom].some(v => String(v).includes(tok)), 'the token is stored or shown somewhere other than ss-google');
+    /* after the token has been USED: still in no storage (the key ss-google included), not in the page, and not in the address or the history */
+    const used = await everyStore(page);
+    assert(!holdsText(used, tok) && !holdsText(used, tok1), 'the token is stored or shown somewhere (localStorage, sessionStorage, a database, a cache, the page)');
+    assert(!used.ls.some(x => x.startsWith('ss-google=')) && !used.ss.some(x => x.startsWith('ss-google=')), 'a key ss-google exists after the token was used');
     assert(!JSON.stringify(await snapshot(page)).includes(tok), 'the token is in the library database');
+    assert(!(await page.evaluate(() => location.href)).includes(tok), 'the token is in the address');
     const bk = await download(page, () => page.click('[data-backup]'));
     const zip = await JSZip.loadAsync(fs.readFileSync(bk.file));
     for(const n of Object.keys(zip.files)) if(!zip.files[n].dir) assert(!Buffer.from(await zip.file(n).async('uint8array')).includes(Buffer.from(tok)), `the token is in the backup (${n})`);
@@ -231,22 +276,31 @@ async function loopRefused(ctx){
     await page.evaluate(([old, t]) => localStorage.setItem('ss-google-pending', JSON.stringify({state: old, t, then: 'connect'})), [old, Date.now() - 16 * 60e3]);
     await page.reload(); await settled(page);
     assert(!('ss-google-pending' in await ls(page)), 'an old note was kept');
-    /* a good trip, then the same answer replayed: refused, and the token already kept is untouched */
+    /* a good trip, then the same answer replayed */
     await trip(h);
-    const good = await ls(page), fragment = s.navs.filter(u => u.includes('#access_token=')).at(-1).slice(h.base.length);
+    assert(await isConnected(page), 'not connected after a good sign-in');
+    const fragment = s.navs.filter(u => u.includes('#access_token=')).at(-1).slice(h.base.length);
+    /* (1) in the page that holds the sign-in: the replay is refused (its note is gone), the address is cleaned, and the sign-in already held is untouched:
+       the Library still says connected and Test connection still works, so the answer neither replaced the token nor forgot it */
+    const replayed = await page.evaluate(async fragment => { history.replaceState(null, '', location.pathname + fragment); return (await import('./js/googleauth.js')).takeReturn(); }, fragment);
+    assert(replayed && replayed.ok === false && replayed.kind === 'foreign', 'a replayed answer was accepted or not refused as foreign: ' + JSON.stringify(replayed));
+    assert(await page.evaluate(() => location.hash === ''), 'a replayed answer was left in the address');
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    assert(await isConnected(page), 'a replayed answer made the app forget the sign-in it held: ' + await driveLine(page));
+    assert(/Connected\./.test(await runTest(page)), 'a replayed answer broke the sign-in it found: Test connection no longer works');
+    /* (2) arriving fresh (a new page, a new life) with the same answer: refused in plain words, and nothing is connected or kept */
     await arrive(fragment);
     assert(/did not come from a sign-in started in this window/.test(await dialogText(page)), 'a replayed answer was accepted');
     await closeDialog(page);
-    assert((await ls(page))['ss-google'] === good['ss-google'], 'a replayed answer changed the stored token');
+    assert(await offersConnect(page) && !('ss-google' in await ls(page)) && !('ss-google-pending' in await ls(page)), 'a replayed answer connected the app or left something in storage');
     assert(pageErrors(s).length === 0, 'page errors: ' + s.errors.join(' | '));
 
     /* the trip that gets no answer at all: the note stays (the person may still be at Google), nothing else happens */
-    await page.evaluate(() => localStorage.removeItem('ss-google'));
     await page.reload(); await settled(page);                                          // the Library is drawn again, with its Connect button
-    assert(await page.locator('[data-driveconnect]').count() === 1, 'no Connect button after the token was removed');
+    assert(await page.locator('[data-driveconnect]').count() === 1, 'no Connect button after a reload');
     await trip(h, {mode: 'nothing'});
     const quiet = await ls(page);
-    assert(!('ss-google' in quiet) && !(await page.locator('.modal').count()), 'a sign-in with no answer connected or complained');
+    assert(!('ss-google' in quiet) && !(await page.locator('.modal').count()) && await offersConnect(page), 'a sign-in with no answer connected or complained');
     assert('ss-google-pending' in quiet, 'the note of a trip that is only a minute old was dropped (the person may still be at Google)');
     /* Back from Google with the Back button (the page comes back from the browser's cache; Playwright's Chromium switches that cache off,
        so the event is sent by hand): that trip was abandoned, and the open Connect dialog can be used again */
@@ -265,20 +319,32 @@ async function loopTokenLife(ctx){
   const h = await open(ctx), {s, page, google} = h;
   try{
     await trip(h, {expiresIn: 75});                       // good for a little over a minute
-    assert(/Connected to Google Drive until/.test(await page.locator('#libDrive').textContent()), 'a token with 75 seconds left was not accepted');
-    await page.evaluate(() => { const t = JSON.parse(localStorage.getItem('ss-google')); t.exp = Date.now() + 30e3; localStorage.setItem('ss-google', JSON.stringify(t)); });
-    await page.reload(); await settled(page);
-    assert(/ran out.*Tap Connect again/.test(await page.locator('#libDrive').textContent()), 'an ending token is still shown as connected: ' + await page.locator('#libDrive').textContent());
+    assert(await isConnected(page), 'a token with 75 seconds left was not accepted');
+    /* time passes (the page's clock moves; no storage is touched): with 25 seconds left (under the minute kept in hand) the token is not used */
+    await clockAhead(page, 50e3, {redraw: false});        // the Library line is not redrawn yet, so Test connection is still on screen: the request itself must refuse the token
     google.clearLog();
     await page.click('[data-drivetest]');
     const text = await dialogText(page);
     assert(/Your Google sign-in has run out\. Tap Connect again/.test(text), 'Test connection with an ending token: ' + text);
     assert(google.requests.length === 0, 'an ending token was used for a request');
+    await closeDialog(page);
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    assert(/ran out.*Connect again/.test(await driveLine(page)), 'an ending token is still shown as connected: ' + await driveLine(page));
+    await page.click('[data-drivetest]');
     /* Connect again from this dialog: the test the person asked for runs by itself when they are back */
     await trip(h);
     const res = await until(async () => { const x = await dialogText(page).catch(() => null); return x && /Connected\./.test(x) ? x : null; }, 'the test did not carry on after signing in again', 20000);
     assert(/Folder 'Setlist Stand' is ready/.test(res), res);
     await closeDialog(page);
+    assert(await isConnected(page), 'not connected after signing in again');
+    /* an hour later the new token has ended too: said so, with the time, and not used */
+    await clockAhead(page, 4000e3, {redraw: false});
+    google.clearLog();
+    await page.click('[data-drivetest]');
+    assert(/Your Google sign-in has run out/.test(await dialogText(page)) && google.requests.length === 0, 'an ended token was used, or Test connection did not say so');
+    await closeDialog(page);
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    assert(/ran out at.*Connect again/.test(await driveLine(page)), 'an ended token is still shown as connected: ' + await driveLine(page));
     assert(pageErrors(s).length === 0, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 }
@@ -297,8 +363,10 @@ async function loopFolder(ctx){
     assert(google.folders('Setlist Stand').length === 1, 'the second test made a second folder');
     assert(google.requests.filter(r => r.method === 'POST').length === 1, 'folders created: ' + google.requests.filter(r => r.method === 'POST').length);
     const queries = driveCalls(google).filter(r => r.method === 'GET').map(r => r.query.q || '');
-    const folderQ = queries.find(x => /name = /.test(x)) || '', listQ = queries.find(x => /in parents/.test(x)) || '';
-    for(const part of ["name = 'Setlist Stand'", `mimeType = '${FOLDER}'`, 'trashed = false', 'appProperties has']) assert(folderQ.includes(part), `the query that finds the folder lacks "${part}": ${folderQ}`);
+    const folderQ = queries.find(x => /appProperties has/.test(x)) || '', listQ = queries.find(x => /in parents/.test(x)) || '';
+    for(const part of [`mimeType = '${FOLDER}'`, 'trashed = false', 'appProperties has']) assert(folderQ.includes(part), `the query that finds the folder lacks "${part}": ${folderQ}`);
+    assert(!/name\s*(=|contains)/.test(folderQ) && !folderQ.includes('Setlist Stand'), `the query that finds the folder uses its name, so a folder renamed in Drive is lost: ${folderQ}`);
+    assert(!queries.some(x => /name\s*(=|contains)/.test(x) && !/in parents/.test(x)), 'a query looks for a folder by name: ' + queries.join(' | '));
     assert(listQ.includes('trashed = false'), 'the listing of the folder counts trashed files: ' + listQ);
     /* 250 files, Drive answers 100 at a time: all three pages are read */
     for(let i = 0; i < 250; i++) google.addFile({name: `f${i}.json`, mimeType: 'application/json', parents: [made[0].id]});
@@ -310,7 +378,7 @@ async function loopFolder(ctx){
     assert(pageErrors(s).length === 0, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 
-  /* another tablet's folder is found, not copied; the oldest of two wins; a look-alike without the mark is ignored */
+  /* another tablet's folder is found, not copied; the oldest of two wins; a look-alike without the mark is ignored; the mark alone decides, not the name */
   const o = await open(ctx), g = o.google;
   try{
     const mk = (created, props = made[0].appProperties) => { const id = g.addFile({name: 'Setlist Stand', mimeType: FOLDER, appProperties: props}); g.files.get(id).createdTime = created; return id; };
@@ -332,6 +400,21 @@ async function loopFolder(ctx){
     assert(now.length === 2 && driveCalls(g2).some(r => r.method === 'POST'), `the look-alike was not left alone and a marked folder made (${now.length} folders)`);
     assert(driveCalls(g2).filter(r => (r.query.q || '').includes('in parents')).every(r => !(r.query.q || '').includes(`'${only}' in parents`)), 'the look-alike folder was listed');
   } finally { await p.s.close(); }
+
+  /* the app's folder renamed in Drive (it still has the mark): found, used, and no second one made; an unmarked "Setlist Stand" beside it is never taken */
+  const r = await open(ctx), g3 = r.google;
+  try{
+    const lookalike = g3.addFile({name: 'Setlist Stand', mimeType: FOLDER}); g3.files.get(lookalike).createdTime = '2026-01-01T10:00:00.000Z';        // oldest of all, but no mark
+    const renamed = g3.addFile({name: 'My gig charts', mimeType: FOLDER, appProperties: made[0].appProperties}); g3.files.get(renamed).createdTime = '2026-03-01T10:00:00.000Z';
+    g3.addFile({name: 'chart.pdf', mimeType: 'application/pdf', parents: [renamed]});
+    await connectOk(r);
+    const said = await runTest(r.page);
+    assert(/is ready \(1 file\)/.test(said) && !/just made/.test(said), 'a folder renamed in Drive was not found: ' + said);
+    assert(!g3.requests.some(x => x.method === 'POST') && g3.list().filter(f => f.mimeType === FOLDER).length === 2, 'a second folder was made although the renamed one was there');
+    const lists = driveCalls(g3).filter(x => (x.query.q || '').includes('in parents')).map(x => x.query.q);
+    assert(lists.length >= 1 && lists.every(q => q.includes(`'${renamed}' in parents`)), 'the renamed folder was not the one listed: ' + lists.join(' | '));
+    assert(pageErrors(r.s).length === 0, 'page errors: ' + r.s.errors.join(' | '));
+  } finally { await r.s.close(); }
 }
 
 /* ---------- 1e: failures are said plainly, and change nothing ---------- */
@@ -343,7 +426,7 @@ async function loopFailures(ctx){
     await connectOk(h);
     const before = normalise(await snapshot(page));
     const plain = (t, re, what) => { assert(re.test(t) && /Nothing was changed/.test(t) && !/Error|undefined|status|\b\d{3}\b/.test(t.replace(/Folder.*?\)/, '')), `${what}: "${t}"`); };
-    const stillConnected = async what => assert((await ls(page))['ss-google'], what + ': the sign-in was forgotten');
+    const stillConnected = async what => assert(await isConnected(page), what + ': the sign-in was forgotten (the Library says: ' + await driveLine(page) + ')');
 
     /* offline: the app does not even try */
     google.clearLog(); await s.context.setOffline(true);
@@ -351,8 +434,9 @@ async function loopFailures(ctx){
     plain(await say(), /Cannot reach Google/, 'offline');
     assert(google.requests.length === 0 && !s.requests.slice(asked).some(toGoogle), 'offline: a request was sent');
     /* Connect while offline must not leave the app (the tablet would be stranded on an error page) */
-    const url = page.url(); await page.evaluate(() => { const t = JSON.parse(localStorage.getItem('ss-google')); t.exp = Date.now() - 1000; localStorage.setItem('ss-google', JSON.stringify(t)); });
-    await page.reload().catch(() => {}); await s.context.setOffline(false); await page.reload(); await settled(page); await s.context.setOffline(true);
+    const url = page.url();
+    await s.context.setOffline(false); await page.reload(); await settled(page); await s.context.setOffline(true);        // a reload forgets the sign-in: the Library offers Connect
+    assert(await offersConnect(page), 'after a reload the Library does not offer Connect: ' + await driveLine(page));
     await page.click('[data-driveconnect]'); await page.click('.modal [data-ok]');
     await until(async () => /You are offline/.test(await dialogText(page).catch(() => '')), 'Connect while offline did not say so', 10000);
     assert(page.url() === url && authCount(google) === 0 && !('ss-google-pending' in await ls(page)), 'Connect while offline left the app or left a note');
@@ -426,8 +510,8 @@ async function loopFailures(ctx){
     google.expire();
     await page.click('[data-drivetest]');
     await until(async () => /Sign in again/.test(await dialogText(page).catch(() => '')), 'a refused token did not ask to sign in again', 15000);
-    assert(!('ss-google' in await ls(page)), 'a token Google refused is still kept');
     await closeDialog(page);
+    assert(await offersConnect(page) && !(await page.locator('[data-drivetest]').count()), 'a token Google refused is still kept: the Library says ' + await driveLine(page));
     assert(await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest('#libDrive')), 'after Cancel on "Sign in again" focus is not in the Drive line');
     /* and Connect again carries on with the test */
     await trip(h); google.expire(); await page.click('[data-drivetest]');
@@ -454,20 +538,26 @@ async function loopDisconnect(ctx){
   const h = await open(ctx, {fixtures: true}), {s, page, google} = h;
   try{
     await connectOk(h);
-    const before = normalise(await snapshot(page)), n = google.requests.length;
+    const before = normalise(await snapshot(page));
     await page.click('[data-drivedisconnect]');
     assert(/forgets the sign-in/.test(await dialogText(page)) && /not touched/.test(await dialogText(page)), 'the Disconnect dialog does not say what happens');
     await closeDialog(page);
-    assert((await ls(page))['ss-google'], 'Cancel disconnected');
+    assert(await isConnected(page), 'Cancel disconnected');
     await page.click('[data-drivedisconnect]'); await page.keyboard.press('Escape'); await noModal(page);
-    assert((await ls(page))['ss-google'], 'Escape disconnected');
+    assert(await isConnected(page), 'Escape disconnected');
+    assert(/Connected\./.test(await runTest(page)), 'after Cancel and Escape the sign-in no longer works');
+    const n = google.requests.length;
     await page.click('[data-drivedisconnect]'); await page.click('.modal [data-ok]'); await noModal(page);
     const kept = await ls(page);
     assert(!('ss-google' in kept) && !('ss-google-pending' in kept), 'Disconnect left the sign-in: ' + Object.keys(kept));
-    assert(/Connect Google Drive/.test(await page.locator('#libDrive').textContent()), 'the Library does not offer Connect after Disconnect');
+    assert(await offersConnect(page) && !(await page.locator('[data-drivetest]').count()), 'the Library does not offer Connect after Disconnect: ' + await driveLine(page));
+    /* the token is really forgotten, not just hidden: a redrawn Library (the tablet picked up again) does not bring the sign-in back */
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    assert(await offersConnect(page), 'a redrawn Library shows the sign-in again after Disconnect: ' + await driveLine(page));
+    assert(!holdsText(await everyStore(page), google.issued.at(-1)), 'the token is in storage after Disconnect');
     assert(google.requests.length === n, 'Disconnect called Google (it must only forget the sign-in here)');
     await page.reload(); await settled(page);
-    assert(/Connect Google Drive/.test(await page.locator('#libDrive').textContent()), 'disconnected state lost on reload');
+    assert(await offersConnect(page), 'disconnected state lost on reload');
     const after = normalise(await snapshot(page));
     assert(!diff(before, after).length, 'Disconnect changed the library: ' + diff(before, after).join(' | '));
     assert(pageErrors(s).length === 0, 'page errors: ' + s.errors.join(' | '));
@@ -511,40 +601,59 @@ async function loopCsp(ctx){
 /* ---------- 1h: never touched, and offline, the app is exactly as before ---------- */
 async function loopOffline(ctx){
   const h = await open(ctx, {fixtures: true}), {s, page, google} = h;
+  /* Playwright's WebKit runs these loops with the service worker blocked (see open()): there is no worker to wait for, and with the
+     network gone the app's own files (pdf.js, a reload) cannot come from any cache. In WebKit only what needs none of that is checked. */
+  const ready = () => WEBKIT ? null : s.swReady();
   try{
-    await s.swReady();
+    await ready();
     await page.click('#libList [data-open]'); await page.waitForSelector('body.playing');
     await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
     assert(google.requests.length === 0 && !s.requests.some(toGoogle), 'a library that never touched Connect still talked to Google');
-    /* connected, then offline with the stand-in switched off: the app opens, plays, and says nothing to Google */
+    /* connected, then offline with the stand-in switched off: the app (still open) plays, says nothing to Google, and Test says it cannot reach Google */
     await connectOk(h);
-    await s.swReady();
+    await ready();
     await google.close();
     const back = await goOffline(s.context, ctx.server);
     try{
-      await page.reload(); await settled(page);
-      assert(/Connected to Google Drive until/.test(await page.locator('#libDrive').textContent()), 'offline, the connected line is gone');
-      const n = s.requests.length;
-      await page.click('#libList [data-open]'); await page.waitForSelector('body.playing');
-      await page.click('#vNext').catch(() => {}); await sleep(600);
-      assert(await page.locator('#stage canvas').count() > 0, 'a song did not open offline');
-      assert(!s.requests.slice(n).some(toGoogle), 'a request to Google left while a song was open');
-      await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
+      assert(await isConnected(page), 'going offline made the Library forget the sign-in');
+      if(!WEBKIT){            // (a song needs the app's own files, which only the service worker can give with the network gone)
+        const n = s.requests.length;
+        await page.click('#libList [data-open]'); await page.waitForSelector('body.playing');
+        await page.click('#vNext').catch(() => {}); await sleep(600);
+        assert(await page.locator('#stage canvas').count() > 0, 'a song did not open offline');
+        assert(!s.requests.slice(n).some(toGoogle), 'a request to Google left while a song was open');
+        await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
+      }
       await page.click('[data-drivetest]');
       assert(/Cannot reach Google/.test(await until(async () => { const x = await dialogText(page).catch(() => null); return x && !/^Testing/.test(x) ? x : null; }, 'no answer offline', 15000)), 'offline test message');
       await closeDialog(page);
+      /* reopened offline (a reload forgets the sign-in): the app opens and plays, offers Connect, and sends nothing to Google */
+      if(WEBKIT) console.log('    note: playing and reopening the app offline need the service worker, which Playwright\'s WebKit cannot intercept; that part is skipped here');
+      else{
+        await page.reload(); await settled(page);
+        assert(await offersConnect(page), 'reopened offline, the Library does not offer Connect: ' + await driveLine(page));
+        const m = s.requests.length;
+        await page.click('#libList [data-open]'); await page.waitForSelector('body.playing');
+        await page.click('#vNext').catch(() => {}); await sleep(600);
+        assert(await page.locator('#stage canvas').count() > 0, 'a song did not open offline after a reload');
+        await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
+        await page.click('[data-driveconnect]'); await page.click('.modal [data-ok]');
+        assert(/You are offline/.test(await until(async () => { const x = await dialogText(page).catch(() => null); return x && /offline/.test(x) ? x : null; }, 'Connect while offline did not say so', 10000)), 'Connect offline message');
+        await closeDialog(page);
+        assert(!s.requests.slice(m).some(toGoogle), 'a request to Google left while the app was reopened offline');
+      }
     } finally { await back(); }
     assert(pageErrors(s).length === 0, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 }
 
 export const loops = [
-  {name: 'sync 1a: Connect goes out with the right client, scope and state, comes back clean, keeps the token nowhere else; the library is unchanged', run: loopConnect},
+  {name: 'sync 1a: Connect goes out with the right client, scope and state, comes back clean, keeps the token in memory only (no storage, no key ss-google, gone after a reload, an old key removed); the library is unchanged', run: loopConnect},
   {name: 'sync 1b: a refused, foreign, old or replayed sign-in changes nothing and says so in plain words', run: loopRefused},
-  {name: 'sync 1c: a token with under a minute left is not used; Connect again carries on with the test', run: loopTokenLife},
-  {name: 'sync 1d: the folder is made once, another tablet\'s is found, every page of a listing is read', run: loopFolder},
+  {name: 'sync 1c: a token with under a minute left (or ended) is not used; Connect again carries on with the test', run: loopTokenLife},
+  {name: 'sync 1d: the folder is made once, another tablet\'s is found by its mark alone (even renamed), every page of a listing is read', run: loopFolder},
   {name: 'sync 1e: offline, full, busy, off, rubbish, Cancel and a refused token are each said plainly and change nothing', run: loopFailures},
-  {name: 'sync 1f: Disconnect forgets the sign-in here and calls nobody', run: loopDisconnect},
+  {name: 'sync 1f: Disconnect forgets the sign-in here (the app is not connected again until Connect) and calls nobody', run: loopDisconnect},
   {name: 'sync 1g: the Content-Security-Policy is the agreed one and Google\'s addresses live in one file', run: loopCsp},
-  {name: 'sync 1h: never connected, or connected and offline, the app opens and plays and sends nothing to Google', run: loopOffline},
+  {name: 'sync 1h: never connected, or connected and offline (also reopened offline), the app opens and plays and sends nothing to Google', run: loopOffline},
 ];

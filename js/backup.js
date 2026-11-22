@@ -155,6 +155,61 @@ function badColls(r, who){
   for(const id of r.colls) if(!okId(id)) return `${who} has a collection id ${cut(id)}`;
   return null;
 }
+/* One record of each kind, checked on its own: null when it is fine, else the short reason. validateBackup() checks every record
+   of a backup with them, and a sync checks every record that comes from Drive with them. A field this code does not know is
+   allowed (a newer version may add one); a deletion marker needs only a plain id and `deleted: true`. */
+export function songProblem(s){
+  if(!isObj(s)) return 'a song that is not a record';
+  if(!okId(s.id)) return 'a song id ' + cut(s.id);
+  if(s.deleted){
+    if(s.deleted !== true) return 'a deleted song marked ' + cut(s.deleted);
+    if(s.updated != null && !Number.isFinite(Number(s.updated))) return 'a deleted song with time ' + cut(s.updated);
+    return null;
+  }
+  if(!okPage(s.pages)) return `song ${s.id} has ${cut(s.pages)} pages`;
+  for(const k of ['title', 'song', 'artist', 'version']) if(!okText(s[k])) return `song ${s.id} has a ${k} that is not short text`;
+  const bad = badColls(s, `song ${s.id}`); if(bad) return bad;
+  if(s.hash != null && !(typeof s.hash === 'string' && /^[0-9a-f]{64}$/.test(s.hash.toLowerCase()))) return `song ${s.id} has hash ${cut(s.hash)}`;
+  return null;
+}
+export function setProblem(st){
+  if(!isObj(st)) return 'a setlist that is not a record';
+  if(!okId(st.id)) return 'a setlist id ' + cut(st.id);
+  if(st.deleted){
+    if(st.deleted !== true) return 'a deleted setlist marked ' + cut(st.deleted);
+    return null;
+  }
+  if(typeof st.name !== 'string' || st.name.length > LIMITS.text) return `setlist ${st.id} has a name that is not short text`;
+  const bad = badColls(st, `setlist ${st.id}`); if(bad) return bad;
+  if(st.items != null){
+    if(!Array.isArray(st.items)) return `setlist ${st.id} has items that are not a list`;
+    if(st.items.length > LIMITS.items) return `setlist ${st.id} has more than ${LIMITS.items} items`;
+    for(const it of st.items){
+      if(!isObj(it)) return `setlist ${st.id} has an item that is not a record`;
+      if(it.type === 'song'){ if(!okId(it.id)) return `setlist ${st.id} has a song id ${cut(it.id)}`; }
+      else if(it.type === 'break'){
+        if(!okId(it.id)) return `setlist ${st.id} has a break id ${cut(it.id)}`;
+        if(typeof it.name !== 'string' || it.name.length > LIMITS.text) return `setlist ${st.id} has a break name that is not short text`;
+      }
+      else return `setlist ${st.id} has an item of type ${cut(it.type)}`;
+    }
+  } else if(st.songs != null){                       // version 1: songs:[ids]
+    if(!Array.isArray(st.songs)) return `setlist ${st.id} has songs that are not a list`;
+    if(st.songs.length > LIMITS.items) return `setlist ${st.id} has more than ${LIMITS.items} items`;
+    for(const id of st.songs) if(!okId(id)) return `setlist ${st.id} has a song id ${cut(id)}`;
+  }
+  return null;
+}
+export function collProblem(c){
+  if(!isObj(c)) return 'a collection that is not a record';
+  if(!okId(c.id) || c.id === 'all') return 'a collection id ' + cut(c.id);       // "all" is the picker's own button
+  if(c.deleted){
+    if(c.deleted !== true) return 'a deleted collection marked ' + cut(c.deleted);
+    return null;
+  }
+  if(typeof c.name !== 'string' || c.name.length > LIMITS.text) return `collection ${c.id} has a name that is not short text`;
+  return null;
+}
 export function validateBackup(data){
   if(!isObj(data) || !Array.isArray(data.songs) || !Array.isArray(data.sets)) return 'no song or setlist list';
   if(data.songs.length > LIMITS.songs) return `more than ${LIMITS.songs} songs`;
@@ -168,61 +223,19 @@ export function validateBackup(data){
     const seen = new Set();
     for(const r of list){ if(isObj(r) && okId(r.id)){ if(seen.has(r.id)) return `the ${what} id ${r.id} twice`; seen.add(r.id); } }
   }
-  for(const s of data.songs){
-    if(!isObj(s)) return 'a song that is not a record';
-    if(!okId(s.id)) return 'a song id ' + cut(s.id);
-    if(s.deleted){
-      if(s.deleted !== true) return 'a deleted song marked ' + cut(s.deleted);
-      if(s.updated != null && !Number.isFinite(Number(s.updated))) return 'a deleted song with time ' + cut(s.updated);
-      continue;
-    }
-    if(!okPage(s.pages)) return `song ${s.id} has ${cut(s.pages)} pages`;
-    for(const k of ['title', 'song', 'artist', 'version']) if(!okText(s[k])) return `song ${s.id} has a ${k} that is not short text`;
-    const bad = badColls(s, `song ${s.id}`); if(bad) return bad;
-    if(s.hash != null && !(typeof s.hash === 'string' && /^[0-9a-f]{64}$/.test(s.hash.toLowerCase()))) return `song ${s.id} has hash ${cut(s.hash)}`;
-  }
-  for(const st of data.sets){
-    if(!isObj(st)) return 'a setlist that is not a record';
-    if(!okId(st.id)) return 'a setlist id ' + cut(st.id);
-    if(st.deleted){
-      if(st.deleted !== true) return 'a deleted setlist marked ' + cut(st.deleted);
-      continue;
-    }
-    if(typeof st.name !== 'string' || st.name.length > LIMITS.text) return `setlist ${st.id} has a name that is not short text`;
-    const bad = badColls(st, `setlist ${st.id}`); if(bad) return bad;
-    if(st.items != null){
-      if(!Array.isArray(st.items)) return `setlist ${st.id} has items that are not a list`;
-      if(st.items.length > LIMITS.items) return `setlist ${st.id} has more than ${LIMITS.items} items`;
-      for(const it of st.items){
-        if(!isObj(it)) return `setlist ${st.id} has an item that is not a record`;
-        if(it.type === 'song'){ if(!okId(it.id)) return `setlist ${st.id} has a song id ${cut(it.id)}`; }
-        else if(it.type === 'break'){
-          if(!okId(it.id)) return `setlist ${st.id} has a break id ${cut(it.id)}`;
-          if(typeof it.name !== 'string' || it.name.length > LIMITS.text) return `setlist ${st.id} has a break name that is not short text`;
-        }
-        else return `setlist ${st.id} has an item of type ${cut(it.type)}`;
-      }
-    } else if(st.songs != null){                       // version 1: songs:[ids]
-      if(!Array.isArray(st.songs)) return `setlist ${st.id} has songs that are not a list`;
-      if(st.songs.length > LIMITS.items) return `setlist ${st.id} has more than ${LIMITS.items} items`;
-      for(const id of st.songs) if(!okId(id)) return `setlist ${st.id} has a song id ${cut(id)}`;
-    }
-  }
-  for(const c of data.colls || []){
-    if(!isObj(c)) return 'a collection that is not a record';
-    if(!okId(c.id) || c.id === 'all') return 'a collection id ' + cut(c.id);       // "all" is the picker's own button
-    if(c.deleted){
-      if(c.deleted !== true) return 'a deleted collection marked ' + cut(c.deleted);
-      continue;
-    }
-    if(typeof c.name !== 'string' || c.name.length > LIMITS.text) return `collection ${c.id} has a name that is not short text`;
-  }
-  for(const [k, v] of Object.entries(data.ink || {})){
-    const m = /^([^:]*):(\d+)$/.exec(k);
-    if(!m || !okId(m[1]) || !okPage(Number(m[2]))) return 'an annotation page ' + cut(k);
-    const strokes = Array.isArray(v) ? v : isObj(v) && Array.isArray(v.strokes) ? v.strokes : [];
-    if(strokes.length > LIMITS.strokes) return `page ${k} has more than ${LIMITS.strokes} strokes`;
-    for(const s of strokes) if(isObj(s) && Array.isArray(s.p) && s.p.length > LIMITS.points) return `page ${k} has a stroke of more than ${LIMITS.points} points`;
-  }
+  for(const [list, problem] of [[data.songs, songProblem], [data.sets, setProblem], [data.colls || [], collProblem]])
+    for(const r of list){ const bad = problem(r); if(bad) return bad; }
+  for(const [k, v] of Object.entries(data.ink || {})){ const bad = inkProblem(k, v); if(bad) return bad; }
+  return null;
+}
+/* One ink page (key "songId:page", value {updated, strokes} or an old bare list), checked as a restore checks it: the key
+   and the counts. Nothing else (a restore keeps a page whole). A sync checks a page from Drive with this first, then with
+   inkShapeProblem() in js/syncink.js. */
+export function inkProblem(k, v){
+  const m = /^([^:]*):(\d+)$/.exec(k);
+  if(!m || !okId(m[1]) || !okPage(Number(m[2]))) return 'an annotation page ' + cut(k);
+  const strokes = Array.isArray(v) ? v : isObj(v) && Array.isArray(v.strokes) ? v.strokes : [];
+  if(strokes.length > LIMITS.strokes) return `page ${k} has more than ${LIMITS.strokes} strokes`;
+  for(const s of strokes) if(isObj(s) && Array.isArray(s.p) && s.p.length > LIMITS.points) return `page ${k} has a stroke of more than ${LIMITS.points} points`;
   return null;
 }
