@@ -3,6 +3,8 @@
  * and how many pixels of rendered pages the viewer keeps in memory, so a change can be compared with "before".
  *
  *   caffeinate -i node tools/page-turn-timing.mjs --label before [--root <dir>] [--turns 20]
+ *   caffeinate -i node tools/page-turn-timing.mjs --photo --label before --turns 8      (photo charts against text charts)
+ *   caffeinate -i node tools/page-turn-timing.mjs --library --label before --turns 8    (two songs from the private backup)
  *
  * Setup: Chromium 1280x800, deviceScaleFactor 2, CPU throttled 4x (CDP Emulation.setCPUThrottlingRate), one page,
  * service worker blocked (it takes no part in a page turn). Four text-only PDFs of 24 pages are generated with the
@@ -41,7 +43,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {startServer, ROOT, PDFDocument, sleep, assert} from './loops/harness.mjs';
+import {startServer, ROOT, PDFDocument, sleep, assert, privatePath, restoreZip} from './loops/harness.mjs';
+import {makePhotoPdfs, cropSongs} from './loops/photo-pdf.mjs';
 import {launchBrowser} from './loops/browser.mjs';
 import {acquireSlot, releaseSlot} from './loops/slot.mjs';
 
@@ -52,6 +55,8 @@ const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf('--' + name); return i >= 0 && args[i + 1] ? args[i + 1] : def; };
 const root = path.resolve(opt('root', ROOT)), label = opt('label', 'run'), TURNS = +opt('turns', 20);
 const OUT = path.join(SCRATCH, `timing-${label}.json`);
+const PHOTO = args.includes('--photo'), LIBRARY = args.includes('--library');
+const DWELL = opt('dwell', '') ? opt('dwell', '').split(',') : [];     // --dwell prep,0,500,1000: turns made before the prefetch is waited for
 
 /* ---------- the one function that reads the cache (runs in the page) ---------- */
 const cacheStats = async () => {
@@ -63,9 +68,9 @@ const cacheStats = async () => {
 };
 
 /* ---------- PDFs ---------- */
-async function makePdfs(dir){
+async function makePdfs(dir, names = ['A', 'B', 'C'], PAGES = 24, prefix = 'Timing Song'){
   fs.mkdirSync(dir, {recursive: true});
-  const names = ['A', 'B', 'C'], files = [];
+  const files = [];
   for(const n of names){
     const doc = await PDFDocument.create();
     const font = await doc.embedFont('Helvetica'), bold = await doc.embedFont('Helvetica-Bold');
@@ -75,7 +80,7 @@ async function makePdfs(dir){
       for(let l = 0; l < 14; l++) pg.drawText(`Line ${l + 1}: the quick brown fox plays chart ${n} bar ${p * 8 + l}`, {x: 60, y: 640 - l * 36, size: 20, font});
       pg.drawRectangle({x: 60, y: 60, width: 492, height: 40, borderWidth: 3});
     }
-    const f = path.join(dir, `Timing Song ${n}.pdf`);
+    const f = path.join(dir, `${prefix} ${n}.pdf`);
     fs.writeFileSync(f, await doc.save()); files.push(f);
   }
   return files;
@@ -134,8 +139,132 @@ const INSTALL = () => {
      already there instead of one that was prepared). */
   window.__open = async (qi, page) => { const m = await import('./js/viewer.js'); m.closeViewer(); await m.openViewer(m.V.queue, qi, page); };
   /* everything the viewer is drawing or opening ahead has finished: the cache AND the prepared songs */
-  window.__settled = async () => { const m = await import('./js/viewer.js'); await Promise.allSettled([...m.V.cache.values(), ...[...(m.V.prep || new Map()).values()].map(e => e.p)]); };
+  /* a prepared song's pages join the cache only after its PDF has opened, so wait again until nothing new appeared */
+  window.__settled = async () => {
+    const m = await import('./js/viewer.js');
+    const all = () => [...m.V.cache.values(), ...[...(m.V.prep || new Map()).values()].map(e => e.p)];
+    for(let i = 0; i < 6; i++){ const ps = all(); await Promise.allSettled(ps); await new Promise(r => setTimeout(r, 0)); const now = all(); if(now.length === ps.length && now.every(p => ps.includes(p))) return; }
+  };
 };
+
+/* ---------- photo mode (--photo, --library): turn types 3 and 4 only, photo songs against text songs ----------
+ * --photo: two photo songs (each page one ~3000x2400 JPEG, js tools/loops/photo-pdf.mjs) and two text songs, 2 pages
+ * each, every song with a crop, generated at run time in the temp folder. --library: also the two songs Jonathan
+ * named, from his private converted backup (read in place from "Claude outputs/", never copied; skipped when absent).
+ * Each pair is played as a set of two songs (queue built from the song ids, as a setlist gives it), in the one-page
+ * and the two-page layout. 3 = last spread of the first song -> first spread of the second; 4 = back again. Same
+ * clock, same settle as above; "drawn ahead" counts the turns that landed on a canvas the cache held before the tap.
+ */
+async function compare(page, context, work, errors){
+  /* a restore replaces every song, so the generated songs and the library are two runs */
+  if(PHOTO && LIBRARY) throw new Error('run --photo and --library as two runs (a restore replaces the generated songs)');
+  const groups = [];          // {kind, a, b} by title
+  if(PHOTO){
+    const ph = await makePhotoPdfs(page, work, [{file: 'Photo Song A', label: 'Photo A'}, {file: 'Photo Song B', label: 'Photo B'}]);
+    const tx = await makePdfs(work, ['A', 'B'], 2, 'Text Song');
+    await page.setInputFiles('#file', [...ph, ...tx]);
+    await page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 4, null, {timeout: 60000});
+    const titles = await page.evaluate(async () => (await import('./js/store.js')).state.songs.map(s => s.title));
+    const t = re => { const x = titles.find(v => re.test(v)); assert(x, 'no title ' + re + ' in ' + JSON.stringify(titles)); return x; };
+    const [pa, pb, ta, tb] = [/Photo Song A/, /Photo Song B/, /Text Song A/, /Text Song B/].map(t);
+    await cropSongs(page, [pa, pb, ta, tb]);
+    groups.push({kind: 'photo', a: pa, b: pb}, {kind: 'text', a: ta, b: tb});
+  }
+  if(LIBRARY){
+    const zip = privatePath('setlist-stand-from-mobilesheets.zip');
+    if(!zip) console.log('SKIP library: the converted backup is not in Claude outputs/');
+    else {
+      await restoreZip(page, zip, 600000);
+      const titles = await page.evaluate(async () => (await import('./js/store.js')).state.songs.map(s => s.title));
+      const a = titles.find(v => /^Searching for a Home/i.test(v)), b = titles.find(v => /^In Between \(lyrics\)/i.test(v));
+      if(!a || !b) console.log('SKIP library: songs not found');
+      else groups.push({kind: 'library', a, b});
+    }
+  }
+
+  await page.evaluate(INSTALL);
+  await page.evaluate(() => {
+    window.__open2 = async (ids, two, qi, pg) => { const m = await import('./js/viewer.js'); m.closeViewer(); m.V.two = two; await m.openViewer(ids.map(id => ({type: 'song', id})), qi, pg); };
+    window.__cached = async () => { const {V} = await import('./js/viewer.js'); const rs = await Promise.allSettled([...V.cache.values()]); window.__beforeCvs = rs.filter(r => r.status === 'fulfilled').map(r => r.value.cv); };
+    window.__wasCached = () => [...document.querySelectorAll('#stage .sheet canvas:not(.ink)')].every(c => window.__beforeCvs.includes(c));
+  });
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
+  const rows = [], t0 = Date.now();
+  for(const g of groups){
+    const info = await page.evaluate(async ([a, b]) => { const st = (await import('./js/store.js')).state.songs; const f = t => st.find(s => s.title === t); return [f(a), f(b)].map(s => ({id: s.id, pages: s.pages})); }, [g.a, g.b]);
+    for(const two of [false, true]){
+      const [A, B] = info, per = n => two && n > 1 ? 2 : 1, last = n => per(n) === 2 ? (n % 2 ? n : n - 1) : n;
+      const pr = (p, n) => per(n) === 2 && p < n ? `${p}–${p + 1}` : `${p}`;
+      const sub = (k, p, n) => `^Song ${k} of 2 · Page ${pr(p, n)} of ${n}$`;
+      const ids = [A.id, B.id];
+      for(const type of [3, 4]){
+        const ms = [], hits = []; let peak = 0;
+        const sample = async () => { const s = await page.evaluate(cacheStats); if(s.pixels > peak) peak = s.pixels; };
+        for(let i = 0; i < TURNS; i++){
+          const [qi, pg, frac, expect] = type === 3 ? [0, 'last', 0.85, sub(2, 1, B.pages)] : [1, 1, 0.15, sub(1, last(A.pages), A.pages)];
+          await page.evaluate(([ids, two, qi, pg]) => window.__open2(ids, two, qi, pg), [ids, two, qi, pg]);
+          await page.evaluate(re => window.__waitShown(re), type === 3 ? sub(1, last(A.pages), A.pages) : sub(2, 1, B.pages));
+          await page.evaluate(() => window.__settled()); await sleep(SETTLE_MS); await page.evaluate(() => window.__settled());
+          await sample();
+          await page.evaluate(() => window.__cached());
+          const armed = page.evaluate(e => window.__arm(e), {sub: expect});
+          await sleep(30);
+          await page.mouse.move(1280 * frac, 400); await page.mouse.down(); await page.mouse.up();
+          const r = await armed;
+          ms.push(r.ms); hits.push(await page.evaluate(() => window.__wasCached()));
+          await sample();
+          await page.evaluate(() => window.__settled()); await sample();
+        }
+        const s = stat(ms);
+        rows.push({kind: g.kind, layout: two ? 'two pages' : 'one page', type, n: s.n, median_ms: Math.round(s.median), worst_ms: Math.round(s.worst), drawn_ahead: hits.filter(Boolean).length, peak_pixels: peak, raw: ms});
+        const r = rows[rows.length - 1];
+        console.log(`  ${r.kind} ${r.layout} type ${type}: median ${r.median_ms} ms, worst ${r.worst_ms} ms, drawn ahead ${r.drawn_ahead}/${r.n}, peak ${(peak / 1e6).toFixed(2)} Mpx`);
+      }
+      /* A person does not wait for the prefetch: the turn into the next song after arriving on the last spread
+         and staying there DWELL ms (one page: arrived by a turn from page 1; two pages: the song's only spread, opened).
+         'prep' = arrival -> everything drawn ahead has finished (no tap). */
+      for(const d of DWELL){
+        const ms = [], hits = []; let peak = 0;
+        for(let i = 0; i < TURNS; i++){
+          if(two){ await page.evaluate(([ids]) => window.__open2(ids, true, 0, 1), [ids]); }
+          else {
+            await page.evaluate(([ids]) => window.__open2(ids, false, 0, 1), [ids]);
+            await page.evaluate(re => window.__waitShown(re), sub(1, 1, A.pages));
+            await page.evaluate(() => window.__settled()); await sleep(SETTLE_MS); await page.evaluate(() => window.__settled());
+            const go = page.evaluate(e => window.__arm(e), {sub: sub(1, last(A.pages), A.pages)});
+            await sleep(30); await page.mouse.move(1280 * 0.85, 400); await page.mouse.down(); await page.mouse.up();
+            await go;
+          }
+          await page.evaluate(re => window.__waitShown(re), sub(1, last(A.pages), A.pages));
+          if(d === 'prep'){ ms.push(await page.evaluate(async () => { const t = performance.now(); await window.__settled(); return performance.now() - t; })); continue; }
+          await sleep(+d);
+          await page.evaluate(() => window.__cached());
+          const armed = page.evaluate(e => window.__arm(e), {sub: sub(2, 1, B.pages)});
+          await sleep(30); await page.mouse.move(1280 * 0.85, 400); await page.mouse.down(); await page.mouse.up();
+          const r = await armed; ms.push(r.ms); hits.push(await page.evaluate(() => window.__wasCached()));
+          const c = await page.evaluate(cacheStats); if(c.pixels > peak) peak = c.pixels;
+          await page.evaluate(() => window.__settled());
+        }
+        const s = stat(ms);
+        rows.push({kind: g.kind, layout: two ? 'two pages' : 'one page', type: d === 'prep' ? 'prep' : '3 dwell ' + d, n: s.n, median_ms: Math.round(s.median), worst_ms: Math.round(s.worst), drawn_ahead: d === 'prep' ? '-' : hits.filter(Boolean).length, peak_pixels: peak, raw: ms});
+        const r = rows[rows.length - 1];
+        console.log(`  ${r.kind} ${r.layout} ${r.type}: median ${r.median_ms} ms, worst ${r.worst_ms} ms, drawn ahead ${r.drawn_ahead}/${r.n}`);
+      }
+    }
+  }
+  const seconds = Math.round((Date.now() - t0) / 1000);
+  const pad = (s, n) => String(s).padEnd(n), lpad = (s, n) => String(s).padStart(n);
+  const lines = [`Page-turn timing (photo mode), label "${label}", root ${root}`,
+    `Chromium 1280x800 @2x, CPU 4x, ${TURNS} turns per row, settle ${SETTLE_MS} ms (+ prefetch settled), ${seconds} s`,
+    '', pad('songs', 9) + pad('layout', 11) + pad('turn', 28) + lpad('median ms', 10) + lpad('worst ms', 10) + lpad('ahead', 8) + lpad('peak Mpx', 10),
+    ...rows.map(r => pad(r.kind, 9) + pad(r.layout, 11) + pad(r.type === 3 ? '3 into the next song' : r.type === 4 ? '4 back into previous' : r.type, 28) + lpad(r.median_ms, 10) + lpad(r.worst_ms, 10) + lpad(r.drawn_ahead + '/' + r.n, 8) + lpad((r.peak_pixels / 1e6).toFixed(2), 10)),
+    '', errors.length ? 'PAGE ERRORS: ' + errors.join(' | ') : 'No page errors.'];
+  console.log(lines.join('\n'));
+  fs.writeFileSync(OUT, JSON.stringify({label, root, mode: PHOTO ? 'photo' : 'library', when: new Date().toISOString(), turns: TURNS, settleMs: SETTLE_MS, rows, errors}, null, 2));
+  console.log('JSON: ' + OUT);
+  if(errors.length) process.exitCode = 1;
+}
 
 /* ---------- main ---------- */
 const turnTypes = {};
@@ -148,7 +277,6 @@ async function main(){
   let browser, srv;
   try{
     const work = fs.mkdtempSync(path.join(SCRATCH, 'timing-pdfs-'));
-    const pdfs = await makePdfs(work);
     srv = await startServer({root});
     browser = await launchBrowser();
     const context = await browser.newContext({viewport: {width: 1280, height: 800}, deviceScaleFactor: 2, serviceWorkers: 'block'});
@@ -159,6 +287,8 @@ async function main(){
     await page.goto(srv.base + 'index.html');
     await page.waitForSelector('#libList, #view');
     await page.waitForFunction(() => !document.querySelector('#view')?.textContent.includes('Loading'), null, {timeout: 10000}).catch(() => {});
+    if(PHOTO || LIBRARY){ await compare(page, context, work, errors); fs.rmSync(work, {recursive: true, force: true}); return; }
+    const pdfs = await makePdfs(work);
 
     /* library: add the three PDFs the way a person does */
     await page.setInputFiles('#file', pdfs);

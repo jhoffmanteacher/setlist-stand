@@ -8,6 +8,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import {TMP, assert, sleep, idbAll, PDFDocument} from './harness.mjs';
+import {makePhotoPdfs, cropSongs} from './photo-pdf.mjs';
 
 const NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta'], PAGES = 3;
 async function makePdfs(){
@@ -112,10 +113,17 @@ async function loopTurns(ctx){
     };
     /* Each turn below is checked the same way: was what is on the stage drawn, and its document opened, BEFORE the tap?
        (the same canvas and document objects as in the snapshot taken just before the tap) */
-    /* Alpha: page 1 -> 3. At its last page the next song (Bravo, entry 1) is prepared. */
+    /* Alpha: page 1 -> 3. From the page before its last the next song (Bravo, entry 1) is prepared, not sooner. Opened
+       again first: the set opened on the two-page spread 1-2, which IS the spread before Alpha's last, so Bravo was
+       rightly prepared there before "Two pages" was turned off. */
+    await page.evaluate(async () => { const m = await window.__v; m.closeViewer(); await m.openViewer(m.V.queue, 0, 1); });
+    await waitFor(async () => { const t = await state(); return t.title.includes('Alpha') && t.page === 1; }, 'reopening Alpha on page 1 did not show it');
     await settle();
-    assert((await state()).prep.length === 0, 'something was prepared before the end of the first song: ' + JSON.stringify(await state()));
-    await turn('next', 'Alpha', 2); await turn('next', 'Alpha', 3);
+    assert((await state()).prep.length === 0, 'something was prepared before the page before the last of the first song: ' + JSON.stringify(await state()));
+    await turn('next', 'Alpha', 2);
+    await settle();
+    assert(JSON.stringify((await state()).prep) === '[1]', 'on the page before the last of Alpha the next song is not the one prepared: ' + JSON.stringify(await state()));
+    await turn('next', 'Alpha', 3);
     await settle();
     let st = await state();
     assert(JSON.stringify(st.prep) === '[1]', 'on the last page of Alpha the next song is not the one prepared: ' + JSON.stringify(st));
@@ -265,6 +273,64 @@ async function loopTurnsTwoUp(ctx){
   } finally { await s.close(); }
 }
 
+/* Charts that are big photos (each page one ~3000x2400 JPEG, made at run time, with a crop): a photo page takes several
+   times longer to draw than a text page, so the next song must be readied while the page BEFORE the last shows, not
+   only on the last: a person who turns to the last page and straight on into the next song still lands on a page drawn
+   before the tap. "Before the tap" here is strict: only what had FINISHED drawing when the tap came (nothing is waited for). */
+async function loopPhotoTurns(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    const files = await makePhotoPdfs(page, path.join(TMP, 'photo-turns'), [{file: 'Echo photo', label: 'Echo'}, {file: 'Foxtrot photo', label: 'Foxtrot'}]);
+    await page.setInputFiles('#file', files);
+    await page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 2, null, {timeout: 30000});
+    const titles = await page.evaluate(async () => (await import('./js/store.js')).state.songs.map(x => x.title));
+    const echo = titles.find(t => /^Echo/.test(t)), fox = titles.find(t => /^Foxtrot/.test(t));
+    assert(echo && fox, 'photo songs not added: ' + JSON.stringify(titles));
+    await cropSongs(page, [echo, fox]);
+    const {state, settle, before, landed} = await installKit(page);
+    await page.evaluate(() => {
+      /* what had finished when this runs: a render or an open still under way is left out, never waited for */
+      window.__ready = async () => {
+        const {V} = await window.__v, NO = {};
+        const now = ps => Promise.all(ps.map(p => Promise.race([p, Promise.resolve(NO)]).catch(() => NO)));
+        const cvs = (await now([...V.cache.values()])).filter(r => r !== NO && r).map(r => r.cv);
+        const docs = [V.doc, ...(await now([...V.prep.values()].map(e => e.p)))].filter(d => d && d !== NO);
+        window.__before = {cvs, docs};
+      };
+    });
+    const open = (two, qi, pg) => page.evaluate(async ([two, qi, pg, a, b]) => {
+      const m = await window.__v, st = (await import('./js/store.js')).state.songs, id = t => st.find(x => x.title === t).id;
+      m.closeViewer(); m.V.two = two; await m.openViewer([{type: 'song', id: id(a)}, {type: 'song', id: id(b)}], qi, pg);
+    }, [two, qi, pg, echo, fox]);
+    const shown = (name, pns) => waitFor(async () => { const t = await state(); return t.title.includes(name) && await page.evaluate(p => JSON.stringify([...document.querySelectorAll('#stage .ink')].map(i => +i.dataset.pn)) === JSON.stringify(p), pns); },
+      async () => `expected ${name} ${JSON.stringify(pns)}, got ${JSON.stringify(await state())}`, 20000);
+
+    /* one page at a time: Echo page 1 (the page before the last), everything settled; then page 2 and at once on into Foxtrot */
+    await open(false, 0, 1); await shown('Echo', [1]); await settle();
+    await page.click('#vNext'); await shown('Echo', [2]);
+    await page.evaluate(() => window.__ready());
+    await page.click('#vNext'); await shown('Foxtrot', [1]);
+    await landed('Foxtrot', [1], 'photo charts: straight on from the last page into the next song (readied while the page before the last showed)');
+    /* and back: Echo's last page, ready */
+    await before();
+    await page.click('#vPrev'); await shown('Echo', [2]);
+    await landed('Echo', [2], 'photo charts: back into the previous song');
+    /* two pages: the one spread of Echo, then into Foxtrot's first spread, and back */
+    await open(true, 0, 1); await shown('Echo', [1, 2]);
+    await before();
+    await page.click('#vNext'); await shown('Foxtrot', [1, 2]);
+    await landed('Foxtrot', [1, 2], 'photo charts, two pages: into the next song');
+    await before();
+    await page.click('#vPrev'); await shown('Echo', [1, 2]);
+    await landed('Echo', [1, 2], 'photo charts, two pages: back into the previous song');
+    const px = await page.evaluate(async () => { const {MAX_PIXELS} = await window.__pc; const {cvs} = await window.__snap(); return {px: cvs.reduce((a, c) => a + c.width * c.height, 0), MAX_PIXELS}; });
+    assert(px.px <= px.MAX_PIXELS, `photo charts: the cache holds ${px.px} pixels (limit ${px.MAX_PIXELS})`);
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 /* The cache itself, with stand-in canvases: the pixel limit, the order things go in, and what is never evicted. */
 async function loopCacheLimit(ctx){
   const s = await ctx.session();
@@ -319,5 +385,6 @@ async function loopCacheLimit(ctx){
 export const loops = [
   {name: 'page turns: the next and previous song and page are opened and drawn before the tap; unplayed songs are closed and their pages emptied', run: loopTurns},
   {name: 'page turns: with two pages showing, a turn into the next or previous song, or the next spread, is opened and drawn before the tap', run: loopTurnsTwoUp},
+  {name: 'page turns: photo charts (one big JPEG a page, cropped): the next song is drawn before the tap, even straight on from its last page', run: loopPhotoTurns},
   {name: 'page turns: the page cache stays under its pixel and count limits, never evicts what is on screen or being drawn, and empties what leaves', run: loopCacheLimit},
 ];

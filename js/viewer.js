@@ -91,9 +91,15 @@ const lastStart = () => lastStartFor(V.n, V.per);
 /* ---------- Songs next to this one ----------
    Opening a song is what makes a turn into it slow (pdf.js opens the PDF: most of the time on a tablet), so the songs on
    either side of the one showing (skipping breaks) are opened ahead and kept in V.prep, and the spread a turn would
-   land on is drawn into the cache: the first spread of the next song, the last of the previous one. This starts when
-   the spread it matters for shows (the last, the first) and when a break page shows. The song just left is kept open
-   too, for the turn back. Whatever is not next to the song showing is closed, its pages dropped from the cache. */
+   land on is drawn into the cache: the first spread of the next song, the last of the previous one. This starts one
+   spread early: the next song from the spread before the last (and on the last), the previous song on the first two
+   spreads, and on a break page. One spread early because a chart that is a big photo (one ~3000x2400 JPEG a page) takes
+   about four times as long to draw as a text page (measured, tools/page-turn-timing.mjs --photo / --library: about
+   1 s for one page, 1.2 s for a two-page spread, Chromium at 4x CPU, against 0.25 s), and a person who turns to the
+   last page and straight on found it still drawing. The same pages are readied, only sooner: at most one spread more
+   is held at a time (on the spread before the last: its two neighbours and the next song's first spread), inside the
+   10 pages the js/pagecache.js comment budgets. The song just left is kept open too, for the turn back. Whatever is
+   not next to the song showing is closed, its pages dropped from the cache. */
 const nextSong = qi => { for(let i = qi + 1; i < V.queue.length; i++) if(V.queue[i].type === 'song') return i; return -1; };
 const prevSong = qi => { for(let i = qi - 1; i >= 0; i--) if(V.queue[i].type === 'song') return i; return -1; };
 const around = qi => [prevSong(qi), nextSong(qi)];
@@ -200,8 +206,8 @@ export async function draw(){
   const ahead = (start) => { for(let i = 0; i < V.per; i++){ const p = start + i; if(p >= 1 && p <= V.n) renderPage(p, W, H, cropOf(V.song, p)).catch(() => {}); } };
   ahead(V.page + V.per);
   if(V.page > 1) ahead(Math.max(1, V.page - V.per));
-  if(V.page + V.per > V.n) prepare(nextSong(V.qi), 'first');
-  if(V.page === 1) prepare(prevSong(V.qi), 'last');
+  if(V.page + 2 * V.per > V.n) prepare(nextSong(V.qi), 'first');     // from the spread BEFORE the last (see "Songs next to this one")
+  if(V.page <= 1 + V.per) prepare(prevSong(V.qi), 'last');
 }
 const entryLabel = e => e.type === 'break' ? e.name : (songById(e.id)?.title || '');
 function updateChrome(){
