@@ -1,5 +1,5 @@
 import {esc, modal, hooks, toast} from './util.js';
-import {state, get, putAll, load} from './store.js';
+import {state, get, putAll, load, stamp} from './store.js';
 import {explainError} from './errors.js';
 import {validGig, gigOf, gigLong, fillCandidates, YEAR_MIN, YEAR_MAX} from './gigdate.js';
 
@@ -65,11 +65,11 @@ export async function offerFill(){
     if(!picked){ answer(); return; }                       // Not now: nothing is written, nothing is asked again
     /* Each setlist is read again just before the write: one that was deleted, renamed or given a date while the box was open
        is left alone (the box's copy is old; writing it back would undo that). */
-    const t = Date.now(), ops = [];
+    const ops = [];
     for(const {set, gig} of picked){
       const now = await get('sets', set.id);
       if(!now || now.deleted || now.updated !== set.updated || gigOf(now)) continue;
-      ops.push({store:'sets', key:now.id, value:{...now, gig, updated:Math.max(t, (now.updated || 0) + 1)}});   // a change to an existing record never goes backwards
+      ops.push({store:'sets', key:now.id, value:{...now, gig, updated:stamp(now)}});   // stamp(): an edit to an existing record never goes backwards (js/store.js)
     }
     try{
       if(ops.length) await putAll(ops);

@@ -1,5 +1,6 @@
 import {toast, saveBlob, hooks, busy} from './util.js';
 import {explainError} from './errors.js';
+import {gigOf} from './gigdate.js';
 import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, ensureHashes, putAll, sha256, ID_RE} from './store.js';
 
 /* Backup version 3: library.json has songs, sets, colls (collections) and ink (with their deletion markers); files/<id>.pdf holds
@@ -85,7 +86,7 @@ export async function restoreFrom(f, render){
   if(Number(data.version) > BACKUP_VERSION) return stop('That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.');
   const bad = validateBackup(data);
   if(bad) return stop(`That backup has something the app can't read (${bad}). Nothing was changed.`);
-  let n = 0, sets = 0, k = 0;
+  let n = 0, sets = 0, k = 0, badGig = 0;
   const total = data.songs.filter(s => !s.deleted).length;
   try{
     const ops = [], skip = new Set();
@@ -113,6 +114,9 @@ export async function restoreFrom(f, render){
     }
     for(const st of data.sets){
       if(st.deleted){ if(!newerHere('sets', st)) ops.push({store:'sets', key:st.id, value:marker(st)}); continue; }
+      /* A gig that is not a real date is dropped and counted (the rest of the setlist is kept, its `updated` as the backup has it);
+         everywhere else a bad gig is just ignored when a list is drawn, and setProblem never refuses a set for it. */
+      if(st.gig != null && !gigOf(st)){ delete st.gig; badGig++; }
       upgradeSet(st); ops.push({store:'sets', key:st.id, value:st}); sets++;
     }
     for(const c of data.colls || []){                    // none in a version 1 or 2 backup
@@ -129,7 +133,7 @@ export async function restoreFrom(f, render){
   /* The backup is written by now: a problem from here on must not say "Nothing was changed". */
   try{
     await load(); await ensureHashes(); job.close(); render();
-    toast(`Restored ${n} song${n == 1 ? '' : 's'} and ${sets} setlist${sets == 1 ? '' : 's'}`);
+    toast(`Restored ${n} song${n == 1 ? '' : 's'} and ${sets} setlist${sets == 1 ? '' : 's'}` + (badGig ? `. ${badGig} gig date${badGig == 1 ? ' that was not a real date was' : 's that were not real dates were'} left out.` : ''));
   }catch(err){ stop('The backup was restored, but the screen did not update. Reload the app to see it.'); }
   job.close();
 }
