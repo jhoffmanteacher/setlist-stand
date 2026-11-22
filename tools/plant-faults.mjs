@@ -725,6 +725,14 @@ const FAULTS = [
     loop: 'print: Download all', why: 'charts are written under their raw titles: "AC/DC" makes a folder, and two titles that differ only in case clash on the tablet'},
   {id: 'filename-slash-dropped', file: 'js/util.js', find: ".replace(/[\\\\/]+/g, '-')", replace: ".replace(/[\\\\/]+/g, '')",
     loop: 'print: Download all', why: 'a date in a setlist name, "Sf 10/18/2026", becomes "Sf 10182026" in the file name'},
+  {id: 'filename-no-nfc', file: 'js/util.js', find: "String(s).normalize('NFC')", replace: 'String(s)',
+    loop: 'print: Download all', why: 'two setlists both called "Café", one typed with é and one with e + accent, get two different-looking names in the zip that a tablet may treat as one'},
+  {id: 'filename-leading-dots-kept', file: 'js/util.js', find: ".replace(/^[.\\s]+/, '')", replace: '',
+    loop: 'print: Download all limits', why: 'a title such as "...Baby One More Time" makes a hidden file on the tablet'},
+  {id: 'filename-no-byte-cut', file: 'js/util.js', find: 'if(chars + 1 > 150 || bytes + b > 200) break;', replace: 'if(chars + 1 > 150) break;',
+    loop: 'print: Download all limits', why: 'a title of 150 accented or Japanese characters is 300 or 450 bytes: over the 255 bytes a tablet takes for one file name'},
+  {id: 'dlall-stop-last-chart-zips', file: 'js/downloadall.js', find: '    if(job.stopped) return stopped();                                      // Stop on the last chart', replace: '    // Stop on the last chart',
+    loop: 'print: Download all limits', why: 'Stop pressed on the last chart still makes the whole zip (a long wait on a big library) before throwing it away'},
 ];
 
 const args = process.argv.slice(2);

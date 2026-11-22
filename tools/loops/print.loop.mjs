@@ -382,7 +382,7 @@ function zipDirectory(buf){
     assert(buf.readUInt32LE(o) === 0x02014b50, `zip: directory entry ${i} has a bad signature`);
     const nl = buf.readUInt16LE(o + 28), xl = buf.readUInt16LE(o + 30), cl = buf.readUInt16LE(o + 32), lh = buf.readUInt32LE(o + 42);
     const name = buf.toString('utf8', o + 46, o + 46 + nl);
-    out.push({name, method: buf.readUInt16LE(o + 10), csize: buf.readUInt32LE(o + 20), usize: buf.readUInt32LE(o + 24), localMethod: buf.readUInt16LE(lh + 8)});
+    out.push({name, nameBytes: nl, method: buf.readUInt16LE(o + 10), csize: buf.readUInt32LE(o + 20), usize: buf.readUInt32LE(o + 24), localMethod: buf.readUInt16LE(lh + 8)});
     o += 46 + nl + xl + cl;
   }
   return out;
@@ -416,9 +416,17 @@ async function downloadAllRun(page, {stopAt = null} = {}){
       const h = document.querySelector('.modal h2')?.textContent || '';
       return /^(Zip saved|Too much to make at once)$/.test(h) ? h : false;
     }, null, {timeout: 120000})).jsonValue();
-    await sleep(1000);                                     // a download the app started arrives in Playwright a moment later
-    const {statuses, stoppedAt} = await page.evaluate(() => { window.__dlOb.disconnect(); return {statuses: window.__dl, stoppedAt: window.__dlStop}; });
     const toastText = (await page.locator('#toast').textContent()) || '';
+    /* A download the app started arrives in Playwright a moment later: wait on the download event itself. When the app says it
+       saved one (the "Zip saved" box or the "Saved …" toast) wait up to 20 s for it; then, and in every other case (stopped,
+       refused), go on waiting while downloads keep coming, each within NO_DL ms of the last: a quiet NO_DL window ends the wait,
+       so a stray or second download within that window is still seen (the negative checks are as strict as the old fixed wait). */
+    const NO_DL = 1000, saidSaved = end === 'Zip saved' || /^Saved /.test(toastText);
+    for(;;){
+      const timeout = saidSaved && !dls.length ? 20000 : NO_DL;
+      if(!await page.waitForEvent('download', {timeout}).then(() => true, () => false)) break;
+    }
+    const {statuses, stoppedAt} = await page.evaluate(() => { window.__dlOb.disconnect(); return {statuses: window.__dl, stoppedAt: window.__dlStop}; });
     let text = '', items = [];
     if(end !== 'closed'){
       text = (await dialogText(page)).replace(/\s+/g, ' ');
@@ -465,6 +473,14 @@ function expectNames(bases, ext){
 function fileNameOk(t){
   assert(t && t === t.trim() && t.length <= 150 && t === t.normalize('NFC') && !/[\\/:*?"<>|\u0000-\u001f\u007f]/.test(t), `test setup: the title ${JSON.stringify(t)} would be changed by fileName`);
   return t;
+}
+/* "Café" spelled two ways, written with escapes so an editor cannot normalise one into the other: é as one character (U+00E9,
+   NFC) and as "e" plus the combining acute accent (U+0301, NFD). checkCafe: the two really are those code points. */
+const CAFE_NFC = 'Café', CAFE_NFD = 'Café';
+const codePoints = t => [...t].map(c => c.codePointAt(0).toString(16)).join(' ');
+function checkCafe(nfc, nfd, what = 'test setup'){
+  assert(codePoints(nfc) === '43 61 66 e9' && nfc === nfc.normalize('NFC'), `${what}: the NFC "Café" is ${codePoints(nfc)}, expected 43 61 66 e9`);
+  assert(codePoints(nfd) === '43 61 66 65 301' && nfd === nfd.normalize('NFD') && nfd !== nfc, `${what}: the NFD "Café" is ${codePoints(nfd)}, expected 43 61 66 65 301`);
 }
 const longDate = (page, g) => page.evaluate(g => { const [y, m, d] = g.split('-').map(Number);
   return new Intl.DateTimeFormat(undefined, {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'}).format(new Date(y, m - 1, d, 12)); }, g);
@@ -881,7 +897,8 @@ export const loops = [
 
 {name: 'print: Download all makes one stored zip: each chart once as its stored bytes (a protected one too), one list per setlist (gig date, break, repeat, archived, no PDF), " (2)" names, empty skipped, library unchanged; Download PDF keeps its dated name', async run(ctx){
   const s = await ctx.session(), page = s.page, fails = [];
-  const NFC = 'Café', NFD = 'Café';
+  const NFC = CAFE_NFC, NFD = CAFE_NFD;
+  checkCafe(NFC, NFD);
   try{
     const locked = encryptPdf(path.join(FIX, 'two-page.pdf'), path.join(TMP, 'dlall-two-locked.pdf'));
     const made = {};
@@ -916,6 +933,7 @@ export const loops = [
     }
     const stored = await idbAll(page, 'sets');
     assert(stored[sets[4].id].name === NFC && stored[sets[5].id].name === NFD, 'test setup: the two Café names are not stored as typed');
+    checkCafe(stored[sets[4].id].name, stored[sets[5].id].name, 'the two Café setlists as stored');
     /* titles set on the records (two that differ only in case, one with a slash), one archived, one chart's PDF gone */
     const TITLE = {A: 'Song A', B: 'Song B', C: 'Song C', LA: 'Locked A', AR: 'Old Tune', M: 'Gone Song', T1: 'Twin', T2: 'TWIN', SL: 'AC/DC Medley'};
     for(const [k, t] of Object.entries(TITLE)) await idbPut(page, 'songs', id[k], {...songs0[id[k]], song: t, artist: '', version: '', title: t, archived: k === 'AR'});
@@ -996,14 +1014,29 @@ export const loops = [
   try{
     await s.goto();
     /* the app's own fileName (js/util.js), which names every file in the zip and the zip */
-    const NFC = 'Café', NFD = 'Café';
-    const n = await page.evaluate(async ([nfc, nfd]) => {
+    const NFC = CAFE_NFC, NFD = CAFE_NFD;
+    checkCafe(NFC, NFD);
+    const E = 'é', NIGHT = '夜', SMILE = '\u{1F600}';    // é (2 UTF-8 bytes), 夜 (3 bytes), 😀 (4 bytes, two UTF-16 units)
+    const n = await page.evaluate(async ([nfc, nfd, e, night, smile]) => {
       const {fileName} = await import(new URL('js/util.js', location.href).href);
       return {date: fileName('Sf 10/18/2026'), back: fileName('Gig\\Sf'), nfc: fileName(nfc), nfd: fileName(nfd), long: fileName('x'.repeat(300)),
-        ctl: fileName('Line one\nLine two\t!'), bad: fileName(':*?"<>|\n'), blank: fileName('   ')};
-    }, [NFC, NFD]);
-    const wantN = {date: 'Sf 10-18-2026', back: 'Gig-Sf', nfc: NFC, nfd: NFC, long: 'x'.repeat(150), ctl: 'Line oneLine two!', bad: 'setlist', blank: 'setlist'};
-    for(const k of Object.keys(wantN)) if(n[k] !== wantN[k]) fails.push(`fileName ${k}: got ${JSON.stringify(n[k])} (${[...n[k]].length} characters), expected ${JSON.stringify(wantN[k])}`);
+        ctl: fileName('Line one\nLine two\t!'), bad: fileName(':*?"<>|\n'), blank: fileName('   '),
+        dots: fileName('...Baby One More Time'), tail: fileName('Mt. Carmel. '), onlyDots: fileName('....'), dotsSpaces: fileName(' . . '),
+        rlo: fileName('Gig‮fdp.exe'), marks: fileName('‎A‏B‪C‫D‬E‭F⁦G⁧H⁨I⁩J'),
+        e160: fileName(e.repeat(160)), night160: fileName(night.repeat(160)), smile60: fileName(smile.repeat(60)), edge: fileName(e.repeat(99) + night)};
+    }, [NFC, NFD, E, NIGHT, SMILE]);
+    const wantN = {date: 'Sf 10-18-2026', back: 'Gig-Sf', nfc: NFC, nfd: NFC, long: 'x'.repeat(150), ctl: 'Line oneLine two!', bad: 'setlist', blank: 'setlist',
+      dots: 'Baby One More Time', tail: 'Mt. Carmel', onlyDots: 'setlist', dotsSpaces: 'setlist', rlo: 'Gigfdp.exe', marks: 'ABCDEFGHIJ',
+      e160: E.repeat(100), night160: NIGHT.repeat(66), smile60: SMILE.repeat(50), edge: E.repeat(99)};
+    for(const k of Object.keys(wantN)) if(n[k] !== wantN[k]) fails.push(`fileName ${k}: got ${JSON.stringify(n[k])} (${[...n[k]].length} characters, ${Buffer.byteLength(n[k])} bytes), expected ${JSON.stringify(wantN[k])}`);
+    if(n.nfd !== n.nfd.normalize('NFC') || codePoints(n.nfd) !== codePoints(NFC)) fails.push(`fileName of the NFD "Café" is ${codePoints(n.nfd)}, expected the NFC ${codePoints(NFC)}`);
+    if(n.long.length !== 150) fails.push(`fileName of 300 ASCII characters gave ${n.long.length}, expected exactly 150`);
+    /* the byte cut: within 200 UTF-8 bytes, at a whole character (no broken character, no lone half of a surrogate pair) */
+    for(const k of ['e160', 'night160', 'smile60', 'long', 'edge']){
+      const t = n[k], b = Buffer.byteLength(t);
+      if(b > 200) fails.push(`fileName ${k}: ${b} UTF-8 bytes, over 200`);
+      if(/[\ud800-\udfff]/u.test(t) || Buffer.from(t, 'utf8').toString('utf8') !== t || t.includes('�')) fails.push(`fileName ${k}: cut inside a character`);
+    }
     /* three charts, each in two of three setlists: the distinct charts weigh D, counted per setlist 2 x D */
     const src = {A: path.join(FIX, 'two-page.pdf'), B: path.join(FIX, 'three-page.pdf'), C: path.join(FIX, 'one-page.pdf')};
     const byFile = await importFiles(page, Object.values(src)), id = {};
@@ -1027,18 +1060,21 @@ export const loops = [
     await setDlLimit(page, D - 1);
     const r2 = await downloadAllRun(page);
     if(r2.end !== 'Too much to make at once') fails.push(`limit D - 1: ended on "${r2.end}" (toast "${r2.toast}"), expected the size refusal`);
-    else if(!r2.text.includes('That is too much to make at once on a tablet. Show one collection first, or download fewer setlists.')) fails.push('the size refusal reads ' + r2.text);
+    else if(!r2.text.includes('That is too much to make at once on a tablet. Show one collection first.')) fails.push('the size refusal reads ' + r2.text);
     if(r2.statuses.some(t => /^(Adding chart|Making)/.test(t))) fails.push('the size refusal came after work had started: ' + fmt(r2.statuses));
     if(r2.dls.length) fails.push('the size refusal downloaded ' + fmt(r2.dls.map(d => d.suggestedFilename())));
     await setDlLimit(page, 150e6);
     /* Stop while charts are added, and while the zip is made: nothing downloads, the box closes with the toast */
-    for(const at of [/^Adding chart 2 of 3: /, /^Making the zip file/]){
+    /* (the last chart's line too: Stop there must not go on to make the zip it then throws away) */
+    for(const at of [/^Adding chart 2 of 3: /, /^Adding chart 3 of 3: /, /^Making the zip file/]){
       const r = await downloadAllRun(page, {stopAt: at});
       if(!r.stoppedAt) fails.push(`Stop at ${at}: the busy line never matched: ${fmt(r.statuses)}`);
       if(r.dls.length) fails.push(`Stop at ${at} still downloaded ${fmt(r.dls.map(d => d.suggestedFilename()))}`);
       if(r.end !== 'closed' || r.toast !== 'Stopped. Nothing was downloaded.') fails.push(`Stop at ${at}: ended on "${r.end}" ${r.text}, toast "${r.toast}"`);
       const i = r.statuses.indexOf('Stopping…');
       if(i < 0 || r.statuses.length !== i + 1) fails.push(`Stop at ${at}: the busy lines went on after Stop: ${fmt(r.statuses)}`);
+      if(i >= 0 && r.statuses.slice(i).some(t => /^Making the zip file/.test(t))) fails.push(`Stop at ${at}: "Making the zip file…" shown after "Stopping…": ${fmt(r.statuses)}`);
+      if(String(at) !== String(/^Making the zip file/) && r.statuses.some(t => /^Making the zip file/.test(t))) fails.push(`Stop at ${at}: the zip was made although Stop came before it: ${fmt(r.statuses)}`);
     }
     const d = diff(before, await snapshot(page));
     if(d.length) fails.push('the library changed: ' + d.join('; '));
@@ -1056,6 +1092,28 @@ export const loops = [
       const z = await readZip(r3.dls[0]);
       const want = ['Setlists/Y.txt', ...['B', 'C'].map(k => `Songs/${fileNameOk(songs[id[k]].title)}.pdf`)].sort();
       if(fmt(Object.keys(z.files)) !== fmt(want)) fails.push(`with a collection shown the zip holds ${fmt(Object.keys(z.files))}, expected ${fmt(want)}`);
+    }
+    /* two charts titled 160 x "é" (320 UTF-8 bytes): the names in the zip's own directory are cut to 100 "é", the second gets
+       " (2)", and every entry name stays under 255 bytes (what a tablet's file system takes for one name) */
+    const lf = {L1: await chartPdf('dlall-L1.pdf', 'Long one'), L2: await chartPdf('dlall-L2.pdf', 'Long two')};
+    const byL = await importFiles(page, Object.values(lf)), LONG = E.repeat(160);
+    const lid = Object.keys(lf).map(k => byL[path.basename(lf[k])]), sl = await songsById(page);
+    for(const x of lid) await idbPut(page, 'songs', x, {...sl[x], song: LONG, artist: '', version: '', title: LONG});
+    await idbPut(page, 'sets', 'dlalllong', {id: 'dlalllong', name: 'Long names', items: lid.map(x => ({type: 'song', id: x})), colls: ['dlallband'], created: now, updated: Date.now()});
+    await s.goto();
+    const r4 = await downloadAllRun(page);
+    if(r4.dls.length !== 1) fails.push(`long titles: ${r4.dls.length} downloads, ended on "${r4.end}" ${r4.text} (toast "${r4.toast}")`);
+    else {
+      const z = await readZip(r4.dls[0]), cut = E.repeat(100), second = 'Songs/' + cut + ' (2).pdf';
+      const longOnes = z.dir.filter(e => e.name.startsWith('Songs/' + E)).map(e => e.name).sort();
+      const wantL = [second, 'Songs/' + cut + '.pdf'].sort();
+      if(fmt(longOnes) !== fmt(wantL)) fails.push(`long titles: the zip directory has ${fmt(longOnes.map(x => `${[...x].length} characters`))}, expected ${fmt(wantL.map(x => `${[...x].length} characters`))}`);
+      for(const e of z.dir){
+        if(e.nameBytes >= 255) fails.push(`zip entry ${JSON.stringify(e.name.slice(0, 40))}…: ${e.nameBytes} bytes, expected under 255`);
+        const last = Buffer.byteLength(e.name.split('/').filter(Boolean).at(-1) || '');
+        if(last > 255) fails.push(`zip entry ${JSON.stringify(e.name.slice(0, 40))}…: its file name is ${last} bytes`);
+      }
+      if(!z.dir.some(e => e.name === second && e.nameBytes === Buffer.byteLength(second))) fails.push('long titles: no " (2)" entry of the expected byte length');
     }
     assert(!fails.length, fails.join('; '));
     noErrors(s);
