@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-23: Updates that cannot get stuck
+- Setlist Stand now shows "Updated. Tap to reload" even if an update leaves the app blank, so a bad update can always be replaced by the next good one.
+- Left open, the app finds a new version by itself within about an hour (never during a song, and the banner waits while a box is open).
+- If another website on the same address deleted the app's offline files, it quietly rebuilds them the next time it is on screen with internet. Leave it open on the Library for a minute.
+
 ## 2026-11-23: A backup copy in your Google Drive, and a sync reminder
 - **Backup copy:** when a sync finishes, the app now also saves a full backup of your library in a "Backups" folder in your Google Drive, about once a week, and keeps the last four (older ones go to the Drive bin). If Drive is full or you press Stop, only the copy is skipped and the sync still finishes. A copy saved this way counts as a backup, so "Changes since your last backup" goes quiet until you change something. To use one: download the zip in the Drive app first, then Restore from backup.
 - **Sync reminder:** if you have not synced for a week or more, the reminder line says "Last synced 9 days ago." with a Sync button. The app never contacts Google by itself: this is worked out from the date alone.
