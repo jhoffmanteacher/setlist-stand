@@ -1,6 +1,6 @@
 /* The restore's question ("Restore this backup?", in plain words: what it adds, brings back, puts back and deletes, what is kept in
    Archived, what stays as it is) and the words of its result. Every name comes from the backup or this tablet and is escaped. */
-import {esc, modal, toast} from './util.js';
+import {esc, modal, toast, armed} from './util.js';
 import {oldVersion} from './newversion.js';
 import {KEEP_WORD, keepLimits} from './restoreplan.js';
 import {mb} from './zipread.js';
@@ -68,7 +68,10 @@ export function askRestore(plan, saved, drive){
     const ok = m.querySelector('[data-ok]'), nokeep = m.querySelector('[data-nokeep]');
     if(ok) ok.onclick = () => answer('keep');
     /* never the default: focus stays on the box (Enter there does nothing), and a quick tap that opened the box cannot land on it */
-    if(nokeep){ nokeep.disabled = true; setTimeout(() => { nokeep.disabled = false; }, 400); nokeep.onclick = () => answer('nokeep'); }
+    /* it throws charts and marks away: two taps, as every deletion (the first arms it for 3 s and gives focus back to the box, so
+       Enter there does nothing) */
+    if(nokeep){ nokeep.disabled = true; setTimeout(() => { nokeep.disabled = false; }, 400);
+      nokeep.onclick = () => { if(!armed(nokeep, 'Tap again: charts are not kept')){ m.firstElementChild.focus(); return; } answer('nokeep'); }; }
   });
 }
 
@@ -78,7 +81,6 @@ export function restoredText(n, sets, badGig, keep){
   const first = `Restored ${n} song${n == 1 ? '' : 's'} and ${sets} setlist${sets == 1 ? '' : 's'}` + (badGig ? `. ${badGig} gig date${badGig == 1 ? ' that was not a real date was' : 's that were not real dates were'} left out.` : '');
   const more = [];
   if(keep && keep.charts) more.push(`${keep.charts == 1 ? '1 chart' : keep.charts + ' charts'} from this tablet ${keep.charts == 1 ? 'is' : 'are'} in Archived, with ${keep.charts == 1 ? 'its' : 'their'} marks.`);
-  if(keep && keep.unreadable) more.push(`${keep.unreadable == 1 ? '1 chart on this tablet could not be read, so it was not kept' : keep.unreadable + ' charts on this tablet could not be read, so they were not kept'}.`);
   if(keep && keep.sets) more.push(keep.sets == 1 ? `A copy of 1 setlist was kept: ${keep.setNames[0]}.` : `Copies of ${keep.sets} setlists were kept: ${keep.setNames.join(', ')}.`);
   return {first, more};
 }

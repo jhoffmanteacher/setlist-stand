@@ -169,9 +169,10 @@ export async function restoreFrom(f, render, {drive = false} = {}){
     /* Every op that writes over or removes a record here carries the `updated` the plan read (null: there was none), so a change
        made while the question was open (another tab) refuses the whole write instead of being lost. A deletion marker only wins
        over a record here that is not newer than it. */
-    /* (a record here whose `updated` is not a plain number cannot be compared exactly once read again: it is written over unguarded) */
-    const exact = v => typeof v === 'number' && Number.isFinite(v);
-    const guard = (store, id) => { const r = here[store].get(id); return !r ? {ifUpdated:null} : exact(r.updated) ? {ifUpdated:r.updated} : {}; };
+    /* The check for a record or page as read: none, or no `updated` (an old bare-list page): it must still have none; a number or text:
+       exactly that; anything else (an object, NaN) cannot be compared once read again, so it is written over unguarded, as before. */
+    const check = u => u == null ? {ifUpdated:null} : (typeof u === 'string' || Number.isFinite(u)) ? {ifUpdated:u} : {};
+    const guard = (store, id) => { const r = here[store].get(id); return r ? check(r.updated) : {ifUpdated:null}; };
     const newerHere = (store, m) => { const r = here[store].get(m.id); return !!r && !r.deleted && (Number(r.updated) || 0) > (Number(m.updated) || 0); };
     /* the pages of a live song here that the restore writes over or deletes: one guarded delete per page (a stroke drawn meanwhile,
        even on a blank page, makes the write stale), then {deleteInkFor} for any stray page */
@@ -180,7 +181,7 @@ export async function restoreFrom(f, render, {drive = false} = {}){
       if(!t || t.deleted) return out;
       for(let p = 1; p <= (Number(t.pages) || 0); p++){
         const key = id + ':' + p, raw = plan.inkHere.get(key);
-        out.push({store:'ink', key, delete:true, ...(raw == null ? {ifUpdated:null} : exact(raw.updated) ? {ifUpdated:raw.updated} : {})});
+        out.push({store:'ink', key, delete:true, ...(raw == null ? {ifUpdated:null} : check(raw.updated))});
       }
       return out;
     };

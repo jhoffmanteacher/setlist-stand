@@ -53,6 +53,8 @@ export async function planRestore(data, incoming){
   const liveHere = (store, id) => { const r = here[store].get(id); return r && !r.deleted ? r : null; };
   /* What STAYS here as it is (the restore does not write over it): a live record whose id is not in the backup, or whose deletion in
      the backup is older than it. A chart and marks such a song holds are not lost either (an earlier "(before restore)" copy, say). */
+  /* a song here holds a chart only if its stored PDF is there and can be read (a record's hash alone is not the chart) */
+  const readable = async id => { try{ const f = await get('files', id); if(!f) return false; await f.slice(0, 1).arrayBuffer(); return true; }catch(err){ return false; } };
   const inBackup = list => new Map((list || []).map(r => [r.id, r]));
   const bSongs = inBackup(data.songs), bSets = inBackup(data.sets), bColls = inBackup(data.colls);
   const stays = (r, b) => !r.deleted && (!b || (b.deleted && num(r.updated) > num(b.updated)));
@@ -60,7 +62,7 @@ export async function planRestore(data, incoming){
      here that stay (marks from this tablet) */
   const holders = new Map(), addHolder = (hash, h) => { const k = String(hash || '').toLowerCase(); if(!k) return; if(!holders.has(k)) holders.set(k, []); holders.get(k).push(h); };
   for(const [id, {hash}] of incoming) addHolder(hash, {crop:(bSongs.get(id) || {}).crop, page:p => pageThere(id + ':' + p)});
-  for(const r of here.songs.values()) if(stays(r, bSongs.get(r.id))) addHolder(r.hash, {crop:r.crop, page:p => pageHere(r.id + ':' + p)});
+  for(const r of here.songs.values()) if(stays(r, bSongs.get(r.id)) && await readable(r.id)) addHolder(r.hash, {crop:r.crop, page:p => pageHere(r.id + ':' + p)});
   /* held: some song that stays after the restore has the same chart and every live mark (by full content); withCrop: and the same crop */
   const held = (t, marks, withCrop) => !!t.hash && (holders.get(String(t.hash).toLowerCase()) || []).some(h =>
     (!withCrop || key(h.crop === undefined ? null : h.crop) === key(t.crop === undefined ? null : t.crop)) &&
@@ -76,7 +78,7 @@ export async function planRestore(data, incoming){
   const lose = async (t, marks, withCrop = false) => {
     if(held(t, marks, withCrop)) return false;
     let f;
-    try{ f = await get('files', t.id); }catch(err){ songs.unreadable++; return false; }
+    try{ f = await get('files', t.id); if(f) await f.slice(0, 1).arrayBuffer(); }catch(err){ songs.unreadable++; return false; }
     if(!f){ if(marks.size) songs.noPdf++; return false; }
     keep.push({song:t, marks}); keepBytes += num(f.size);
     return true;
@@ -100,8 +102,10 @@ export async function planRestore(data, incoming){
   }
   for(const t of here.songs.values()) if(!t.deleted && !bSongs.has(t.id)) songs.stay++;
 
-  /* a setlist's songs and breaks, without the break ids (a kept copy gets fresh ones) */
-  const itemsKey = st => key((Array.isArray(st.items) ? st.items : []).map(it => it && it.type === 'break' ? {type:'break', name:it.name} : it));
+  /* what a setlist plays, item by item: each song as its chart and live marks here (a kept copy's items point at the archived copies,
+     which hold the same chart and marks), each break by its name (a kept copy gets fresh break ids) */
+  const plays = id => { const r = liveHere('songs', id); if(!r) return 'missing:' + id; const m = []; for(let p = 1; p <= num(r.pages); p++) m.push(sig(pageHere(id + ':' + p))); return key({h:String(r.hash || '').toLowerCase(), m}); };
+  const itemsKey = st => key((Array.isArray(st.items) ? st.items : []).map(it => !it ? null : it.type === 'break' ? {type:'break', name:it.name} : it.type === 'song' ? {type:'song', plays:plays(it.id)} : it));
   const setNames = new Set([...here.sets.values()].filter(r => !r.deleted).map(r => r.name).concat(data.sets.filter(r => !r.deleted).map(r => r.name)));
   const sets = {add:0, back:0, changed:[], removed:[], stay:0}, keepSets = [];
   for(const b of data.sets){
@@ -115,8 +119,8 @@ export async function planRestore(data, incoming){
     if(!t){ if(here.sets.has(b.id)) sets.back++; else sets.add++; continue; }
     if(sameRecord(t, b)) continue;
     const newer = num(t.updated) > num(b.updated), base = copyName(t.name);
-    /* an earlier "(before restore)" copy with the same songs and breaks that stays here already keeps it: no second copy */
-    const already = newer && [...here.sets.values()].some(r => stays(r, bSets.get(r.id)) && r !== t && (r.name === base || String(r.name).startsWith(base + ' (')) && itemsKey(r) === itemsKey(t));
+    /* an earlier "(before restore)" copy with the same songs, breaks, gig date and collections that stays here already keeps it: no second copy */
+    const already = newer && [...here.sets.values()].some(r => stays(r, bSets.get(r.id)) && r !== t && (r.name === base || String(r.name).startsWith(base + ' (')) && itemsKey(r) === itemsKey(t) && key(r.gig === undefined ? null : r.gig) === key(t.gig === undefined ? null : t.gig) && key(r.colls || []) === key(t.colls || []));
     sets.changed.push({id:t.id, name:t.name, newer, keep:newer && !already});
     if(newer && !already){
       let name = base;
@@ -143,22 +147,24 @@ export async function planRestore(data, incoming){
 }
 
 /* The copies' ops, after the person said Restore: each lost chart's stored bytes (read now, one at a time) as a new archived song with
-   its crop, collections and live marks, and each kept setlist under a fresh id and its free name. {charts:false}: the person chose
-   "Restore without keeping copies" (the charts were too big to keep): nothing is copied. Resolves to {ops, charts, sets, setNames,
-   unreadable}, or null when Stop was pressed. A chart this tablet cannot read is left out and counted (`unreadable`): it never stops
-   the restore. Throws an Error with a plain sentence (`plain`) when the charts are too big after all. */
+   its crop, collections and live marks, and each kept setlist under a fresh id and its free name, its songs that this restore copies
+   pointing at their copies (so it plays what it played before). {copies:false}: the person chose "Restore without keeping copies"
+   (the charts were too big to keep): nothing is copied. Resolves to {ops, charts, sets, setNames}, or null when Stop was pressed.
+   Throws an Error with a plain sentence (`plain`) when a chart the question promised to keep cannot be read now (the question counted
+   every chart it could not read: what is written must be what it said), or the charts are too big after all. */
 export async function buildKeeps(plan, job, {copies = true} = {}){
-  const ops = [];
-  let spent = 0, charts = 0, n = 0, unreadable = 0;
+  const ops = [], copyOf = new Map();
+  let spent = 0, charts = 0, n = 0;
   for(const {song:t, marks} of copies ? plan.keep : []){
     if(job.stopped) return null;
     job.say(`Keeping chart ${++n} of ${plan.keep.length}…`);
     /* COPY the bytes (Safari: a Blob read back from the files store can follow the record this write replaces) */
     let f, bytes;
-    try{ f = await get('files', t.id); if(f) bytes = await f.arrayBuffer(); }catch(err){ unreadable++; continue; }
+    try{ f = await get('files', t.id); if(f) bytes = await f.arrayBuffer(); }catch(err){ throw plain('A chart on this tablet could not be read just now. Nothing was changed. Try Restore again.'); }
     if(!f) continue;                                                  // gone since the plan: the song's own guard refuses the write
     if((spent += bytes.byteLength) > keepLimits.maxBytes) throw plain(`This restore would replace more charts than the tablet can keep in one go (more than ${mb(keepLimits.maxBytes)}). Nothing was changed.`);
-    ops.push(...archivedCopyOps(t, bytes, await sha256(bytes), oldVersion(t.version, KEEP_WORD), plan.taken, marks).ops);
+    const made = archivedCopyOps(t, bytes, await sha256(bytes), oldVersion(t.version, KEEP_WORD), plan.taken, marks);
+    ops.push(...made.ops); copyOf.set(t.id, made.copy.id);
     charts++;
   }
   if(job.stopped) return null;
@@ -166,9 +172,11 @@ export async function buildKeeps(plan, job, {copies = true} = {}){
   for(const {set:st, name} of copies ? plan.keepSets : []){
     const c = json(st);
     Object.assign(c, {id:unique(plan.taken), name, created:t0, updated:t0});
-    c.items = (Array.isArray(c.items) ? c.items : []).map(it => it && it.type === 'break' ? {...it, id:unique(plan.taken)} : it);   // fresh break ids, as Duplicate does
+    c.items = (Array.isArray(c.items) ? c.items : []).map(it => !it ? it
+      : it.type === 'break' ? {...it, id:unique(plan.taken)}                                    // fresh break ids, as Duplicate does
+      : it.type === 'song' && copyOf.has(it.id) ? {...it, id:copyOf.get(it.id)} : it);          // the chart it played, now in Archived
     ops.push({store:'sets', key:c.id, value:c, ifUpdated:null});
     setNames.push(c.name);
   }
-  return {ops, charts, sets:setNames.length, setNames, unreadable};
+  return {ops, charts, sets:setNames.length, setNames};
 }

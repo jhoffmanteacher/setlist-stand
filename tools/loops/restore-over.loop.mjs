@@ -49,8 +49,8 @@ const note = (id, text, u = 1000) => ({id, t: 'text', x: .5, y: .6, text, size: 
 
 /* A session whose puts can be made to fail (window.__fail = {store, key}: that record's put throws "disk full"), whose stored PDFs
    can be made unreadable (window.__failGet = [song ids]: reading that PDF from the files store throws, as a lost blob or Chrome's
-   "Failed to read large IndexedDB value" does; window.__failRead = n: the next n reads of a stored PDF's bytes reject, as Safari's
-   NotReadableError does), and which notes whether the restore question ever appeared (window.__asked). */
+   "Failed to read large IndexedDB value" does; window.__failBytes = [song ids]: the PDF read from the files store is a Blob whose
+   bytes cannot be read, nor any slice of it, as Safari's NotReadableError after an update does), and which notes whether the restore question ever appeared (window.__asked). */
 async function session(ctx){
   const s = await ctx.session();
   await s.context.addInitScript(() => {
@@ -60,14 +60,17 @@ async function session(ctx){
       if(f && this.name === f.store && String(a[1]) === f.key) throw new DOMException('The disk is full (test)', 'QuotaExceededError');
       return put.apply(this, a);
     };
-    const get = IDBObjectStore.prototype.get;
+    const get = IDBObjectStore.prototype.get, bad = new WeakSet();
     IDBObjectStore.prototype.get = function(k){
       if(this.name === 'files' && (window.__failGet || []).includes(String(k))) throw new DOMException('Failed to read large IndexedDB value (test)', 'UnknownError');
-      return get.call(this, k);
+      const req = get.call(this, k);
+      if(this.name === 'files' && (window.__failBytes || []).includes(String(k))) req.addEventListener('success', () => { if(req.result) bad.add(req.result); });
+      return req;
     };
-    const ab = Blob.prototype.arrayBuffer;
+    const ab = Blob.prototype.arrayBuffer, slice = Blob.prototype.slice;
+    Blob.prototype.slice = function(...a){ const r = slice.apply(this, a); if(bad.has(this)) bad.add(r); return r; };
     Blob.prototype.arrayBuffer = function(){
-      if(window.__failRead > 0 && !(this instanceof File)){ window.__failRead--; return Promise.reject(new DOMException('The file could not be read (test)', 'NotReadableError')); }
+      if(bad.has(this)) return Promise.reject(new DOMException('The file could not be read (test)', 'NotReadableError'));
       return ab.call(this);
     };
     window.__asked = 0;
@@ -99,11 +102,11 @@ function model(before, F, after, {keep = [], keepSets = []} = {}){
   const newSongs = Object.keys(after.songs).filter(k => !(k in want.songs)), newSets = Object.keys(after.sets).filter(k => !(k in want.sets));
   if(newSongs.length !== keep.length) errs.push(`${newSongs.length} new song record(s), expected ${keep.length} archived cop${keep.length == 1 ? 'y' : 'ies'}: ` + newSongs.map(k => after.songs[k].title).join(' | '));
   if(newSets.length !== keepSets.length) errs.push(`${newSets.length} new setlist(s), expected ${keepSets.length}: ` + newSets.map(k => after.sets[k].name).join(' | '));
-  const used = new Set();
+  const used = new Set(), copyOf = {};
   for(const from of keep){
     const t = before.songs[from], id = newSongs.find(k => !used.has(k) && after.songs[k].hash === t.hash);
     if(!id){ errs.push(`no archived copy holding the chart of "${t.title}" (hash ${String(t.hash).slice(0, 12)})`); continue; }
-    used.add(id);
+    used.add(id); copyOf[from] = id;
     const got = after.songs[id], version = (t.version ? t.version + ', ' : '') + 'before restore ' + today();
     const w = {id, song: t.song, artist: t.artist, version, archived: true, colls: t.colls, pages: t.pages, hash: t.hash, added: got.added, updated: got.updated, title: title(t.song, version, t.artist)};
     if('crop' in t) w.crop = t.crop;
@@ -121,7 +124,7 @@ function model(before, F, after, {keep = [], keepSets = []} = {}){
     const st = before.sets[from], name = st.name + ' (before restore)', id = newSets.find(k => after.sets[k].name === name);
     if(!id){ errs.push(`no setlist "${name}"`); continue; }
     const g = after.sets[id], oldIds = new Set(st.items.filter(it => it.type === 'break').map(it => it.id));
-    want.sets[id] = {...st, id, name, created: g.created, updated: g.updated, items: st.items.map((it, i) => it.type === 'break' ? {...it, id: (g.items[i] || {}).id} : it)};
+    want.sets[id] = {...st, id, name, created: g.created, updated: g.updated, items: st.items.map((it, i) => it.type === 'break' ? {...it, id: (g.items[i] || {}).id} : it.type === 'song' && copyOf[it.id] ? {...it, id: copyOf[it.id]} : it)};
     if(!(g.created > 0 && g.updated === g.created)) errs.push(`"${name}": created/updated ${g.created}/${g.updated}`);
     for(const it of g.items) if(it.type === 'break' && (oldIds.has(it.id) || it.id in after.songs || it.id in after.sets)) errs.push(`"${name}": the break keeps an id in use: ${it.id}`);
   }
@@ -347,7 +350,14 @@ async function loopAllOrNothing(ctx){
        restore writes over (and keeps no copy of); Restore then refuses, and the change made meanwhile is still there */
     const p2 = await s.context.newPage();
     await p2.goto(s.base + 'index.html'); await p2.waitForSelector('#libList');
+    /* an old page saved as a bare list (no `updated`) and a setlist saved with no `updated`: they are guarded too ("still none") */
+    await inStore(page, async S => {
+      const st = await S.get('sets', 'rs'); delete st.updated;
+      await S.putAll([{store: 'ink', key: 'ra:1', value: [{t: 'pen', c: '#1a1a1a', w: .003, p: [[.3, .3], [.4, .4]]}]}, {store: 'sets', key: 'rs', value: st}]);
+    });
     for(const [what, change] of [
+      ['(c2) a stroke on an old page saved as a bare list', S => S.putInk('ra', 1, [{id: 'meanwhile2', t: 'pen', c: '#d62828', w: .003, p: [[.5, .5], [.6, .6]], updated: Date.now()}])],
+      ['(c3) a rename of a setlist saved with no `updated`', async S => { const st = await S.get('sets', 'rs'); st.name = 'Renamed meanwhile'; await S.saveSet(st); }],
       ['(b) a stroke on a blank page', S => S.putInk('rb', 2, [{id: 'meanwhile', t: 'pen', c: '#1a1a1a', w: .003, p: [[.1, .1], [.2, .2]], updated: Date.now()}])],
       ['(c) an edit of a song the backup has unchanged', async S => { const a = await S.get('songs', 'ra'); a.artist = 'Edited meanwhile'; await S.saveSong(a); }]]){
       await pick(page, file);
@@ -369,12 +379,18 @@ async function loopAllOrNothing(ctx){
     const box = page.locator('.modal.restoreask');
     await box.waitFor({timeout: 60000});
     const q = (await box.locator('.box').innerText()).replace(/\s+/g, ' ');
-    assert(/The 2 charts this restore replaces \(about \d+ KB\) are too big to keep as copies on this tablet\. If you restore, they and their marks are gone, and no setlist copy is kept\. To keep them, Cancel and back up first\./.test(q), '(d) the question: ' + q);
+    assert(/The \d+ charts this restore replaces \(about \d+ KB\) are too big to keep as copies on this tablet\. If you restore, they and their marks are gone, and no setlist copy is kept\. To keep them, Cancel and back up first\./.test(q), '(d) the question: ' + q);
     assert(!/are kept:/.test(q), '(d) the question still says the charts are kept: ' + q);
     assert(!(await box.locator('[data-ok]').count()) && await box.locator('[data-nokeep]').textContent() === 'Restore without keeping copies' && !(await box.locator('[data-nokeep]').evaluate(b => b.classList.contains('pri'))), '(d) the buttons: ' + await box.locator('.btns').innerText());
+    const nk = box.locator('[data-nokeep]');
     await sleep(600); await page.keyboard.press('Enter'); await sleep(600);
-    assert(await box.count() === 1, '(d) Enter chose "Restore without keeping copies"');
-    await box.locator('[data-nokeep]').click();
+    assert(await box.count() === 1 && await nk.textContent() === 'Restore without keeping copies', '(d) Enter chose or armed "Restore without keeping copies"');
+    /* it throws charts and marks away: two taps. The first arms it; Enter then does nothing; the second restores */
+    await nk.click(); await sleep(300);
+    assert(await box.count() === 1 && await nk.textContent() === 'Tap again: charts are not kept', '(d) one tap on "Restore without keeping copies" did not just arm it: ' + (await box.count() ? await nk.textContent() : 'the box is gone'));
+    await page.keyboard.press('Enter'); await sleep(600);
+    assert(await box.count() === 1, '(d) Enter after the first tap restored without keeping copies');
+    await nk.click();
     assert(/^Restored 3 songs and 1 setlist$/.test(await waitToast(page, /^Restored|Nothing was changed/, 60000)), '(d): ' + await page.locator('#toast').textContent());
     assert(await closeRestored(page) === null, '(d) a restore without copies says it kept something');
     await page.evaluate(async () => { (await import(new URL('js/restoreplan.js', location.href).href)).keepLimits.maxBytes = 300e6; });
@@ -432,35 +448,59 @@ async function restoreOver(page, file, what){
   return {q, kept: await closeRestored(page)};
 }
 async function loopTablet(ctx){
-  /* (a) a chart this tablet cannot read never blocks a restore: counted and said, the rest kept, the backup restored */
-  for(const how of ['get', 'read']){
+  /* (a) a chart this tablet cannot read (the record, or only its bytes) never blocks a restore: the question counts it, the rest is
+     kept, the backup restored. A chart that cannot be read only AFTER the question promised to keep it stops the restore before the
+     write ("could not be read just now"): what is written is always what the question said. */
+  for(const how of ['get', 'bytes', 'bytes later']){
     const {s, file, data} = await seeded(ctx), page = s.page;
     try{
       const b0 = await snapshot(page);
       await page.evaluate(() => localStorage.removeItem('ss-last-backup'));
-      await pick(page, file);
       if(how === 'get') await page.evaluate(() => { window.__failGet = ['rb']; });
+      if(how === 'bytes') await page.evaluate(() => { window.__failBytes = ['rb']; });
+      await pick(page, file);
       const box = page.locator('.modal.restoreask');
       await box.waitFor({timeout: 60000});
       const q = (await box.locator('.box').innerText()).replace(/\s+/g, ' ');
-      if(how === 'get') assert(/1 chart on this tablet could not be read, so it cannot be kept\./.test(q) && /Charts and marks are kept: 1 chart from this tablet/.test(q), `(a ${how}) the question: ` + q);
-      else{ assert(/Charts and marks are kept: 2 charts from this tablet/.test(q), `(a ${how}) the question: ` + q); await page.evaluate(() => { window.__failRead = 1; }); }
+      if(how === 'bytes later'){
+        assert(/Charts and marks are kept: 2 charts from this tablet/.test(q) && !/could not be read/.test(q), `(a ${how}) the question: ` + q);
+        await page.evaluate(() => { window.__failBytes = ['rb']; });
+        await box.locator('[data-ok]').click();
+        assert(await waitToast(page, /\S/, 60000) === 'A chart on this tablet could not be read just now. Nothing was changed. Try Restore again.', `(a ${how}): ` + await page.locator('#toast').textContent());
+        await noModal(page, `(a ${how})`);
+        await page.evaluate(() => { window.__failBytes = null; });
+        expectSame(b0, await snapshot(page), `(a ${how}) a chart the question promised to keep could not be read: the library before (left) and after (right)`);
+        assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+        continue;
+      }
+      assert(/1 chart on this tablet could not be read, so it cannot be kept\./.test(q) && /Charts and marks are kept: 1 chart from this tablet/.test(q), `(a ${how}) the question: ` + q);
       await box.locator('[data-ok]').click();
       const msg = await waitToast(page, /^Restored|Nothing was changed/, 60000);
       assert(msg === 'Restored 3 songs and 1 setlist', `(a ${how}) a chart that cannot be read blocked the restore: ` + msg);
-      const kept = await closeRestored(page);
-      if(how === 'read') assert(/1 chart on this tablet could not be read, so it was not kept\./.test(kept || ''), `(a ${how}) the result box: ` + kept);
-      await page.evaluate(() => { window.__failGet = null; window.__failRead = 0; });
+      await closeRestored(page);
+      await page.evaluate(() => { window.__failGet = null; window.__failBytes = null; });
       /* copies were kept (in no backup yet), though nothing else here stays: this restore does not count as a backup */
       assert(await page.evaluate(() => localStorage.getItem('ss-last-backup')) === null, `(a ${how}) a restore that kept copies counted as a backup`);
-      const after = await snapshot(page);
-      /* which chart was not kept: get -> rb (named); read -> the first one read, rb or rc */
-      const kept1 = copiesOf(after).map(x => x.hash), lost = how === 'get' ? 'rb' : ['rb', 'rc'].find(id => !kept1.includes(b0.songs[id].hash));
-      const d = model(b0, data, after, {keep: ['rb', 'rc'].filter(id => id !== lost), keepSets: ['rs']});
-      assert(!d.length, `(a ${how}) the library differs from the backup plus the readable copy:\n    ` + d.slice(0, 12).join('\n    '));
+      const d = model(b0, data, await snapshot(page), {keep: ['rc'], keepSets: ['rs']});
+      assert(!d.length, `(a ${how}) the library differs from the backup plus the one readable copy:\n    ` + d.slice(0, 12).join('\n    '));
       assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
     } finally { await s.close(); }
   }
+
+  /* (g) a song here that stays and has rb's chart hash and marks, but no stored PDF, does not "hold" rb: rb is still kept */
+  { const {s, file, data} = await seeded(ctx), page = s.page;
+    try{
+      await inStore(page, async S => {
+        const b = await S.get('songs', 'rb'), ink = await S.get('ink', 'rb:1');
+        await S.putAll([{store: 'songs', key: 'rz', value: {...b, id: 'rz', archived: true}}, {store: 'ink', key: 'rz:1', value: ink}]);
+      });
+      await s.goto();
+      const b0 = await snapshot(page);
+      const {q} = await restoreOver(page, file, '(g)');
+      assert(/Charts and marks are kept: 2 charts from this tablet/.test(q), '(g) a song with no stored PDF counted as holding rb:\n' + q);
+      const d = model(b0, data, await snapshot(page), KEEP2);
+      assert(!d.length, '(g) the library differs from the model:\n    ' + d.slice(0, 12).join('\n    '));
+    } finally { await s.close(); } }
 
   const {s, file, data} = await seeded(ctx), page = s.page;
   try{
@@ -504,6 +544,13 @@ async function loopTablet(ctx){
     await closeRestored(page);
     for(const id of ['ra', 'rb', 'rc']) expectSame(data.songs.find(x => x.id === id), (await snapshot(page)).songs[id], `(d) ${id} after the restore`);
     assert(diff(e0, await snapshot(page)).length, '(d) nothing changed (test setup)');
+
+    /* (f) a gig date set here on a setlist whose songs an earlier copy already holds is not lost: a new copy keeps it */
+    await restoreOver(page, FB, '(f) B');
+    await inStore(page, async S => { const st = await S.get('sets', 'rs'); st.gig = '2026-12-24'; await S.saveSet(st); });
+    const {q: q6} = await restoreOver(page, file, '(f) A');
+    assert(/A copy of 1 setlist is kept as "Gig changed here \(before restore\) \(3\)"\./.test(q6), '(f) the setlist with a gig date changed here is not kept:\n' + q6);
+    assert(setCopiesOf(await snapshot(page)).some(x => x.gig === '2026-12-24'), '(f) no setlist copy has the gig date set here');
 
     /* (e) "last backup" is set only when the backup holds everything here: a setlist not in it, or a copy, keeps the reminder */
     await page.evaluate(() => localStorage.removeItem('ss-last-backup'));
