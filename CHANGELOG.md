@@ -1,8 +1,13 @@
 # Changelog
 
+## 2026-11-23: A save that fails says so
+- If the tablet is full (or the browser refuses to save), editing a song, archiving it, changing a setlist, reordering it or cropping now says so in plain words and leaves everything exactly as it was.
+- Tapping Remove, Add break or Duplicate twice in a hurry now does it only once.
+
 ## 2026-11-23: Safer restore, and very long names are cut
 - **Restore:** a file built to unpack into far more than it claims is refused with a plain message, instead of filling the tablet's memory. Nothing changes on the tablet when that happens. A backup over 1.5 GB is refused as too big to open.
 - **Long names:** song, artist and version names longer than 200 letters are cut when they are made (a very long file name, Copy song, Edit song, an old backup), and a share package or chart update file with a long name is added with the name cut instead of being refused.
+
 ## 2026-11-23: A mark can no longer land on the wrong song
 - While the next song is still appearing, drawing with the pen or tapping Clear now does nothing, so a mark can no longer land on the wrong song (it used to be saved on the new song, at the old page number).
 

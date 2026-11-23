@@ -986,7 +986,7 @@ const FAULTS = [
     loop: 'hardening: names are cut', why: 'a 240-character file name makes a song name a share package of it will carry and the other tablet refuses'},
   {id: 'names-v1-title-uncut', file: 'js/store.js', find: 's.song = cutName(n.song); s.artist = cutName(n.artist); s.version = cutName(n.version); }', replace: 's.song = n.song; s.artist = n.artist; s.version = n.version; }',
     loop: 'hardening: names are cut', why: 'an old backup\'s long title becomes a song name over 200 characters'},
-  {id: 'names-edit-uncut', file: 'js/library.js', find: 's.song = cutName(r.song); s.artist = cutName(r.artist); s.version = cutName(r.version);', replace: 's.song = r.song; s.artist = r.artist; s.version = r.version;',
+  {id: 'names-edit-uncut', file: 'js/library.js', find: 'song:cutName(r.song), artist:cutName(r.artist), version:cutName(r.version), colls:applyTicks', replace: 'song:r.song, artist:r.artist, version:r.version, colls:applyTicks',
     loop: 'hardening: names are cut', why: 'saving Edit song keeps a name over 200 characters'},
   {id: 'names-copy-uncut', file: 'js/copysong.js', find: 'song:cutName(cur.song), artist:cutName(cur.artist), version:cutName(version),', replace: 'version,',
     loop: 'hardening: names are cut', why: 'Copy song carries a name over 200 characters into a new song'},
@@ -998,7 +998,7 @@ const FAULTS = [
     loop: 'hardening: names are cut', why: 'a chart update file with a song name over 200 characters is refused whole instead of cut'},
   {id: 'names-cut-splits-emoji', file: 'js/names.js', find: 'v.slice(0, /[\\uD800-\\uDBFF]/.test(v[MAX_NAME - 1]) ? MAX_NAME - 1 : MAX_NAME).trimEnd()', replace: 'v.slice(0, MAX_NAME).trimEnd()',
     loop: 'hardening: names are cut', why: 'a name cut in the middle of an emoji ends in half a character'},
-  {id: 'saves-edit-old-way', file: 'js/library.js', find: "if(r && r.song) await commit(() => saveSong({...s, song:r.song, artist:r.artist, version:r.version, colls:applyTicks(s, r.checks)}), 'Could not save the song. Nothing was changed.');", replace: "if(r && r.song){ s.song = r.song; s.artist = r.artist; s.version = r.version; s.colls = applyTicks(s, r.checks); await saveSong(s); await load(); hooks.render(); }",
+  {id: 'saves-edit-old-way', file: 'js/library.js', find: "if(r && r.song) await commit(() => saveSong({...s, song:cutName(r.song), artist:cutName(r.artist), version:cutName(r.version), colls:applyTicks(s, r.checks)}), 'Could not save the song. Nothing was changed.');", replace: "if(r && r.song){ s.song = r.song; s.artist = r.artist; s.version = r.version; s.colls = applyTicks(s, r.checks); await saveSong(s); await load(); hooks.render(); }",
     loop: 'failed saves: Edit', why: 'Edit song changes the record the screen is drawn from before saving, as it did: a refused save leaves the new title in memory and no plain message'},
   {id: 'saves-archive-old-way', file: 'js/library.js', find: "await commit(() => saveSong({...s, archived:on}), 'Could not save that. Nothing was changed.');", replace: "s.archived = on; await saveSong(s); await load(); hooks.render();",
     loop: 'failed saves: Edit', why: 'Archive and Restore change the live record before saving, as they did: a refused save still moves the song between the lists'},
@@ -1014,7 +1014,7 @@ const FAULTS = [
     loop: 'failed saves: crop', why: 'a refused crop save still leaves the crop on the open song: the viewer draws it, print uses it and a later save writes it'},
   {id: 'saves-move-no-redraw', file: 'js/saving.js', find: "  hooks.render();\n  return ok;", replace: "  if(ok) hooks.render();\n  return ok;",
     loop: 'failed saves: drag', why: 'a refused reorder is not drawn again from storage: the rows keep their drag transforms and show an order that was never saved'},
-  {id: 'saves-no-plain-message', file: 'js/saving.js', find: "catch(err){ toast(explainError(err, fail)); }", replace: "catch(err){ throw err; }",
+  {id: 'saves-no-plain-message', file: 'js/saving.js', find: "    toast(explainError(err, fail));\n", replace: "    throw err;\n",
     loop: 'failed saves: setlist', why: 'a refused save is an unhandled rejection with no plain message, as before'},
 ];
 
