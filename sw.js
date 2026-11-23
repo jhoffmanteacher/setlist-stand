@@ -11,7 +11,7 @@
  *   server still has this same VERSION (another site may have wiped them).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-23-8';
+const VERSION = '2026-11-23-9';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -97,8 +97,10 @@ self.addEventListener('install', (event) => {
    ('ss-heal') once per page load and after each update check, only when online. Missing files are fetched again ONLY
    when the server still has THIS version (its sw.js holds the same VERSION): otherwise a newer version is out, its own
    install fills its own cache, and this cache is left alone (no files of another version under this version's name).
-   The cache is only (re)created once the version matched, so an old worker that is being replaced never brings back
-   a cache the new one just deleted. */
+   The cache is only (re)created once the version matched. (A newer worker activating in the middle of a refill could
+   still see this cache come back; it reads only its own cache, and its next activate deletes this one again.)
+   One refill at a time: a second request while one runs joins it (a load, a return to the screen and an 'online' burst
+   close together must not fetch everything three times). */
 async function heal() {
   const want = PRECACHE.map((u) => new URL(u, self.location.href).href);
   let have = new Set();
@@ -135,10 +137,12 @@ async function heal() {
   return 'healed';
 }
 
+let healing = null;
 self.addEventListener('message', (event) => {
   if (event.data === 'skip-waiting') self.skipWaiting();
   else if (event.data === 'ss-heal') {
-    event.waitUntil(heal().then(
+    healing = healing || heal().finally(() => { healing = null; });
+    event.waitUntil(healing.then(
       (r) => { if (event.source) event.source.postMessage({ type: 'ss-heal', result: r }); },
       () => {}));
   }

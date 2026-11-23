@@ -66,7 +66,7 @@
     if(r.waiting && sw.controller) show(r.waiting);
     track(r.installing);
     r.addEventListener('updatefound', () => track(r.installing));
-    heal();
+    if(!quiet()) heal();          // not under a song put back after a reload: the next return to the screen asks
   }
   function underDialog(){ const b = document.getElementById('update'); if(b) b.style.display = dialogOpen() ? 'none' : ''; }
   if(document.body) new MutationObserver(underDialog).observe(document.body, {childList: true});      // dialogs go to the end of <body>
