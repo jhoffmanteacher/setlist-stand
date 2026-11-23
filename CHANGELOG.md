@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-23: A mark can no longer land on the wrong song
+- While the next song is still appearing, drawing with the pen or tapping Clear now does nothing, so a mark can no longer land on the wrong song (it used to be saved on the new song, at the old page number).
+
 ## 2026-11-23: One ⋯ button per song, no Test connection
 - Each song in the Library has one **⋯** button for Edit, Copy, New version, Archive and Delete (Restore and Delete in Archived), so long titles fit: on an iPad held upright the title gets about twice the room. Delete asks "Delete <title>?" before it deletes anything.
 - The Google Drive box no longer has **Test connection**; Sync does the real job.
