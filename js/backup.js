@@ -3,6 +3,8 @@ import {explainError} from './errors.js';
 import {gigOf} from './gigdate.js';
 import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, ensureHashes, putAll, sha256, ID_RE} from './store.js';
 import {crc32, readCapped, directoryProblem, NOT_PACKAGE, TOO_MANY, mb} from './zipread.js';
+import {planRestore, buildKeeps} from './restoreplan.js';
+import {askRestore, restoredText, showRestored} from './restoreask.js';
 
 /* Backup version 3: library.json has songs, sets, colls (collections) and ink (with their deletion markers); files/<id>.pdf holds
    each live song's PDF. Version 2 (no colls) and version 1 (the prototype and the MobileSheets converter) are still read, and
@@ -70,14 +72,19 @@ export async function backupNow(b){
 export const restoreLimits = {maxFile:1.5e9, maxDirectory:10e6, maxJson:200e6, ratio:10, slack:100e6};
 
 /* Restore is all or nothing. First everything is checked (the zip is readable and undamaged, library.json is ours,
-   every song has its PDF and the PDF matches the hash the backup recorded); only then is it written, in one
-   transaction. Any problem, or an interrupted page, leaves the library exactly as it was. */
-export async function restoreFrom(f, render){
+   every song has its PDF and the PDF matches the hash the backup recorded); then, on a tablet that holds anything, the person is
+   asked, in plain words, what will be replaced (js/restoreask.js); only then is it written, in one transaction, together with the
+   archived copies of every chart and mark it would otherwise lose and a copy of every setlist changed here since the backup
+   (js/restoreplan.js). Any problem, a Cancel, a change made meanwhile in another tab, or an interrupted page, leaves the library
+   exactly as it was. Restored records keep the backup's own `updated` (a later Sync brings back what the other tablet changed since).
+   opts.drive: Google Drive is set up on this tablet (the question then says what the next Sync does). */
+export async function restoreFrom(f, render, {drive = false} = {}){
   if(!f) return;
   /* A box says what is happening, opened before the first await so nothing looks frozen: "Opening the backup…", "Checking
-     song 12 of 74…", "Saving to this tablet…". Stop works while it is only reading and checking (nothing has been written
-     yet) and says "Restore stopped. Nothing was changed."; from the one write on, Stop is taken away. */
-  const job = busy('Restoring a backup', 'Opening the backup…');
+     song 12 of 74…", "Comparing with this tablet…", then (after the question) "Keeping chart 1 of 2…", "Saving to this tablet…".
+     Stop works while it is only reading, checking and copying (nothing has been written yet) and says "Restore stopped. Nothing
+     was changed."; from the one write on, Stop is taken away. */
+  let job = busy('Restoring a backup', 'Opening the backup…');
   const stop = msg => { job.close(); toast(msg); };
   const wasStopped = () => { if(!job.stopped) return false; stop('Restore stopped. Nothing was changed.'); return true; };
   let data, zip, room = 0;
@@ -113,22 +120,12 @@ export async function restoreFrom(f, render){
   if(Number(data.version) > BACKUP_VERSION) return stop('That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.');
   const bad = validateBackup(data);
   if(bad) return stop(`That backup has something the app can't read (${bad}). Nothing was changed.`);
-  let n = 0, sets = 0, k = 0, badGig = 0;
-  const total = data.songs.filter(s => !s.deleted).length, room0 = room;
+  let n = 0, sets = 0, k = 0, badGig = 0, plan, keep;
+  const total = data.songs.filter(s => !s.deleted).length, room0 = room, incoming = new Map();     // incoming: song id -> {blob, hash}
   try{
-    const ops = [], skip = new Set();
-    /* A deletion marker only wins over a record here that is not newer than it. */
-    const local = {songs:new Map((await all('songs')).map(r => [r.id, r])), sets:new Map((await all('sets')).map(r => [r.id, r])), colls:new Map((await all('colls')).map(r => [r.id, r]))};
-    const newerHere = (store, m) => { const r = local[store].get(m.id); return !!r && !r.deleted && (Number(r.updated) || 0) > (Number(m.updated) || 0); };
     for(const s of data.songs){
       if(wasStopped()) return;
-      if(s.deleted){
-        skip.add(s.id);                 // the backup has no annotations for a deleted song: any it lists are left out
-        if(newerHere('songs', s)) continue;           // keep the newer song here, with its PDF and annotations
-        /* a deleted song: its PDF and annotations on this tablet go too, in the same transaction */
-        ops.push({store:'files', key:s.id, delete:true}, {deleteInkFor:s.id}, {store:'songs', key:s.id, value:marker(s)});
-        continue;
-      }
+      if(s.deleted) continue;
       job.say(`Checking song ${++k} of ${total}…`);
       const entry = zip.file('files/' + s.id + '.pdf');
       if(!entry) return stop(`That backup is missing the PDF for "${s.title || s.song || s.id}". Nothing was changed.`);
@@ -136,34 +133,87 @@ export async function restoreFrom(f, render){
       if(!buf) return stop(`That backup is too big to read: its PDFs add up to more than ${mb(room0)}. Nothing was changed.`);
       room -= buf.length;
       if(s.hash) s.hash = s.hash.toLowerCase();
-      /* JSZip no longer checks CRCs: a PDF is checked against its recorded SHA-256, or against the zip's CRC-32 when there is none */
-      if(s.hash ? await sha256(buf) !== s.hash : crc32(buf) !== (entry._data && entry._data.crc32) >>> 0) return stop(`That backup is damaged ("${s.title || s.song || s.id}" does not match). Nothing was changed.`);
+      /* JSZip no longer checks CRCs: a PDF is checked against its recorded SHA-256, or against the zip's CRC-32 when there is none.
+         The SHA-256 is kept either way: the plan compares the charts with it. */
+      const h = await sha256(buf);
+      if(s.hash ? h !== s.hash : crc32(buf) !== (entry._data && entry._data.crc32) >>> 0) return stop(`That backup is damaged ("${s.title || s.song || s.id}" does not match). Nothing was changed.`);
       upgradeSong(s);
-      /* this tablet's annotations of the song are replaced by the backup's (the ink puts come later in the same transaction) */
-      ops.push({store:'files', key:s.id, value:new Blob([buf], {type:'application/pdf'})}, {store:'songs', key:s.id, value:s}, {deleteInkFor:s.id}); n++;
+      incoming.set(s.id, {blob:new Blob([buf], {type:'application/pdf'}), hash:h});
     }
     for(const st of data.sets){
-      if(st.deleted){ if(!newerHere('sets', st)) ops.push({store:'sets', key:st.id, value:marker(st)}); continue; }
+      if(st.deleted) continue;
       /* A gig that is not a real date is dropped and counted (the rest of the setlist is kept, its `updated` as the backup has it);
          everywhere else a bad gig is just ignored when a list is drawn, and setProblem never refuses a set for it. */
       if(st.gig != null && !gigOf(st)){ delete st.gig; badGig++; }
-      upgradeSet(st); ops.push({store:'sets', key:st.id, value:st}); sets++;
+      upgradeSet(st);
+    }
+    if(wasStopped()) return;
+    job.say('Comparing with this tablet…');
+    plan = await planRestore(data, incoming);
+  }catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
+  if(wasStopped()) return;
+  /* An empty tablet (nothing live on it: deletion markers do not count) has nothing to lose, so it is not asked. Otherwise the box
+     closes while the question is open (nothing has been written; an update reload there loses nothing) and a new one opens after. */
+  if(!plan.empty){
+    job.close();
+    if(!(await askRestore(plan, data.saved, drive))){ toast('Restore cancelled. Nothing was changed.'); return; }
+    job = busy('Restoring a backup', 'Getting ready…');
+  }
+  try{ keep = await buildKeeps(plan, job); }
+  catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
+  if(wasStopped() || !keep) return;
+  try{
+    const ops = [], skip = new Set(), here = plan.here;
+    /* Every op that writes over or removes a record here carries the `updated` the plan read (null: there was none), so a change
+       made while the question was open (another tab) refuses the whole write instead of being lost. A deletion marker only wins
+       over a record here that is not newer than it. */
+    const guard = (store, id) => { const r = here[store].get(id); return {ifUpdated:r && r.updated != null ? r.updated : null}; };
+    const newerHere = (store, m) => { const r = here[store].get(m.id); return !!r && !r.deleted && (Number(r.updated) || 0) > (Number(m.updated) || 0); };
+    /* the pages of a live song here that the restore writes over or deletes: one guarded delete per page (a stroke drawn meanwhile,
+       even on a blank page, makes the write stale), then {deleteInkFor} for any stray page */
+    const inkGuards = id => {
+      const t = here.songs.get(id), out = [];
+      if(!t || t.deleted) return out;
+      for(let p = 1; p <= (Number(t.pages) || 0); p++){
+        const key = id + ':' + p, raw = plan.inkHere.get(key);
+        out.push({store:'ink', key, delete:true, ifUpdated:raw == null || raw.updated == null ? null : raw.updated});
+      }
+      return out;
+    };
+    for(const s of data.songs){
+      if(s.deleted){
+        skip.add(s.id);                 // the backup has no annotations for a deleted song: any it lists are left out
+        if(newerHere('songs', s)) continue;           // keep the newer song here, with its PDF and annotations
+        /* a deleted song: its PDF and annotations on this tablet go too, in the same transaction (a copy is kept when they would be lost) */
+        ops.push(...inkGuards(s.id), {store:'files', key:s.id, delete:true}, {deleteInkFor:s.id}, {store:'songs', key:s.id, value:marker(s), ...guard('songs', s.id)});
+        continue;
+      }
+      /* this tablet's annotations of the song are replaced by the backup's (the ink puts come later in the same transaction) */
+      ops.push(...inkGuards(s.id), {store:'files', key:s.id, value:incoming.get(s.id).blob}, {store:'songs', key:s.id, value:s, ...guard('songs', s.id)}, {deleteInkFor:s.id}); n++;
+    }
+    for(const st of data.sets){
+      if(st.deleted){ if(!newerHere('sets', st)) ops.push({store:'sets', key:st.id, value:marker(st), ...guard('sets', st.id)}); continue; }
+      ops.push({store:'sets', key:st.id, value:st, ...guard('sets', st.id)}); sets++;
     }
     for(const c of data.colls || []){                    // none in a version 1 or 2 backup
-      if(c.deleted){ if(!newerHere('colls', c)) ops.push({store:'colls', key:c.id, value:marker(c)}); continue; }
-      ops.push({store:'colls', key:c.id, value:c});
+      if(c.deleted){ if(!newerHere('colls', c)) ops.push({store:'colls', key:c.id, value:marker(c), ...guard('colls', c.id)}); continue; }
+      ops.push({store:'colls', key:c.id, value:c, ...guard('colls', c.id)});
     }
     for(const [k, v] of Object.entries(data.ink || {})) if(!skip.has(k.split(':')[0])) ops.push({store:'ink', key:k, value:upgradeInk(v).record});
     if(wasStopped()) return;
     job.lock('Saving to this tablet…');                 // the one write: from here Stop is gone, and Escape does nothing
-    await putAll(ops);
-    /* A restored library counts as backed up until the next change: the restored records are not "changes since the last backup". */
-    try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}
-  }catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
+    await putAll([...keep.ops, ...ops]);
+    /* A restored library counts as backed up until the next change: the restored records are not "changes since the last backup".
+       The copies it kept are in no backup yet, so a restore that kept any does not count. */
+    if(!keep.charts && !keep.sets) try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}
+  }catch(err){
+    return stop(err && err.name === 'StaleWrite' ? 'Something on this tablet changed while the restore was waiting. Nothing was changed. Try the restore again.'
+      : explainError(err, 'Could not restore that backup. Nothing was changed.'));
+  }
   /* The backup is written by now: a problem from here on must not say "Nothing was changed". */
   try{
     await load(); await ensureHashes(); job.close(); render();
-    toast(`Restored ${n} song${n == 1 ? '' : 's'} and ${sets} setlist${sets == 1 ? '' : 's'}` + (badGig ? `. ${badGig} gig date${badGig == 1 ? ' that was not a real date was' : 's that were not real dates were'} left out.` : ''));
+    showRestored(restoredText(n, sets, badGig, keep));
   }catch(err){ stop('The backup was restored, but the screen did not update. Reload the app to see it.'); }
   job.close();
 }

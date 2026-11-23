@@ -163,14 +163,40 @@ export async function download(page, action){
   await dl.saveAs(f);
   return {file: f, name: dl.suggestedFilename()};
 }
-/* Restore a Setlist Stand zip through the real Restore button and wait for the toast. */
+/* After a file is picked for Restore (with the toast emptied first): when the "Restore this backup?" box comes, press Restore ('ok')
+   or Cancel ('x'). Resolves to the box's text, or null when no box came (an empty tablet, or a refusal: the toast spoke first). */
+export async function answerRestore(page, answer = 'ok', timeout = 180000){
+  const h = await page.waitForFunction(() => document.querySelector('.modal.restoreask') ? 'ask'
+    : (document.querySelector('#toast').textContent.trim() ? 'toast' : false), null, {timeout});
+  if(await h.jsonValue() !== 'ask') return null;
+  const box = page.locator('.modal.restoreask');
+  const text = (await box.locator('.box').innerText()).replace(/[ \t]+/g, ' ').trim();
+  await box.locator(answer === 'ok' ? '[data-ok]' : '[data-x]').click();
+  return text;
+}
+/* After a restore's toast: the box that says what was kept in Archived ("Backup restored"), when one came, is read and closed with
+   OK. Resolves to its text, or null. */
+export async function closeRestored(page){
+  const box = page.locator('.modal.restoredone');
+  if(!(await box.count())) return null;
+  const text = (await box.locator('.box').innerText()).replace(/[ \t]+/g, ' ').trim();
+  await box.locator('[data-x]').click();
+  await page.waitForFunction(() => !document.querySelector('.modal.restoredone'), null, {timeout: 5000});
+  return text;
+}
+/* Restore a Setlist Stand zip through the real Restore button, pressing Restore in the question when it comes (a library that is not
+   empty), and wait for the toast; a "Backup restored" box is closed. Resolves to the toast; restoreZip.last holds {asked, kept}
+   (the question's text and the result box's text, or null). */
 export async function restoreZip(page, file, timeout = 180000){
   await page.evaluate(() => { const t = document.querySelector('#toast'); if(t) t.textContent = ''; });
   await page.click('#tLib');
   await page.setInputFiles('#restoreFile', file);
-  await page.waitForFunction(() => /Restored \d+ song|not a Setlist Stand backup/.test(document.querySelector('#toast').textContent), null, {timeout});
+  const asked = await answerRestore(page, 'ok', timeout);
+  await page.waitForFunction(() => /Restored \d+ song|not a Setlist Stand backup|Nothing was changed/.test(document.querySelector('#toast').textContent), null, {timeout});
   const msg = await page.locator('#toast').textContent();
   assert(/Restored/.test(msg), 'restore failed: ' + msg);
+  const kept = await closeRestored(page);
+  restoreZip.last = {asked, kept};
   await sleep(400);
   return msg;
 }

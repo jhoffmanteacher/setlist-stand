@@ -10,7 +10,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-import {FIX, TMP, ROOT, JSZip, PDFDocument, assert, sleep, sha256, idbAll, fileHashes, snapshot, diff, backupNow, wipe, download, openShareMenu} from './harness.mjs';
+import {FIX, TMP, ROOT, JSZip, PDFDocument, assert, sleep, sha256, idbAll, fileHashes, snapshot, diff, backupNow, wipe, download, openShareMenu, answerRestore, closeRestored} from './harness.mjs';
 import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 import {readPackage} from './share-lib.mjs';
 
@@ -50,12 +50,21 @@ async function zipFile(lib, files = {}){
   await fsp.writeFile(f, await z.generateAsync({type: 'nodebuffer'}));
   return f;
 }
+/* Restore through the button; the "Restore this backup?" question (a library that is not empty) is answered Restore, and the
+   "Backup restored" box (copies kept) is closed: its text is in lastKept. */
+let lastKept = null;
 async function restore(page, file, re = /\S/){
   await page.click('#tLib');
   await clearToast(page);
   await page.setInputFiles('#restoreFile', file);
-  return waitToast(page, re, 30000);
+  await answerRestore(page, 'ok', 30000);
+  const msg = await waitToast(page, re, 30000);
+  lastKept = await closeRestored(page);
+  return msg;
 }
+/* The archived copies a restore kept: live songs that are archived and whose version ends "before restore <date>". */
+const keptCopies = snap => Object.values(snap.songs).filter(x => !x.deleted && x.archived && /before restore \d{4}-\d\d-\d\d$/.test(x.version));
+
 async function importOne(page, files = ['one-page.pdf']){
   await page.click('#tLib');
   await clearToast(page);
@@ -477,7 +486,9 @@ print(json.dumps(out))`;
     await s.goto();
     await importOne(page);
     const id = Object.keys(await idbAll(page, 'songs'))[0];
-    await inStore(page, (S, id) => S.putInk(id, 1, [{id: 'k', t: 'pen', c: '#000', w: .003, p: [[0, 0], [1, 1]], updated: 1}]), id);
+    const k = {id: 'k', t: 'pen', c: '#000', w: .003, p: [[0, 0], [1, 1]], updated: 1};
+    await inStore(page, (S, [id, k]) => S.putInk(id, 1, [k]), [id, k]);
+    const before = await snapshot(page);
     const msg = await restore(page, await zipFile({songs: [{id, deleted: true, updated: 9e12, title: 'kept?', pages: 3}], ink: {[id + ':1']: {updated: 1, strokes: [{id: 'z'}]}}}));
     assert(msg === 'Restored 0 songs and 0 setlists', 'restore toast: ' + JSON.stringify(msg));
     await waitSongs(page, 0);
@@ -485,6 +496,14 @@ print(json.dumps(out))`;
     assert(!snap.files[id], 'the PDF of a song the backup deleted is still stored');
     assert(!Object.keys(snap.ink).some(k => k.startsWith(id + ':')), 'annotations of a song the backup deleted are still stored');
     assert(JSON.stringify(snap.songs[id]) === JSON.stringify({id, deleted: true, updated: 9e12}), 'marker stored as ' + JSON.stringify(snap.songs[id]));
+    /* nothing is lost (Jonathan, 2026-11-23, Q2): the deleted song's chart and its mark are kept in Archived */
+    const copies = keptCopies(snap);
+    assert(copies.length === 1, `expected ONE archived copy of the deleted song, found ${copies.length}: ` + JSON.stringify(copies.map(x => x.title)));
+    const [c] = copies, was = before.songs[id];
+    assert(snap.files[c.id] === before.files[id], 'the archived copy does not hold the stored PDF bytes of the deleted song');
+    assert(c.song === was.song && c.pages === was.pages && c.hash === before.files[id], 'the archived copy: ' + JSON.stringify(c));
+    expectSame((snap.ink[c.id + ':1'] || {}).strokes, [k], 'the archived copy\'s marks (left) vs the mark drawn here (right)');
+    assert(/^1 chart from this tablet is in Archived, with its marks\./m.test(lastKept || ''), 'no "Backup restored" box naming the kept chart: ' + JSON.stringify(lastKept));
     noErrors(s);
   } finally { await s.close(); }
 }},
@@ -547,11 +566,20 @@ print(json.dumps(out))`;
     expectSame(before.sets.gig, after.sets.gig, 'a newer local set after an older marker');
     assert(!after.ink[mix + ':1'], 'local ink the backup does not have was mixed into the restored song');
     assert(JSON.stringify(after.ink[mix + ':2'].strokes.map(x => x.id)) === '["z"]', 'restored song page 2 ink: ' + JSON.stringify(after.ink[mix + ':2']));
-    /* a marker NEWER than the local song still deletes it */
+    /* the marks b and c the backup lacks are not lost: ONE archived copy of mix holds its stored bytes and both marks */
+    const c1 = keptCopies(after);
+    assert(c1.length === 1, `expected ONE archived copy (of mix), found ${c1.length}: ` + JSON.stringify(c1.map(x => x.title)));
+    assert(after.files[c1[0].id] === before.files[mix], 'the archived copy of mix does not hold its stored PDF bytes');
+    expectSame([after.ink[c1[0].id + ':1']?.strokes, after.ink[c1[0].id + ':2']?.strokes], [[pen('b')], [pen('c')]], 'the archived copy of mix: its marks (left) vs the marks drawn here (right)');
+    /* a marker NEWER than the local song still deletes it, and its chart and mark a go to Archived */
     const msg2 = await restore(page, await zipFile({songs: [{id: keep, deleted: true, updated: 9999}]}));
     assert(msg2 === 'Restored 0 songs and 0 setlists', 'second restore toast: ' + JSON.stringify(msg2));
     const s2 = await snapshot(page);
     assert(s2.songs[keep].deleted && !s2.files[keep] && !s2.ink[keep + ':1'], 'a newer marker did not delete the song');
+    const c2 = keptCopies(s2).filter(x => x.id !== c1[0].id);
+    assert(c2.length === 1 && s2.files[c2[0].id] === before.files[keep], 'the deleted song\'s chart was not kept in Archived: ' + JSON.stringify(c2.map(x => x.title)));
+    expectSame(s2.ink[c2[0].id + ':1']?.strokes, [pen('a')], 'the deleted song\'s copy: its mark (left) vs mark a (right)');
+    expectSame(s2.songs[c1[0].id], after.songs[c1[0].id], 'the first copy after the second restore (it is not in the backup: it stays)');
     noErrors(s);
   } finally { await s.close(); }
 }},

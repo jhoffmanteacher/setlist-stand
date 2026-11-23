@@ -6,7 +6,7 @@
    read so a small file that inflates huge is stopped at a cap), every crop (bad parts are dropped, the rest kept). Songs the
    library already has (same SHA-256) are matched and left exactly as they are; nothing in this library is ever changed or
    replaced. Then ONE putAll() writes the new songs, their PDFs and the setlist: all or nothing. */
-import {esc, toast, modal, uid, hooks, pdfPageCount} from './util.js';
+import {esc, toast, modal, unique, hooks, pdfPageCount} from './util.js';
 import {state, putAll, load, newSong, sha256, ensureHashes, cleanCrop} from './store.js';
 import {displayName, cutName} from './names.js';
 import {explainError} from './errors.js';
@@ -148,9 +148,8 @@ function notice(title, text){
 
 /* Writes the plan in ONE transaction: every new song's PDF and record (fresh ids) and the setlist (a fresh id, fresh break
    ids, a name that does not collide with a setlist already here). Resolves to {added, setName}. */
-/* An id nobody has used: uid() can repeat when it is called in a tight loop (a big package), and a repeated key would silently
-   overwrite the song written before it. New version (js/library.js) makes the old chart's id with it too. */
-export const unique = taken => { let id = uid(), n = 0; while(taken.has(id)) id = uid() + (++n > 3 ? n.toString(36) : ''); taken.add(id); return id; };
+/* unique(taken): an id nobody has used (js/util.js, where New version's and a restore's copies get theirs too). */
+export {unique};
 
 async function commit(plan){
   const t = Date.now(), ops = [], ids = [];

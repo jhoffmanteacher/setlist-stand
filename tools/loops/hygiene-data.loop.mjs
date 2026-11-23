@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, snapshot, diff, backupNow, download} from './harness.mjs';
+import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, snapshot, diff, backupNow, download, answerRestore, closeRestored} from './harness.mjs';
 import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 const songCount = page => page.locator('#libList [data-open]').count();
@@ -89,7 +89,11 @@ export const loops = [
     await page.click('#view [data-allsets]'); await tab('lib');
     await clearToast(page);
     await page.setInputFiles('#restoreFile', dl2.file);
+    /* the setlist made after the backup is not in it: it stays, and nothing is replaced, so nothing is kept */
+    const asked = await answerRestore(page);
+    assert(/Nothing on this tablet is replaced\./.test(asked || '') && /1 setlist on this tablet is not in the backup\./.test(asked), 'the question: ' + JSON.stringify(asked));
     await waitToast(page, /^Restored/, 30000);
+    assert(!(await closeRestored(page)), 'a restore that replaced nothing said it kept something');
     await gone('after a restore');
     await tab('sets'); await gone('Setlists tab after a restore'); await tab('lib');
     /* the ONLY change since the restore is one pen stroke (an ink page, saved on its own): the reminder must still come */
@@ -104,6 +108,18 @@ export const loops = [
     await waitFor(async () => Object.values(await idbAll(page, 'ink')).some(v => (v.strokes || []).some(x => !x.deleted)), 'the stroke was not saved');
     await page.click('#vBack');
     await shown('after one stroke', /^Changes since your last backup \(today\)\./);
+    /* restoring that backup again would lose the stroke, so the song's chart and the stroke are kept in Archived: that copy is in no
+       backup yet, so this restore does NOT count as backed up and the reminder stays */
+    await page.click('#tLib');
+    await clearToast(page);
+    await page.setInputFiles('#restoreFile', dl2.file);
+    const asked2 = await answerRestore(page);
+    assert(/1 chart from this tablet, with its marks, goes to Archived/.test(asked2 || ''), 'the question does not say the chart is kept: ' + JSON.stringify(asked2));
+    await waitToast(page, /^Restored/, 30000);
+    assert(/1 chart from this tablet is in Archived/.test(await closeRestored(page) || ''), 'no "Backup restored" box naming the kept chart');
+    await waitFor(async () => Object.values(await idbAll(page, 'songs')).some(x => x.archived && /before restore/.test(x.version || '')), 'no archived copy was made');
+    await shown('after a restore that kept a copy', /^Changes since your last backup \(today\)\./);
+    await tab('sets'); await shown('Setlists tab after a restore that kept a copy', /^Changes since your last backup/); await tab('lib');
     noErrors(s);
   } finally { await s.close(); }
 }},
@@ -187,6 +203,7 @@ export const loops = [
     await fsp.writeFile(f1, await z1.generateAsync({type: 'nodebuffer'}));
     await clearToast(page);
     await page.setInputFiles('#restoreFile', f1);
+    assert(/It adds 1 song and 1 setlist\./.test(await answerRestore(page) || ''), 'the question for a version-1 backup over two songs does not say what it adds');
     const msg1 = await waitToast(page, /\S/, 30000);
     assert(msg1 === 'Restored 1 song and 1 setlist', 'v1 restore toast: ' + JSON.stringify(msg1));
     await waitSongs(page, 3);
@@ -224,6 +241,7 @@ export const loops = [
     /* restore on a full tablet: same words, nothing changed */
     await clearToast(page);
     await page.setInputFiles('#restoreFile', dl.file);
+    assert(await answerRestore(page), 'a restore over a library that is not empty did not ask first');
     const rmsg = await waitToast(page, /\S/, 30000);
     assert(rmsg === 'The tablet is full. Free up some space, then try again. Nothing was changed.', 'restore on a full tablet: ' + JSON.stringify(rmsg));
     expectSame(before, await snapshot(page), 'library after a restore on a full tablet');

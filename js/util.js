@@ -25,6 +25,10 @@ export async function pdfPageCount(bytes){
 export const $ = s => document.querySelector(s);
 export const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+/* An id nobody has used: uid() can repeat when it is called in a tight loop (a big package), and a repeated key would silently
+   overwrite the record written before it. `taken` is the set of ids in use; the new id is added to it. Share import, New version,
+   Copy song, a restore's kept copies and sync make ids with it (js/shareimport.js re-exports it for its old importers). */
+export const unique = taken => { let id = uid(), n = 0; while(taken.has(id)) id = uid() + (++n > 3 ? n.toString(36) : ''); taken.add(id); return id; };
 
 /* Modules call hooks.render() to redraw the home screen; main.js fills it in. */
 export const hooks = {render(){}};

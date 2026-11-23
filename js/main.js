@@ -13,7 +13,7 @@ import {startSplit, initSplit} from './split.js';
 import {importPackage} from './shareimport.js';
 import {importChartUpdates} from './chartupdate.js';
 import {takeReturn} from './googleauth.js';
-import {driveClick, announceSignIn} from './syncui.js';
+import {driveClick, announceSignIn, driveSetUp} from './syncui.js';
 import {onClick as collClick, initShown} from './collections.js';
 
 /* FIRST, before anything else runs: if the page has just come back from Google's sign-in, read the answer and take the
@@ -62,7 +62,7 @@ $('#splitFile').onchange = async e => { if(!ready){ e.target.value = ''; return;
 $('#shareFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importPackage(f); };
 $('#chartUpdateFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importChartUpdates(f); };
 $('#setTextFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importSetlistText(f, showSet); };
-$('#restoreFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
+$('#restoreFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render, {drive:driveSetUp()}); };
 
 $('#view').addEventListener('click', async e => {
   const b = e.target.closest('button'); if(!b) return;

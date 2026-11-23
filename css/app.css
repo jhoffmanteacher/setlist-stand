@@ -265,6 +265,12 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
 .textimport .box{width:min(640px,100%)}
 /* Import chart updates (js/chartupdate.js): one row per chart; the note under the title says why it is where it is */
 .chartupdate .box{width:min(640px,100%)}
+/* Restore's question and result (js/restoreask.js): the text scrolls, the buttons stay in view */
+.restoreask .box,.restoredone .box{width:min(640px,100%)}
+.restorebody{overflow:auto;min-height:0;display:flex;flex-direction:column;gap:12px;overflow-wrap:anywhere}
+.restorebody p{margin:0}
+.restorelist{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+.restorenames{margin:6px 0 0;padding-left:20px}
 .cu-list{flex:1 1 auto;min-height:120px}
 .cu-row{display:flex;gap:12px;align-items:center;min-height:54px;padding:6px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .cu-row.cu-off{color:var(--mute)}

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, snapshot, diff, restoreZip, backupNow, wipe, JSZip, PDFDocument, openSetMenu} from './harness.mjs';
+import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, snapshot, diff, restoreZip, backupNow, wipe, JSZip, PDFDocument, openSetMenu, answerRestore} from './harness.mjs';
 import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 /* ---------- small UI helpers (approaches copied from tools/smoke.mjs) ---------- */
@@ -171,6 +171,7 @@ async function restoreAny(page, file, timeout = 180000){
   await toLibrary(page);
   await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
   await page.setInputFiles('#restoreFile', file);
+  await answerRestore(page, 'ok', timeout);        // a backup that passes the checks meets the question (a library that is not empty)
   await page.waitForFunction(() => document.querySelector('#toast').textContent.trim() && !/^Adding/.test(document.querySelector('#toast').textContent), null, {timeout});
   await sleep(500);
   return page.locator('#toast').textContent();
@@ -583,7 +584,11 @@ async function loopInterrupt(ctx){
       const {page} = s;
       const b0 = await snapshot(page);
       await toLibrary(page);
+      await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
       await page.setInputFiles('#restoreFile', file);
+      /* the library is not empty, so nothing can be written before the question is answered: the moments count from the tap on
+         Restore (a reload while the question is open is "unchanged", and proves nothing) */
+      assert(await answerRestore(page, 'ok', 120000), 'the restore over a seeded library did not ask first');
       await sleep(delay);
       await page.reload({waitUntil: 'load', timeout: 120000}).catch(() => {});
       await page.waitForSelector('#libList, #view', {timeout: 60000});

@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {FIX, TMP, assert, sleep, sha256, snapshot, diff, JSZip, openBackupMenu} from './harness.mjs';
+import {FIX, TMP, assert, sleep, sha256, snapshot, diff, JSZip, openBackupMenu, answerRestore} from './harness.mjs';
 
 const SONGS = 100, KB = 400;
 async function bigBackup(){
@@ -92,6 +92,9 @@ async function loopRestoreProgress(ctx){
     await startWatch(page, /^Saving to this tablet/);
     await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
     await page.setInputFiles('#restoreFile', f);
+    /* the library is not empty: the question comes after the checking, and Stop (pressed on "Saving") comes after its Restore */
+    const asked = await answerRestore(page, 'ok', 120000);
+    assert(asked && /It adds 100 songs\./.test(asked) && /1 song on this tablet is not in the backup\. It stays as it is\./.test(asked), 'the question: ' + JSON.stringify(asked));
     await toastIs(page, /Restored|stopped|not a Setlist|damaged/, 'the restore gave no answer');
     const msg = await toastText(page);
     assert(msg === `Restored ${SONGS} songs and 0 setlists`, 'a Stop pressed during the write changed the outcome: "' + msg + '"');

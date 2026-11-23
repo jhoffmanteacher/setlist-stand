@@ -11,26 +11,27 @@
    Resolves to {ops, copy} (copy: the archived song, or null). Nothing is written here. */
 import {get, newSong, sha256, upgradeInk, inkRecord, reconcile, stamp, state} from './store.js';
 import {displayName} from './names.js';
-import {unique} from './shareimport.js';
+import {unique} from './util.js';
 
 export const allIds = () => new Set([...state.songs.map(x => x.id), ...state.sets.map(x => x.id)]);
 
 export async function newVersionOps(s, buf, {pages:n, hash}, old, taken = allIds(), {check = false} = {}){
-  const id = s.id, ops = [];
+  const id = s.id, ops = [], pages = [], marks = new Map();
+  for(let p = 1; p <= s.pages; p++){
+    const raw = await get('ink', id + ':' + p), rec = upgradeInk(raw).record;
+    pages.push({p, raw, rec});
+    marks.set(p, rec.strokes.filter(x => !x.deleted));
+  }
   let copy = null;
   if(old){
-    copy = newSong({song:s.song, artist:s.artist, version:oldVersion(s.version)}, s.pages, await sha256(old), s.colls || []);
-    copy.id = unique(taken);
-    copy.archived = true;
-    if(s.crop !== undefined) copy.crop = JSON.parse(JSON.stringify(s.crop));
-    ops.push({store:'files', key:copy.id, value:new Blob([old], {type:'application/pdf'})}, {store:'songs', key:copy.id, value:copy});
+    const made = archivedCopyOps(s, old, await sha256(old), oldVersion(s.version), taken, marks);
+    copy = made.copy; ops.push(...made.ops);
   }
   ops.push({store:'files', key:id, value:new Blob([buf], {type:'application/pdf'})});
-  for(let p = 1; p <= s.pages; p++){
-    const key = id + ':' + p, raw = await get('ink', key), rec = upgradeInk(raw).record, cur = rec.strokes, marks = cur.filter(x => !x.deleted);
+  for(const {p, raw, rec} of pages){
+    const key = id + ':' + p, cur = rec.strokes;
     /* opts.check: the page must still be as read (a stroke drawn meanwhile in another tab fails the whole write, never lost) */
     const guard = check ? {ifUpdated:raw && raw.updated != null ? raw.updated : null} : {};
-    if(copy && marks.length) ops.push({store:'ink', key:copy.id + ':' + p, value:inkRecord(marks)});   // the old chart keeps its marks
     if(p > n) ops.push({store:'ink', key, delete:true, ...guard});                                       // that page no longer exists
     else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []), rec), ...guard});     // keep deletion markers for the pages that remain (stamped over the marks and the page)
     else if(check) ops.push({store:'ink', key, delete:true, ...guard});           // a blank page, guarded too: a stroke drawn on it meanwhile refuses the batch
@@ -42,10 +43,26 @@ export async function newVersionOps(s, buf, {pages:n, hash}, old, taken = allIds
   return {ops, copy};
 }
 
+/* An archived copy of song `s` holding `bytes` (its chart as stored, copied: in Safari a Blob read back from the files store can
+   follow the record that replaces it): a NEW song with a fresh id (unique(taken)), in no setlist, `version` as given, the song's
+   crop and collections, and the given live marks of each page (`marks`: Map page -> strokes) under the copy's id, with their ids,
+   points and `updated` unchanged (so a sync can still recognise them). Used by New version (and chart updates) and by a restore
+   (js/restoreplan.js). Resolves nothing and writes nothing: returns {copy, ops}. */
+export function archivedCopyOps(s, bytes, hash, version, taken, marks){
+  const copy = newSong({song:s.song, artist:s.artist, version}, s.pages, hash, s.colls || []);
+  copy.id = unique(taken);
+  copy.archived = true;
+  if(s.crop !== undefined) copy.crop = JSON.parse(JSON.stringify(s.crop));
+  const ops = [{store:'files', key:copy.id, value:new Blob([bytes], {type:'application/pdf'})}, {store:'songs', key:copy.id, value:copy}];
+  for(const [p, list] of marks) if(list.length) ops.push({store:'ink', key:copy.id + ':' + p, value:inkRecord(list)});   // the old chart keeps its marks
+  return {copy, ops};
+}
+
 /* The version an old copy gets: "old 2026-11-21", or "in G, old 2026-11-21" (the date here; the whole stays within the
-   200 characters a text field takes, so share import, which refuses longer text, still takes it). */
-export function oldVersion(v){
-  const d = new Date(), tag = `old ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+   200 characters a text field takes, so share import, which refuses longer text, still takes it). A restore's copies use the
+   word "before restore": "in G, before restore 2026-11-23". */
+export function oldVersion(v, word = 'old'){
+  const d = new Date(), tag = `${word} ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const keep = String(v || '').slice(0, 200 - tag.length - 2).trim();
   return keep ? keep + ', ' + tag : tag;
 }

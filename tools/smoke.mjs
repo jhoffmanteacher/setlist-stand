@@ -23,6 +23,7 @@ import {createHash} from 'node:crypto';
 import {launchBrowser, WEBKIT} from './loops/browser.mjs';
 import {acquireSlot} from './loops/slot.mjs';
 import {songAct, songActIn, answerDelete, songDelete} from './loops/songrow.mjs';
+import {answerRestore, closeRestored} from './loops/harness.mjs';
 import {splitName, displayName} from '../js/names.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -320,7 +321,7 @@ async function stepSetlist(t){
   await page.waitForFunction(() => document.querySelectorAll('#view [data-playat]').length === 2, null, {timeout: 5000})
     .catch(() => { throw new Error('setlist did not show 2 songs after Add'); });
   await page.click('#view [data-allsets]');
-  const row = page.locator('#view [data-set]', {hasText: 'Gig'});
+  const row = setRow(page, 'Gig');
   await row.waitFor();
   assert(/2 songs/.test(await row.innerText()), 'setlist row does not say 2 songs');
   await row.click();
@@ -369,13 +370,18 @@ async function stepBackup(t){
   const ink0 = await idbAll(page, 'ink');
   assert(!ink0[t.data.inkKey], 'ink not deleted with its song');
 
-  await page.setInputFiles('#restoreFile', dl.file);
+  /* the setlist Gig is still here (its songs left it when they were deleted, after the backup): the question comes, and that
+     emptied Gig is kept as "Gig (before restore)" */
+  const asked = await pickRestore(page, dl.file);
+  assert(/It brings back 2 songs you deleted on this tablet\./.test(asked || '') && /A copy of 1 setlist is kept as "Gig \(before restore\)"\./.test(asked), 'the question: ' + JSON.stringify(asked));
+  await page.waitForFunction(() => /^Restored/.test(document.querySelector('#toast').textContent), null, {timeout: 30000});
+  assert(/A copy of 1 setlist was kept: Gig \(before restore\)\./.test(await closeRestored(page) || ''), 'no "Backup restored" box naming the kept setlist');
   await page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 2, null, {timeout: 15000})
     .catch(async () => { throw new Error(`after restore library shows ${await songCount(page)} songs`); });
   const ink1 = await idbAll(page, 'ink');
   assert(liveOf(ink1[t.data.inkKey]).length, 'ink not restored');
   await page.click('#tSets');
-  const row = page.locator('#view [data-set]', {hasText: 'Gig'});
+  const row = setRow(page, 'Gig');
   await row.waitFor({timeout: 5000});
   assert(/2 songs/.test(await row.innerText()), 'restored setlist row: ' + (await row.innerText()).replace(/\s+/g, ' '));
   await openSong(page, 'Three-page');
@@ -404,6 +410,15 @@ const songIds = st => {
   assert(st && Array.isArray(st.items) && !('songs' in st), 'set record is not {items:[...]} (old songs array?): ' + JSON.stringify(st).slice(0, 200));
   return st.items.filter(it => it.type === 'song').map(it => it.id);
 };
+/* Restore through the button: the toast is emptied first, and the "Restore this backup?" question (it comes when the library is not
+   empty) is answered Restore. Resolves to the question's text, or null when none came. */
+async function pickRestore(page, file){
+  await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
+  await page.setInputFiles('#restoreFile', file);
+  return answerRestore(page, 'ok', 60000);
+}
+/* The Setlists list row of the setlist named exactly `name` ("Gig", not "Gig (before restore)" or "Old Gig"). */
+const setRow = (page, name) => page.locator('#view [data-set]').filter({has: page.locator('.t').getByText(name, {exact: true})});
 async function setByName(page, name){
   const sets = Object.values(await idbAll(page, 'sets')).filter(s => !s.deleted && s.name === name);
   assert(sets.length === 1, `expected 1 set "${name}" in IndexedDB, found ${sets.length}`);
@@ -413,7 +428,7 @@ const gigSet = page => setByName(page, 'Gig');
 async function openGig(page){
   await toLibrary(page);
   await page.click('#tSets');
-  await page.locator('#view [data-set]', {hasText: 'Gig'}).click();
+  await setRow(page, 'Gig').click();
   await page.waitForSelector('#view [data-addto]');
 }
 async function drawOn(page, sheet){
@@ -680,7 +695,7 @@ async function stepDelete(t){
   assert(await page.locator('#view [data-playat]').count() === 1, 'setlist Gig does not show 1 song after delete');
   assert(!(await page.locator('#view').innerText()).includes('Edited Song'), 'deleted song still shown in setlist');
   await page.click('#view [data-allsets]');
-  assert(/1 song\b/.test(await page.locator('#view [data-set]', {hasText: 'Gig'}).innerText()), 'set row does not say 1 song');
+  assert(/1 song\b/.test(await setRow(page, 'Gig').innerText()), 'set row does not say 1 song');
 
   await toLibrary(page);
   const dl = await download(page, () => tapBackup(page));
@@ -709,7 +724,8 @@ async function stepRestoreV1(t){
   await fsp.writeFile(f, await zip.generateAsync({type: 'nodebuffer'}));
 
   await toLibrary(page);
-  await page.setInputFiles('#restoreFile', f);
+  const asked = await pickRestore(page, f);
+  assert(/It adds 1 song and 1 setlist\./.test(asked || ''), 'the question before a version 1 restore: ' + JSON.stringify(asked));
   await page.waitForSelector(`#libList [data-open="${id}"]`, {timeout: 15000})
     .catch(async () => { throw new Error('v1 song not in library after restore; toast: ' + await page.locator('#toast').textContent()); });
   /* Title-only records go through the legacy splitter (js/names.js). */
@@ -1463,7 +1479,10 @@ async function stepCropBackup(t){
   assert((await idbAll(page, 'songs'))[id].deleted === true, 'song record not a deletion marker');
   assert(!Object.keys(await idbAll(page, 'ink')).some(k => k.startsWith(id + ':')), 'ink of the deleted song remains');
 
-  await page.setInputFiles('#restoreFile', dl.file);
+  const asked = await pickRestore(page, dl.file);
+  assert(/It brings back 1 song you deleted on this tablet\./.test(asked || ''), 'the question does not say the deleted song comes back: ' + JSON.stringify(asked));
+  await page.waitForFunction(() => /^Restored/.test(document.querySelector('#toast').textContent), null, {timeout: 30000});
+  await closeRestored(page);          // a setlist that lost the song when it was deleted is kept as "<name> (before restore)"
   await page.waitForSelector(`#libList [data-open="${id}"]`, {timeout: 15000}).catch(() => { throw new Error('song not back after restore'); });
   const rc = (await songRec(page, s => s.id === id)).crop;
   assert(JSON.stringify(rc) === JSON.stringify(crop), `restored crop ${fmt(rc)}, expected ${fmt(crop)}`);
@@ -1892,8 +1911,21 @@ async function stepBackupReminder(t){
   /* restoring a backup counts as backed up */
   await page.click('#view [data-allsets]');
   await toLibrary(page);
-  await page.setInputFiles('#restoreFile', dl.file);
+  const asked = await pickRestore(page, dl.file);
+  assert(/A copy of 1 setlist is kept as "Order Test Renamed \(before restore\)"\./.test(asked || ''), 'the question does not say the renamed setlist is kept: ' + JSON.stringify(asked));
   await page.waitForFunction(() => /^Restored/.test(document.querySelector('#toast').textContent), null, {timeout: 30000});
+  assert(/A copy of 1 setlist was kept: Order Test Renamed \(before restore\)\./.test(await closeRestored(page) || ''), 'no "Backup restored" box naming the kept setlist');
+  /* the copy is in no backup yet: the reminder stays; the backup's name is back, the renamed one kept */
+  await wantNudge('after a restore that kept a setlist copy');
+  const names = Object.values(await idbAll(page, 'sets')).filter(x => !x.deleted).map(x => x.name);
+  assert(names.includes('Order Test') && names.includes('Order Test Renamed (before restore)') && !names.includes('Order Test Renamed'), 'setlists after the restore: ' + JSON.stringify(names));
+  /* a restore that keeps nothing counts as backed up: back up, then restore that same backup */
+  const dl2 = await download(page, () => page.click('#libNudge [data-backupnow]'));
+  await noNudge('after Back up now');
+  const asked2 = await pickRestore(page, dl2.file);
+  assert(/Nothing on this tablet is replaced\./.test(asked2 || ''), 'restoring the backup just made: ' + JSON.stringify(asked2));
+  await page.waitForFunction(() => /^Restored/.test(document.querySelector('#toast').textContent), null, {timeout: 30000});
+  assert(!(await closeRestored(page)), 'restoring the backup just made kept something');
   await noNudge('after a restore');
   await page.click('#tSets'); await noNudge('Setlists after a restore');
   await page.click('#tLib');
