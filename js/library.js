@@ -12,6 +12,7 @@ import {renderDrive, driveSetUp, syncNow, openDriveBox} from './syncui.js';
 import {backupNow} from './backup.js';
 import {copySong} from './copysong.js';
 import {renderNudge} from './nudge.js';
+import {commit} from './saving.js';
 import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
@@ -212,12 +213,11 @@ async function editSong(id){
   const s = songById(id); if(!s) return;
   const r = await form('Edit song', [{key:'song', label:'Title', value:s.song}, {key:'artist', label:'Artist', value:s.artist}, {key:'version', label:'Version', value:s.version}],
     {label:'Collections', options:collOptions(s)});
-  if(r && r.song){ s.song = cutName(r.song); s.artist = cutName(r.artist); s.version = cutName(r.version); s.colls = applyTicks(s, r.checks); await saveSong(s); await load(); hooks.render(); }
+  if(r && r.song) await commit(() => saveSong({...s, song:cutName(r.song), artist:cutName(r.artist), version:cutName(r.version), colls:applyTicks(s, r.checks)}), 'Could not save the song. Nothing was changed.');
 }
 async function setArchived(id, on){
   const s = songById(id); if(!s) return;
-  s.archived = on;
-  await saveSong(s); await load(); hooks.render();
+  await commit(() => saveSong({...s, archived:on}), 'Could not save that. Nothing was changed.');
 }
 /* Delete is the menu item and then this question (the two taps the "Never" list asks for). Cancel changes nothing. */
 function askDelete(s){
@@ -234,8 +234,7 @@ async function deleteSong(id){
   const s = songById(id); if(!s || !(await askDelete(s))) return;
   /* One transaction: the PDF and ink go, the song becomes a deletion marker and the setlists that had it are updated (js/deleteops.js,
      shared with sync's "Delete here"; each record gets a time later than its own last one, so the deletion beats what it was made from). */
-  const ops = await deleteOps('song', id);
-  try{ await putAll(ops); }
+  try{ await putAll(await deleteOps('song', id)); }       // a read that fails is said plainly too, and nothing is written
   catch(err){ toast(explainError(err)); }
   await load(); hooks.render();
 }

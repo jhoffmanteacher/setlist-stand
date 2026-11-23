@@ -1,5 +1,6 @@
 /* The crop editor: the whole current page with a draggable box. The box is stored as fractions of the full page. */
 import {$, toast} from './util.js';
+import {explainError} from './errors.js';
 import {saveSong, cropOf, CROP_MIN} from './store.js';
 import {V, renderPage, draw} from './viewer.js';
 
@@ -40,14 +41,24 @@ async function apply(whole){
   const song = V.song, rect = {x:round(st.rect.x), y:round(st.rect.y), w:round(st.rect.w), h:round(st.rect.h)}, pn = st.pn;
   const full = rect.x <= .002 && rect.y <= .002 && rect.w >= .996 && rect.h >= .996;
   const plain = x => !!x && typeof x === 'object' && !Array.isArray(x);
-  if(!plain(song.crop)) song.crop = {all:null, pages:{}};                                    // a crop that came damaged (a sync, a restore) is replaced by the new one
-  if(!plain(song.crop.pages)) song.crop.pages = {};
-  if(whole){ song.crop = {all:full ? null : rect, pages:{}}; }
-  else if(full && !song.crop.all) delete song.crop.pages[pn];
-  else song.crop.pages[pn] = rect;      // also when "no crop" is wanted on a page of a cropped song: the full rect overrides
-  await saveSong(song);
+  /* A copy: the viewer's record is changed only once the save went through (a refused save leaves the crop screen open, the page as it was). */
+  let crop = plain(song.crop) ? JSON.parse(JSON.stringify(song.crop)) : {all:null, pages:{}};   // a crop that came damaged (a sync, a restore) is replaced by the new one
+  if(!plain(crop.pages)) crop.pages = {};
+  if(whole){ crop = {all:full ? null : rect, pages:{}}; }
+  else if(full && !crop.all) delete crop.pages[pn];
+  else crop.pages[pn] = rect;           // also when "no crop" is wanted on a page of a cropped song: the full rect overrides
+  if(!await saveCrop(song, crop, 'Could not save the crop. Nothing was changed.')) return;
   close(); V.cache.clear(); draw();
   toast(whole ? 'Cropped the whole song' : `Cropped page ${pn}`);
+}
+/* Saves a copy of the song with `crop`; V.song (the state's record) takes it, and the new `updated`, only after the write went through.
+   A refused save says why and leaves the crop screen open as it was. True when saved. */
+async function saveCrop(song, crop, fail){
+  const next = {...song, crop};
+  try{ await saveSong(next); }
+  catch(err){ toast(explainError(err, fail)); return false; }
+  Object.assign(song, next);
+  return true;
 }
 const round = n => Math.round(n * 1e4) / 1e4;
 
@@ -60,10 +71,12 @@ export function initCrop(){
   $('#cropReset').onclick = async () => {
     if(!st) return;
     const song = V.song, pn = st.pn; let msg;
-    if(song.crop && song.crop.pages && song.crop.pages[pn]){ delete song.crop.pages[pn]; msg = 'Page crop removed'; }
-    else if(song.crop && song.crop.all){ song.crop.all = null; msg = 'Song crop removed'; }
+    const crop = song.crop && typeof song.crop === 'object' ? JSON.parse(JSON.stringify(song.crop)) : null;      // a copy, see apply()
+    if(crop && crop.pages && crop.pages[pn]){ delete crop.pages[pn]; msg = 'Page crop removed'; }
+    else if(crop && crop.all){ crop.all = null; msg = 'Song crop removed'; }
     else { st.rect = {x:0, y:0, w:1, h:1}; place(); toast('This page has no crop'); return; }
-    await saveSong(song); close(); V.cache.clear(); draw(); toast(msg);
+    if(!await saveCrop(song, crop, 'Could not remove the crop. Nothing was changed.')) return;
+    close(); V.cache.clear(); draw(); toast(msg);
   };
   addEventListener('keydown', e => { if(e.key === 'Escape' && !$('#cropper').hidden) close(); });   // also while the page is still being drawn (st not set yet): Escape and back close it
 

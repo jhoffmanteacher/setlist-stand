@@ -42,6 +42,7 @@ async function showChrome(page){
   if(await page.locator('#viewer.hide').count()){ await page.mouse.click(640, 420); await page.waitForSelector('#viewer:not(.hide)'); }
 }
 async function newSet(page, name, titles){
+  await sleep(450);                         // New setlist ignores a second tap within 400 ms of the last one (js/saving.js once()): a person cannot tap that fast
   await page.click('#tSets');
   if(await page.locator('#view [data-allsets]').count()) await page.click('#view [data-allsets]');
   await page.click('#view [data-newset]');
@@ -417,6 +418,7 @@ async function gigDialogLoop(ctx){
     assert(!(await page.locator('.modal').count()), 'a dialog came up over the list before any name held a date');
     await page.focus(ns); await page.keyboard.press('Enter');
     await page.locator('.modal input[type=text]').fill('Sf October 18 2026');
+    await sleep(450);                         // New setlist ignores a second tap within 400 ms of the last one (js/saving.js once()): a person cannot tap that fast
     await page.keyboard.press('Enter');
     await noModal(page);
     await page.waitForSelector('#view [data-setmenu]');

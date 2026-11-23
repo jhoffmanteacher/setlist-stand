@@ -211,6 +211,7 @@ async function cropUI(page, id, pn, nw, se, whole){
   return c;
 }
 async function newSet(page, name){
+  await sleep(450);                       // the same edit tapped again within 400 ms is ignored (js/saving.js once()): a person cannot tap that fast
   await toLibrary(page);
   await page.click('#tSets');
   await page.click('#view [data-newset]');
@@ -230,6 +231,7 @@ async function addSong(page, title){
   await page.waitForFunction(n => document.querySelectorAll('#items > li.row').length === n, n0 + 1, {timeout: 5000});
 }
 async function addBreak(page){
+  await sleep(450);                       // the same edit tapped again within 400 ms is ignored (js/saving.js once()): a person cannot tap that fast
   const n0 = await rowCount(page);
   await page.click('#view [data-addbreak]');
   await page.waitForFunction(n => document.querySelectorAll('#items > li.row').length === n, n0 + 1, {timeout: 5000});

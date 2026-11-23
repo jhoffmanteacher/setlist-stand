@@ -368,6 +368,7 @@ async function loopList(ctx){
     await page.click('#view [data-allsets]');
     await page.click('#view [data-newset]');
     await page.locator('.modal input[type=text]').fill('Fresh Undated');
+    await sleep(450);                       // New setlist ignores a second tap within 400 ms of the last one (js/saving.js once()): a person cannot tap that fast
     await page.click('.modal [data-ok]');
     await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Fresh Undated');
     assert(!('gig' in await waitFor(() => setNamed(page, 'Fresh Undated'), 'Fresh Undated not saved')), 'a setlist made without a date has a gig');

@@ -1,5 +1,5 @@
 import {$, esc, uid, ask, pick, armed, hooks, toast, form} from './util.js';
-import {load, state, songById, saveSet, markDeleted, liveItems} from './store.js';
+import {state, songById, saveSet, markDeleted, liveItems} from './store.js';
 import {openViewer} from './viewer.js';
 import {printDialog} from './print.js';
 import {downloadAll} from './downloadall.js';
@@ -10,6 +10,7 @@ import {gigOf, gigLong, gigShort, groupSets, isOpen, toggleGroup} from './gigdat
 import {gigDialog, newSetDialog, offerFill} from './gigui.js';
 import {menuBox} from './menubox.js';
 import {chooseTextFile} from './setlisttext.js';
+import {commit, once} from './saving.js';
 
 export let openSet = null;
 export const closeSet = () => { openSet = null; };
@@ -74,18 +75,23 @@ const setMenuItems = (st, n) => [
 
 async function duplicate(st){
   const copy = {id:uid(), name:st.name + ' copy', created:Date.now(), colls:[...(st.colls || [])], items:liveItems(st).map(it => it.type === 'break' ? {...it, id:uid()} : {...it})};
-  await saveSet(copy); await load(); openSet = copy.id; hooks.render();
+  await once('dup', () => commit(async () => { await saveSet(copy); openSet = copy.id; }, 'Could not make the copy. Nothing was changed.'));     // openSet only once the copy is stored
 }
+/* An edit of the open setlist's items: a COPY of the record is saved, the screen is drawn again from storage (js/saving.js). */
+const saveItems = (st, next) => commit(() => saveSet({...st, items:next}), 'Could not save the setlist. Nothing was changed.');
 
 const menuTitle = st => st.name.length > 40 ? st.name.slice(0, 40) + '\u2026' : st.name;
 async function changeGig(st){
   const r = await gigDialog('Gig date of ' + st.name, st.gig);
-  if(r && (r.gig || undefined) !== st.gig){ if(r.gig) st.gig = r.gig; else delete st.gig; await saveSet(st); await load(); hooks.render(); }
+  if(r && (r.gig || undefined) !== st.gig){
+    const next = {...st}; if(r.gig) next.gig = r.gig; else delete next.gig;
+    await commit(() => saveSet(next), 'Could not save the gig date. Nothing was changed.');
+  }
 }
-async function renameSet(st, save){ const n = await ask('Rename setlist', st.name); if(n){ st.name = n; await save(); } }
+async function renameSet(st){ const n = await ask('Rename setlist', st.name); if(n) await commit(() => saveSet({...st, name:n}), 'Could not rename the setlist. Nothing was changed.'); }
 async function setColls(st){
   const r = await form('Collections of ' + st.name, [], {label:'Collections', options:collOptions(st)});
-  if(r){ st.colls = applyTicks(st, r.checks); await saveSet(st); await load(); hooks.render(); }
+  if(r) await commit(() => saveSet({...st, colls:applyTicks(st, r.checks)}), 'Could not save the collections. Nothing was changed.');
 }
 
 /* Returns true when the click was for setlists. */
@@ -93,7 +99,10 @@ export async function onClick(b, d){
   const {sets, songs} = state;
   if('newset' in d){
     const r = await newSetDialog();
-    if(r){ const st = {id:uid(), name:r.name, items:[], colls:joinColls(), created:Date.now()}; if(r.gig) st.gig = r.gig; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
+    if(r){
+      const st = {id:uid(), name:r.name, items:[], colls:joinColls(), created:Date.now()}; if(r.gig) st.gig = r.gig;
+      await once('newset', () => commit(async () => { await saveSet(st); openSet = st.id; }, 'Could not make the setlist. Nothing was changed.'));
+    }
     return true;
   }
   if('importtext' in d){ chooseTextFile(); return true; }        // the file chooser opens in the tap; js/setlisttext.js does the rest
@@ -101,19 +110,18 @@ export async function onClick(b, d){
   if('dlall' in d){ downloadAll(sets.filter(inShown), shownColl()); return true; }
   if(d.set){ openSet = d.set; hooks.render(); return true; }
   if('allsets' in d){ openSet = null; hooks.render(); return true; }
-  if(d.dupset){ await duplicate(sets.find(s => s.id === d.dupset)); return true; }
-  if(d.delset){ if(!armed(b)) return true; await markDeleted('sets', d.delset); await load(); hooks.render(); return true; }
+  if(d.dupset){ const src = sets.find(s => s.id === d.dupset); if(src) await duplicate(src); return true; }
+  if(d.delset){ if(!armed(b)) return true; await once('delset', () => commit(() => markDeleted('sets', d.delset), 'Could not delete the setlist. Nothing was changed.')); return true; }
   if(d.play){ const st = sets.find(s => s.id === d.play); openViewer(entriesOf(st), 0); return true; }
   const st = sets.find(s => s.id === openSet);
   if(!st) return false;
   const items = liveItems(st);
-  const save = async () => { st.items = items; await saveSet(st); await load(); hooks.render(); };
   if(d.playat){ openViewer(entriesOf(st), +d.playat); return true; }
   if('addto' in d){
     /* With a collection shown the list holds its songs, and "Show all songs" reaches the rest. */
     const open = songs.filter(s => !s.archived), c = shownColl();
     const add = await pick(c ? open.filter(inShown) : open, c ? {all:open, ordered:true} : {ordered:true});
-    if(add.length){ items.push(...add.map(id => ({type:'song', id}))); await save(); }
+    if(add.length) await saveItems(st, [...items, ...add.map(id => ({type:'song', id}))]);
     return true;
   }
   if('setmenu' in d){
@@ -123,7 +131,7 @@ export async function onClick(b, d){
       if(id === 'print') return printDialog(st, items.filter(it => it.type === 'song').map(it => it.id));
       if(id === 'share') return shareSet(st);
       if(id === 'dup') return duplicate(st);
-      if(id === 'rename') return renameSet(st, save);
+      if(id === 'rename') return renameSet(st);
       if(id === 'colls') return setColls(st);
     }});
     /* The screen is drawn again after Duplicate, Rename and a saved date or collections: the button that opened the menu is gone. */
@@ -132,9 +140,14 @@ export async function onClick(b, d){
     }
     return true;
   }
-  if('addbreak' in d){ items.push({type:'break', id:uid(), name:'Break'}); await save(); return true; }
-  if(d.renbreak){ const it = items[+d.renbreak]; const n = await ask('Rename break', it.name); if(n){ it.name = n; await save(); } return true; }
-  if(d.rm){ items.splice(+d.rm, 1); await save(); return true; }
+  if('addbreak' in d){ await once('addbreak', () => saveItems(st, [...items, {type:'break', id:uid(), name:'Break'}])); return true; }
+  if(d.renbreak){
+    const k = +d.renbreak, it = items[k]; if(!it) return true;
+    const n = await ask('Rename break', it.name);
+    if(n) await saveItems(st, items.map((x, i) => i === k ? {...x, name:n} : x));
+    return true;
+  }
+  if(d.rm){ await once('remove', () => saveItems(st, items.filter((_, i) => i !== +d.rm))); return true; }
   return false;
 }
 
@@ -179,12 +192,11 @@ async function endDrag(e){
   if(e.type === 'pointercancel' || from === to){ hooks.render(); return; }
   await moveItem(from, to);
 }
-/* The one save path for a reorder (drag or keyboard): row `from` goes to place `to`. False when no set is open. */
+/* The one save path for a reorder (drag or keyboard): row `from` goes to place `to`. False when no set is open or the save was refused. */
 async function moveItem(from, to){
   const st = state.sets.find(s => s.id === openSet); if(!st){ hooks.render(); return false; }
-  const items = liveItems(st), [m] = items.splice(from, 1); items.splice(to, 0, m);
-  st.items = items; await saveSet(st); await load(); hooks.render();
-  return true;
+  const items = [...liveItems(st)], [m] = items.splice(from, 1); items.splice(to, 0, m);
+  return saveItems(st, items);          // a refused save draws the list again from storage: no row keeps a transform, nothing shows an order that was not saved
 }
 
 /* ---------- keyboard: with a handle focused, ArrowUp / ArrowDown move that row one place ----------

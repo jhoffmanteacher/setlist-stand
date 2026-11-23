@@ -207,6 +207,8 @@ async function settle(fn, ms = 3000){
   const end = Date.now() + ms; let p;
   for(;;){ p = await fn(); if(!p.length || Date.now() > end) return p; await sleep(80); }
 }
+/* Add break, Remove, Duplicate, New setlist and Delete each ignore a second tap of the SAME button within 400 ms (js/saving.js once()): a person cannot tap that fast, this walk can. */
+const quiet = () => new Promise(r => setTimeout(r, 450));
 const noModal = page => page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 5000});
 async function askFill(page, value){
   const i = page.locator('.modal input[type=text]');
@@ -780,6 +782,7 @@ A.newSet = {w: 2, plan: (M, r) => ({name: r.pick(SET_NAMES), when: r.chance(.5) 
     await m.locator('input[type=text]').fill(a.name);
     const gig = a.when && whenDate(a.when);
     if(gig) await m.locator('input[type=date]').fill(gig);
+    await quiet();
     await m.locator('[data-ok]').click();
     await noModal(s.page);
     await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, a.name, {timeout: 5000});
@@ -913,6 +916,7 @@ A.addBreak = {w: 2.5, plan: (M, r) => { const st = setPick(M, r, x => x.items.le
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
     await openSetUI(s, M, st);
+    await quiet();
     await s.page.click('#view [data-addbreak]');
     const rec = await until(async () => { const x = (await idbAll(s.page, 'sets'))[st.id]; return x && x.items.length === st.items.length + 1 ? x : null; }, 4000, 'the break in the set record');
     const last = rec.items[rec.items.length - 1];
@@ -937,6 +941,7 @@ A.removeItem = {w: 2, plan: (M, r) => { const st = setPick(M, r, x => x.items.le
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
     await openSetUI(s, M, st);
+    await quiet();
     await s.page.click(`#view [data-rm="${a.i}"]`);
     st.items.splice(a.i, 1);
   }};
@@ -944,8 +949,8 @@ A.dupSet = {w: 1.2, plan: (M, r) => { const st = setPick(M, r, () => true); retu
   desc: a => `duplicate ${a.set} (${a.inside ? 'inside the setlist' : 'from the list'})`,
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
-    if(a.inside){ await openSetUI(s, M, st); await openSetMenu(s.page, 'dup'); }
-    else { await toSets(s, M); await revealSet(s, M, st); await s.page.click(`#view [data-dupset="${st.id}"]`); }
+    if(a.inside){ await openSetUI(s, M, st); await quiet(); await openSetMenu(s.page, 'dup'); }
+    else { await toSets(s, M); await revealSet(s, M, st); await quiet(); await s.page.click(`#view [data-dupset="${st.id}"]`); }
     await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, st.name + ' copy', {timeout: 5000});
     const known = new Set(M.sets.map(x => x.id));
     const rec = await until(async () => Object.values(await idbAll(s.page, 'sets')).find(x => !known.has(x.id)), 4000, 'the copy');
@@ -979,6 +984,7 @@ A.deleteSet = {w: 0.8, plan: (M, r) => { const st = setPick(M, r, () => true); r
     const b = s.page.locator(`#view [data-delset="${st.id}"]`);
     await b.click();
     if(await b.textContent() !== 'Tap again') throw new Error(`first tap on Delete shows "${await b.textContent()}"`);
+    await quiet();
     await b.click();
     await s.page.waitForFunction(id => !document.querySelector(`#view [data-set="${id}"]`), st.id, {timeout: 5000});
     st.deleted = true;

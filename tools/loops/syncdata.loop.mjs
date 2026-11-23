@@ -66,6 +66,7 @@ async function loopStamps(ctx){
     for(const name of ['Gig', 'Second', 'Spare']){
       await page.click('#view [data-newset]');
       await page.locator('.modal input[type=text]').fill(name);
+      await new Promise(r => setTimeout(r, 450));        // New setlist ignores a second tap within 400 ms of the last one (js/saving.js once()): a person cannot tap that fast
       await page.click('.modal [data-ok]'); await noModal(page);
       await page.click('#view [data-allsets]').catch(() => {});
       await page.click('#tSets');
