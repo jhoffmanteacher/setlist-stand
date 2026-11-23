@@ -30,6 +30,7 @@ const PRECACHE = [
   'js/gigui.js',
   'js/downloadall.js',
   'js/nudge.js',
+  'js/saving.js',
   'js/setlists.js',
   'js/viewer.js',
   'js/backnav.js',
