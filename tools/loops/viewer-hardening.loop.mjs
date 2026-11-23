@@ -145,6 +145,78 @@ async function closeModal(page){
 }
 
 /* ======================================================================================================== */
+async function twoUp(page){
+  if(await page.locator('#viewer.hide').count()){ await page.mouse.click(640, 420); await page.waitForSelector('#viewer:not(.hide)'); }
+  if(await page.getAttribute('#v2up', 'aria-pressed') !== 'true') await page.click('#v2up');
+  await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 2, null, {timeout: 5000});
+}
+async function strokeOn(page, i, a, b){
+  const s = await page.locator('#stage .sheet').nth(i).boundingBox(), P = f => [s.x + s.width * f[0], s.y + s.height * f[1]];
+  await page.mouse.move(...P(a)); await page.mouse.down();
+  await page.mouse.move(...P(b), {steps: 8}); await page.mouse.up();
+}
+/* A pen stroke and Clear made while the next song is still being drawn (the old song's pages are still on screen while
+   the viewer already holds the new song) must change nothing stored. The window is held open by a gate on the next song's
+   getPage, so the test does not depend on timing. */
+async function songChangeWindow(ctx, two){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    const ids = await importFiles(page, [path.join(FIX, 'two-page.pdf'), path.join(FIX, 'three-page.pdf')]);
+    const A = ids['two-page.pdf'], B = ids['three-page.pdf'];
+    await newSet(page, two ? 'Window two' : 'Window one', [A.title, B.title]);
+    await page.click('#view [data-play]');
+    await page.waitForSelector('#viewer.on #stage .sheet canvas');
+    if(two) await twoUp(page); else await oneUp(page);
+    const p2 = two ? 1 : 0;                         // the sheet that shows page 2 (two pages: the right-hand one)
+    const at = (t, pn) => waitFor(async () => await title(page) === t && await page.evaluate(pn => [...document.querySelectorAll('#stage .ink')].some(c => +c.dataset.pn === pn), pn), `did not reach ${t} page ${pn}`);
+    await annotPen(page);
+    /* a mark on B page 2 (mB), then back to A's page 2 and a mark there (mA) */
+    if(!two){ await page.keyboard.press('ArrowRight'); await at(A.title, 2); }
+    await page.keyboard.press('ArrowRight'); await at(B.title, 1);
+    if(!two){ await page.keyboard.press('ArrowRight'); await at(B.title, 2); }
+    await strokeOn(page, p2, [.2, .3], [.5, .35]);
+    await waitFor(async () => liveOf((await inkAll(page))[B.id + ':2']).length === 1, 'setup: the mark on B page 2 was not saved');
+    if(!two){ await page.keyboard.press('ArrowLeft'); await at(B.title, 1); }
+    await page.keyboard.press('ArrowLeft'); await at(A.title, 2);
+    await strokeOn(page, p2, [.2, .3], [.5, .35]);
+    await waitFor(async () => liveOf((await inkAll(page))[A.id + ':2']).length === 1, 'setup: the mark on A page 2 was not saved');
+    /* hold the next song's first page: its prepared document's getPage waits for __hold; the cache is emptied so the
+       page must be drawn after the tap (the page on screen is not emptied: the cache leaves a connected canvas alone) */
+    await page.evaluate(async () => {
+      const {V} = await import('./js/viewer.js');
+      for(let i = 0; i < 3; i++) await Promise.allSettled([...V.cache.values(), ...[...V.prep.values()].map(e => e.p)]);
+      const e = V.prep.get(1); if(!e) throw new Error('setup: the next song (entry 1) is not prepared');
+      const d = await e.p, gp = d.getPage.bind(d);
+      window.__asked = 0; window.__hold = new Promise(r => { window.__release = r; });
+      d.getPage = n => { window.__asked++; return window.__hold.then(() => gp(n)); };
+      V.cache.clear();
+    });
+    const before = await inkAll(page);
+    await page.keyboard.press('ArrowRight');
+    await waitFor(() => page.evaluate(t => window.__asked > 0 && document.querySelector('#vTitle').textContent === t, A.title),
+      'setup: the turn into the next song did not start drawing its page');
+    /* in the window: a stroke on the page-2 sheet (still A's), then Clear (two taps) */
+    await strokeOn(page, p2, [.2, .7], [.5, .75]);
+    await page.click('#tClear'); await page.click('#tClear');
+    assert(await title(page) === A.title, 'setup: the window closed before the stroke and Clear were done');
+    await sleep(300);
+    await page.evaluate(() => window.__release());
+    await at(B.title, 1);
+    await sleep(400);
+    const after = await inkAll(page);
+    const diff = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(k => fmt(before[k]) !== fmt(after[k]));
+    assert(!diff.length, `a stroke or Clear made while ${B.title} was still being drawn changed stored marks: ` + diff.map(k => `${k}: ${fmt(before[k])} -> ${fmt(after[k])}`).join(' | '));
+    /* once the new song is up, the pen draws on it, on the page it is drawn on */
+    await strokeOn(page, 0, [.3, .5], [.6, .55]);
+    const end = await waitFor(async () => { const k = await inkAll(page); return liveOf(k[B.id + ':1']).length === 1 ? k : null; },
+      async () => `after the song change a stroke on ${B.title} page 1 was not saved there: ` + fmt(await inkAll(page)));
+    const diff2 = Object.keys({...before, ...end}).filter(k => k !== B.id + ':1' && fmt(before[k]) !== fmt(end[k]));
+    assert(!diff2.length, 'a late write changed other pages: ' + diff2.join(', '));
+    noErrors(s);
+  } finally { await s.close(); }
+}
+
 export const loops = [
 
 {name: 'viewer-hardening 1a: a turn to the next SONG while a stroke is held is refused, and the mark stays in its own song', async run(ctx){
@@ -709,4 +781,6 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     noErrors(s);
   } finally { await s.close(); }
 }},
+{name: 'viewer-hardening 15a: a pen stroke or Clear while the next song is still being drawn changes no stored mark (one page)', run: ctx => songChangeWindow(ctx, false)},
+{name: 'viewer-hardening 15b: the same with two pages showing', run: ctx => songChangeWindow(ctx, true)},
 ];

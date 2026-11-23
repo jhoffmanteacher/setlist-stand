@@ -73,6 +73,8 @@ async function loadSong(qi, page){
     if(tok !== V.tok){ dropDoc({p:Promise.resolve(doc)}); return; }
     retire(qi);
     Object.assign(V, {doc, id, qi, n:doc.numPages, song:songById(id), ink, brk:null});
+    /* From here until draw() puts the new pages up, the stage still shows the song just left; its canvases carry the
+       old song's marks map (ink._ink), so js/ink.js ignores a pen-down or Clear on them (they would land on THIS song). */
     V.page = 1; calcPer();
     V.page = page === 'last' ? lastStart() : Math.min(Math.max(1, +page || 1), V.n);
     if(V.per === 2 && V.page % 2 === 0) V.page--;
@@ -198,7 +200,7 @@ export async function draw(){
       const sh = document.createElement('div'); sh.className = 'sheet';
       sh.style.width = r.cw + 'px'; sh.style.height = r.ch + 'px';
       const ink = document.createElement('canvas'); ink.className = 'ink'; ink.dataset.pn = pns[i];
-      ink.width = r.cv.width; ink.height = r.cv.height; ink._crop = r.crop;
+      ink.width = r.cv.width; ink.height = r.cv.height; ink._crop = r.crop; ink._ink = V.ink;   // whose marks these are: js/ink.js draws only on the open song's canvases
       sh.append(r.cv, ink);
       paint(ink, V.ink.get(pns[i]) || []);
       return sh;

@@ -57,7 +57,9 @@ const toScreen = (cv, r, p) => { const cr = cropOfCv(cv); return [(p[0] - cr.x) 
 
 /* The gesture in progress: everything it needs is captured at pointerdown (song id, page, its strokes in c.arr,
    the canvas, the tool), so nothing that changes meanwhile (the song or page on screen, the tool) can send the mark
-   to another page or throw. The viewer refuses page turns while it is set (inkBusy). */
+   to another page or throw. The viewer refuses page turns while it is set (inkBusy). A pen-down on a canvas that is not
+   the open song's (cv._ink, set by draw()) is ignored: during a song change the old song's page is still on screen while
+   V already holds the new song. */
 let cur = null, raf = 0;
 /* A gesture whose pointer sent nothing for 3 s (the app was switched away, capture was lost) is stale: it no longer
    blocks page turns or a new pen-down. It still saves to its own song and page when it ends. */
@@ -167,6 +169,7 @@ export function inkPointerDown(e){
   const stylus = !V.annot && e.pointerType === 'pen';
   if((V.annot || stylus) && cv && !cur && (e.pointerType !== 'touch' || V.finger)){
     e.preventDefault();
+    if(cv._ink !== V.ink) return true;      // the next song is being put up: this page is leaving (js/viewer.js draw()); nothing is drawn
     try{ stage.setPointerCapture(e.pointerId); }catch(err){}
     const pn = +cv.dataset.pn, pt = ptOn(cv, e);
     if(!pt) return true;
@@ -301,6 +304,7 @@ export function initInk(){
     inkReset();
     if(!armed(e.currentTarget)) return;
     for(const cv of stage.querySelectorAll('.ink')){
+      if(cv._ink !== V.ink) continue;       // a page of the song just left, still on screen: not the open song's
       const pn = +cv.dataset.pn, before = V.ink.get(pn) || [];
       if(!liveStrokes(before).length) continue;
       const gone = before.map(s => s.deleted ? s : {id:s.id, deleted:true, updated:stamp(s)});
