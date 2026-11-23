@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {FIX, TMP, assert, sleep, idbAll, PDFDocument, JSZip, restoreZip, openBackupMenu, openSetMenu, snapshot, diff} from './harness.mjs';
-import {cacheName, precachePaths, waitInstalled, navCounter, goOffline, throttleProxy, until, makeSiteCopy, removeCopy, cacheKeys, swState, toRepoPath} from './site-copy.mjs';
+import {cacheName, precachePaths, waitInstalled, navCounter, goOffline, throttleProxy, until, makeSiteCopy, removeCopy, cacheKeys, swState, toRepoPath, intercept} from './site-copy.mjs';
 
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 const liveOf = v => (v && Array.isArray(v.strokes) ? v.strokes : []).filter(s => !s.deleted);
@@ -97,6 +97,14 @@ async function installedWithSong(ctx){
   return s;
 }
 const sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
+/* The app comes back on screen (no reload): what a tablet does when Setlist Stand is switched back to. */
+const backOnScreen = page => page.evaluate(() => { window.__ssHeal = null; Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); document.dispatchEvent(new Event('visibilitychange')); });
+/* SHA-256 of every entry of cache `name`, read in the page (null when missing). */
+const cachedHashes = (page, name, want) => page.evaluate(async ([name, want]) => {
+  const c = await caches.open(name), out = {};
+  for(const p of want){ const r = await c.match(p || './'); out[p] = r ? [...new Uint8Array(await crypto.subtle.digest('SHA-256', await r.arrayBuffer()))].map(b => b.toString(16).padStart(2, '0')).join('') : null; }
+  return out;
+}, [name, want]);
 
 export const loops = [
 {
@@ -387,6 +395,79 @@ export const loops = [
       assert(!d.length, 'library changed: ' + d.join('; '));
       assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
     } finally { ctx.server.root = ctx.root; await s.close(); removeCopy(v2); }
+  }
+},
+{
+  name: 'offline l: the offline copy is wiped while the app stays open: coming back on screen (no reload, within the hour) refills it',
+  async run(ctx){
+    const s = await installedWithSong(ctx);
+    let online = null;
+    try{
+      const {page} = s;
+      const name = cacheName(ctx.root), want = precachePaths(ctx.root);
+      await sleep(1000);                       // the load's own refill request has been answered (the copy was whole)
+      assert(await wipeCaches(page) === 0, 'test setup: the caches could not be deleted');
+      await backOnScreen(page);
+      await waitInstalled(page, name, want, 20000)
+        .catch(async e => { throw new Error(`coming back on screen did not refill the wiped offline copy: ${e.message} (the worker answered ${await page.evaluate(() => window.__ssHeal)})`); });
+      const said = await page.evaluate(() => window.__ssHeal);
+      assert(said === 'healed', `the worker answered "${said}" to the refill, want "healed"`);
+      assert(s.errors.length === 0, 'page errors while online: ' + s.errors.join(' | '));
+      await page.close();
+      online = await goOffline(s.context, ctx.server);
+      ctx.server.hits.length = 0;
+      const {page: p2, errors} = await newPage(s.context);
+      await p2.goto(ctx.base + 'index.html');
+      await p2.waitForSelector('#libList [data-open]', {timeout: 15000}).catch(() => { throw new Error('the app did not open offline after the refill'); });
+      await openSong(p2, 'Three-page');
+      assert(await pageNotBlank(p2), 'the song does not render offline after the refill');
+      assert(errors.length === 0, 'page errors offline: ' + errors.join(' | '));
+      noNetwork(ctx.server.hits);
+    } finally { if(online) await online(); await s.close(); }
+  }
+},
+{
+  name: 'offline m: a Wi-Fi login page answering in place of a file is never stored by the refill; clean answers fill the copy',
+  async run(ctx){
+    const s = await installedWithSong(ctx);
+    const file = '/vendor/pdf.worker.min.js';
+    let mode = 'redirect';
+    const restore = intercept(ctx.server, (req, res, p) => {
+      if(p !== file || mode === 'clean') return false;
+      ctx.server.hits.push(p);
+      if(mode === 'redirect') res.writeHead(302, {Location: '/login.html'}).end();
+      else res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache'}).end('<!DOCTYPE html><title>Log in to the Wi-Fi</title>');
+      return true;
+    });
+    const login = intercept(ctx.server, (req, res, p) => {
+      if(p !== '/login.html') return false;
+      res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'}).end('<!DOCTYPE html><title>Log in to the Wi-Fi</title>');
+      return true;
+    });
+    try{
+      const {page} = s;
+      const name = cacheName(ctx.root), want = precachePaths(ctx.root);
+      await sleep(1000);
+      for(const m of ['redirect', 'page']){
+        mode = m;
+        assert(await wipeCaches(page) === 0, 'test setup: the caches could not be deleted');
+        await backOnScreen(page);
+        await until(() => page.evaluate(() => window.__ssHeal), `the worker never answered the refill request (${m})`, 15000);
+        const said = await page.evaluate(() => window.__ssHeal);
+        assert(said === 'refused', `with ${file} answered by a login ${m === 'redirect' ? 'redirect' : 'page (status 200, text/html)'} the refill answered "${said}", want "refused"`);
+        await sleep(500);
+        const keys = await cacheKeys(page, name) || [];
+        assert(!keys.length, `the refill stored ${keys.length} file(s) although ${file} came back as a login ${m}: ${keys.slice(0, 4).map(k => k || './').join(', ')}${keys.includes(file.slice(1)) ? ' (including the login page as ' + file + ')' : ''}`);
+      }
+      /* the Wi-Fi lets it through: the next time on screen fills the copy, with the server's own bytes */
+      mode = 'clean';
+      await backOnScreen(page);
+      await waitInstalled(page, name, want, 20000)
+        .catch(async e => { throw new Error(`clean answers did not refill the copy: ${e.message} (the worker answered ${await page.evaluate(() => window.__ssHeal)})`); });
+      const got = await cachedHashes(page, name, want);
+      const wrong = want.filter(p => got[p] !== sha(fs.readFileSync(path.join(ctx.root, toRepoPath(p)))));
+      assert(!wrong.length, 'refilled entries that differ from the files on the server: ' + wrong.map(p => p || './').join(', '));
+    } finally { login(); restore(); await s.close(); }
   }
 },
 ];

@@ -15,8 +15,8 @@
    Update checks: at most once per GAP, only while the app is on screen, online, and no song/split/box is open. Kept in
    memory only (no storage key); the page load counts as a check (the browser checked sw.js on that navigation).
    Refill: another site on the same github.io address can delete this app's offline copy (Cache Storage belongs to the
-   whole address). Once per page load, and after each update check, the worker is asked ('ss-heal') to fetch what is
-   missing again; it does so only when the server still has the SAME version (sw.js heal()). */
+   whole address). On each page load and each time the app is on screen (maybeCheck), the worker is asked ('ss-heal') to
+   fetch what is missing again; it does so only when the server still has the SAME version (sw.js heal()). */
 (function(){
   'use strict';
   if(!('serviceWorker' in navigator)) return;
@@ -25,8 +25,11 @@
   const TICK = 5 * 60 * 1000;          // the timer only compares two numbers
   let reg = null, asked = false, reloaded = false, last = Date.now(), beforeReload = null;
 
-  /* The one place that says "a song, the songbook splitter or a restore/backup box is open". */
-  const quiet = () => { const c = document.body ? document.body.classList : null; return !!c && (c.contains('playing') || c.contains('splitting') || c.contains('busy')); };
+  /* A dialog (js/util.js modal(): Edit song, a chart update list, a text import review...) sits UNDER the banner
+     (.modal z-index 30, #update 50), so the banner is hidden while one is open and a tap cannot throw the dialog away. */
+  const dialogOpen = () => !!document.querySelector('.modal');
+  /* The one place that says "a song, the songbook splitter, a restore/backup box or a dialog is open". */
+  const quiet = () => { const c = document.body ? document.body.classList : null; return !!c && (c.contains('playing') || c.contains('splitting') || c.contains('busy') || dialogOpen()); };
   function reloadNow(){
     if(reloaded) return; reloaded = true;
     try{ if(beforeReload) beforeReload(); }catch(e){ /* the song is not put back; the reload still happens */ }
@@ -41,6 +44,7 @@
     const note = banner();
     note.hidden = false;
     note.onclick = () => {
+      if(dialogOpen()) return;                                     // hidden under a dialog: never acted on
       if(w.state === 'redundant'){ note.hidden = true; return; }   // that version was replaced: wait for the next banner
       asked = true;
       if(w.state === 'activated') reloadNow();                     // another tab already switched to it: just load it
@@ -64,17 +68,23 @@
     r.addEventListener('updatefound', () => track(r.installing));
     heal();
   }
-  /* Never mid-song (or mid-split, or under a restore/backup box): a controllerchange then (another tab's tap) waits; this
+  function underDialog(){ const b = document.getElementById('update'); if(b) b.style.display = dialogOpen() ? 'none' : ''; }
+  if(document.body) new MutationObserver(underDialog).observe(document.body, {childList: true});      // dialogs go to the end of <body>
+  /* Never mid-song (or mid-split, or under a restore/backup box or a dialog): a controllerchange then (another tab's tap) waits; this
      tab's own tap only happens where the banner shows. */
   sw.addEventListener('controllerchange', () => { if(asked && !quiet()) reloadNow(); });
   /* Listened for from the start, so the kill switch's message is not missed before load. */
   sw.addEventListener('message', e => { if(e.data && e.data.type === 'ss-sw-killed') reloadNow(); });
 
+  /* Every time the app is on screen (and on each tick), online, with no song, split, box or dialog open: first the refill
+     (another site may have wiped the offline copy since; it costs one look at the cache when nothing is missing), then,
+     at most once per GAP, the update check. */
   function maybeCheck(){
     if(!reg || document.visibilityState !== 'visible' || quiet() || navigator.onLine === false) return;
+    heal();
     if(Math.abs(Date.now() - last) < GAP) return;
     last = Date.now();
-    reg.update().then(heal, () => {});      // offline, or the server is down: quiet; the next trigger tries again after GAP
+    reg.update().catch(() => {});      // offline, or the server is down: quiet; the next trigger tries again after GAP
   }
   document.addEventListener('visibilitychange', maybeCheck);
   addEventListener('online', maybeCheck);

@@ -20,7 +20,8 @@ Most problems. The fix is to undo the push; every tablet then updates as usual (
    `node tools/loops.mjs --only live --live https://jhoffmanteacher.github.io/setlist-stand/ --wait 600`
 7. On the tablet: open the app, tap "Updated. Tap to reload" when it appears. The banner comes from a small separate
    file (js/boot.js), so it appears even when the broken push left the app blank. An app left open finds the fix by
-   itself within about an hour (while no song is open); opening it again finds it at once.
+   itself within about an hour (while no song is open). Closing the app completely (step 8) and opening it again finds
+   it at once.
 8. No banner at all (the broken push was js/boot.js or index.html itself): close the app completely (iPad: swipe it
    away in the app switcher; Android: close it from Recent apps; and close any browser tab with it), then open it again
    with internet. The fix takes over once no copy of the app is open. If even that does not help: situation (b).
@@ -86,6 +87,7 @@ Sync copies a change on one tablet to the other, so a mistake can be copied too 
 
 ## (g) The app does not open without internet although it did before
 Another website on the same address (jhoffmanteacher.github.io, for example the guitar-class site) can delete Setlist
-Stand's offline copy on a tablet. Open Setlist Stand once WITH internet: it refills its offline copy by itself (no
-message, nothing to tap). Then try again without internet. If a new version is waiting ("Updated. Tap to reload"),
+Stand's offline copy on a tablet. Open Setlist Stand WITH internet and leave it open on the Library for a minute: it
+refills its offline copy by itself (no message, nothing to tap; the refill is all or nothing, so a short visit may
+store nothing yet). Then try again without internet. If a new version is waiting ("Updated. Tap to reload"),
 tap it first: the new version brings its own complete offline copy.

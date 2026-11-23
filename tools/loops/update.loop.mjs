@@ -21,7 +21,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, assert, sleep, snapshot, diff} from './harness.mjs';
+import {FIX, assert, sleep, snapshot, diff, openMenu} from './harness.mjs';
 import {makeSiteCopy, removeCopy, missing404, goOffline, cacheName, precachePaths, navCounter, swState, cacheKeys, waitInstalled, askUpdate, until} from './site-copy.mjs';
 
 const subText = page => page.locator('#vSub').textContent();
@@ -585,6 +585,51 @@ export const loops = [
       c.check(!last.length, 'page errors in version 3: ' + last.join(' | '));
       c.done();
     } finally { ctx.server.root = ctx.root; if(nav) nav.close(); if(fresh) await fresh.close(); if(s) await s.close(); removeCopy(v2); removeCopy(v3); }
+  }
+},
+{
+  name: 'update j: the banner is hidden while a dialog is open (a tap cannot throw the dialog away) and shows when it closes',
+  async run(ctx){
+    const v2 = makeSiteCopy(ctx.root, {marker: 'v2'});
+    const {s, nav} = await firstVisit(ctx);
+    const {page} = s;
+    const dialog = () => page.locator('.modal').count();
+    try{
+      const c = checker();
+      await returning(s, nav);
+      await addSong(page);
+      /* a dialog is open when the update is found */
+      await openMenu(page, 'Back up / Sync');
+      ctx.server.root = v2;
+      nav.reset();
+      await updateUntil(page, () => bannerOffered(page), '#update was not offered');
+      await sleep(500);
+      c.check(!(await bannerShown(page)), 'the update banner shows over an open dialog');
+      await page.evaluate(() => document.getElementById('update').click());      // a click that reaches it anyway
+      await sleep(2000);
+      let n = nav.get();
+      c.check(!n.committed && !n.docs && !n.loads && !n.asked && await dialog() === 1, `a click on the hidden banner, with a dialog open, reloaded or closed it (${nav.text()}, ${await dialog()} dialog(s))`);
+      await page.keyboard.press('Escape');
+      await until(async () => !(await dialog()), 'the dialog did not close on Escape', 5000);
+      await until(() => bannerShown(page), 'the update banner did not show once the dialog closed', 5000).catch(e => c.check(false, e.message));
+      /* the banner is up and a dialog opens over it */
+      await openMenu(page, 'Back up / Sync');
+      await sleep(300);
+      c.check(!(await bannerShown(page)), 'the update banner stays on top of a dialog opened after it');
+      await page.keyboard.press('Escape');
+      await until(async () => !(await dialog()), 'the dialog did not close on Escape', 5000);
+      await until(() => bannerShown(page), 'the update banner did not come back after the second dialog', 5000).catch(e => c.check(false, e.message));
+      /* and then the tap works as always: one reload into version 2 */
+      nav.reset();
+      await page.click('#update');
+      await waitNewDoc(page, nav).catch(e => c.check(false, `after the tap: ${e.message} (${nav.text()})`));
+      await sleep(2000);
+      n = nav.get();
+      c.check(n.committed === 1 && n.docs === 1 && n.loads === 1 && n.asked === 1, `tap on #update: want exactly one reload, got ${nav.text()}`);
+      c.check(await marker(page) === 'v2', 'version 2 marker not in the DOM after the tap');
+      c.check(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
+      c.done();
+    } finally { ctx.server.root = ctx.root; nav.close(); await s.close(); removeCopy(v2); }
   }
 },
 ];

@@ -115,8 +115,23 @@ async function heal() {
   }
   const m = /const\s+VERSION\s*=\s*'([^']+)'/.exec(live);
   if (!m || m[1] !== VERSION) return 'newer';
+  /* Every answer is checked before ANY is stored: a hotel or school Wi-Fi login page can answer in place of a file (by a
+     redirect, or as a page with status 200), and a refill never replaces a file already present, so a bad file would
+     stay. Then nothing is stored, and the next time the app is on screen it tries again. */
+  let got;
+  try {
+    got = await Promise.all(missing.map(async (u) => {
+      const res = await fetch(new Request(u, { cache: 'reload' }));
+      const type = res.headers.get('content-type') || '';
+      const bad = !res.ok || res.redirected || (/\.(js|css)$/.test(u) && /text\/html/i.test(type));
+      return bad ? null : [u, res];
+    }));
+  } catch {
+    return 'offline';
+  }
+  if (got.some((g) => !g)) return 'refused';
   const cache = await caches.open(CACHE);
-  await cache.addAll(missing.map((u) => new Request(u, { cache: 'reload' })));
+  await Promise.all(got.map(([u, res]) => cache.put(u, res)));
   return 'healed';
 }
 

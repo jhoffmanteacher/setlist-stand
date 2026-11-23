@@ -349,9 +349,13 @@ const precache = parsePrecache(swSrc);
   }
   const [html, hwhy] = exists('index.html') ? tryStrip(stripHtml, read('index.html')) : ['', 'index.html is missing'];
   const first = hwhy ? '' : ((/<script\b[^>]*>/i.exec(html) || [''])[0]);
+  // The tag's attributes, read one by one (name -> value, '' for a bare attribute), so data-src= or a comment-like text cannot pass.
+  const attrs = new Map([...first.replace(/^<script\b/i, '').replace(/\/?>$/, '').matchAll(/([^\s"'=<>\/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)]
+    .map((m) => [m[1].toLowerCase(), m[2] ?? m[3] ?? m[4] ?? '']));
+  const type = (attrs.get('type') || '').trim().toLowerCase();
   if (hwhy) bad.push(`cannot parse index.html (${hwhy})`);
-  else if (!/\bsrc\s*=\s*["']?js\/boot\.js\b/i.test(first)) bad.push(`the first <script> in index.html is not js/boot.js (${first || 'none'})`);
-  else if (/\btype\s*=\s*["']?module/i.test(first) || /\basync\b/i.test(first) || !/\bdefer\b/i.test(first)) bad.push('js/boot.js must load as a classic script with defer');
+  else if (attrs.get('src') !== 'js/boot.js') bad.push(`the first <script> in index.html is not js/boot.js (${first || 'none'})`);
+  else if (!attrs.has('defer') || attrs.has('async') || attrs.has('nomodule') || (attrs.has('type') && type !== 'text/javascript')) bad.push(`js/boot.js must load as a classic script with defer, and nothing else (${first})`);
   const stripped = jsFiles().map((f) => [f, tryStrip(stripJsComments, read(f))[0] || '']);
   const importers = stripped.filter(([f, t]) => f !== 'js/boot.js' && /\bboot\.js\b/.test(t)).map(([f]) => f);
   if (importers.length) bad.push(`js/boot.js is named in ${importers.join(', ')}: no module may import it (a broken boot.js would take the app down)`);
@@ -360,7 +364,7 @@ const precache = parsePrecache(swSrc);
   if (regs.filter((f) => f === 'js/boot.js').length !== 1) bad.push('js/boot.js must call register exactly once');
   if (regs.filter((f) => f === 'js/main.js').length > 1) bad.push('js/main.js may hold only the one fallback register');
   if (others.length) bad.push(`serviceWorker.register outside js/boot.js: ${others.join(', ')}`);
-  if (regs.includes('js/main.js') && !/if\s*\(\s*window\.ssBoot\s*\)/.test(read('js/main.js'))) bad.push('js/main.js registers sw.js without the window.ssBoot guard');
+  if (regs.includes('js/main.js') && !/if\s*\(\s*window\.ssBoot\s*\)/.test(stripped.find(([f]) => f === 'js/main.js')[1])) bad.push('js/main.js registers sw.js without the window.ssBoot guard');
   bad.length ? fail(name, bad.join('; ')) : pass(name);
 }
 

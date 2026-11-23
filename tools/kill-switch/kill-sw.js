@@ -26,8 +26,8 @@
                with `setlist-stand-`; other sites on the same github.io
                address keep theirs), takes control of the open pages
                (clients.claim) and posts {type: 'ss-sw-killed'} to each of
-               them. js/main.js then reloads each open tab ONCE, after
-               leaving its "back to the song" note, so the tab runs from
+               them. js/boot.js then reloads each open tab ONCE, after
+               js/main.js left its "back to the song" note, so the tab runs from
                the network and the open song comes back.
      fetch     NO fetch handler. Every request goes straight to the
                network, as if there were no worker. While this is live the
@@ -35,7 +35,7 @@
    It NEVER touches IndexedDB, localStorage or sessionStorage: the songs,
    PDFs, setlists and markings stay exactly as they were.
    It does not unregister itself. An unregistered worker comes back only
-   when a page registers one again (js/main.js does that on every load,
+   when a page registers one again (js/boot.js does that on every load,
    which would install this same file again: a churn on every visit). A
    worker that stays registered and does nothing is replaced in place the
    moment the real sw.js is back.
