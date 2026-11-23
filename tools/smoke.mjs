@@ -896,6 +896,7 @@ async function stepSetItems(t){
   /* Duplicate from the setlist list */
   await page.click('#view [data-allsets]');
   const gig = await gigSet(page);
+  await page.waitForTimeout(450);          // the same button twice within 400 ms is a double tap and is ignored (js/saving.js once()); a person takes longer than this script
   await page.click(`#view [data-dupset="${gig.id}"]`);
   await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Gig copy', null, {timeout: 5000})
     .catch(() => { throw new Error('list Duplicate did not open "Gig copy"'); });
@@ -953,6 +954,7 @@ async function stepDragTouch(t){
   /* 5 rows: 4 songs and a break */
   await newSet(page, 'Drag');
   await addSongs(page, ['One-page', 'Three-page', 'Two-page', displayName(splitName('Old Song - Some Artist'))]);
+  await page.waitForTimeout(450);          // not a double tap (js/saving.js once(): the same button within 400 ms is ignored)
   await page.click('#view [data-addbreak]');
   await page.waitForFunction(() => document.querySelectorAll('#items > li.row').length === 5);
   let items = (await setByName(page, 'Drag')).items;
@@ -1761,6 +1763,7 @@ async function stepCollections(t){
   await page.click('.modal [data-ok]');
   await waitFor(async () => (await songRec(page, s => s.id === mine.id)).colls.length === 2, 'the two collections were not saved');
   await page.click('#tSets');
+  await page.waitForTimeout(450);          // not a double tap (js/saving.js once(): the same button within 400 ms is ignored)
   await page.click('#view [data-newset]');
   await page.locator('.modal input[type=text]').fill('Band A Gig');
   await page.click('.modal [data-ok]');
@@ -1809,6 +1812,7 @@ async function stepPickOrder(t){
   await page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, n0 + 3, {timeout: 15000});
   await page.click('#tSets');
   if(await page.locator('#view [data-allsets]').count()) await page.click('#view [data-allsets]');
+  await page.waitForTimeout(450);          // not a double tap (js/saving.js once(): the same button within 400 ms is ignored)
   await page.click('#view [data-newset]');
   await page.locator('.modal input[type=text]').fill('Order Test');
   await page.click('.modal [data-ok]');
@@ -1909,6 +1913,7 @@ async function stepGigDates(t){
     await page.waitForSelector('#view [data-newset]');
   };
   const make = async (name, gig) => {
+    await page.waitForTimeout(450);          // not a double tap (js/saving.js once(): the same button within 400 ms is ignored)
     await page.click('#view [data-newset]');
     await page.locator('.modal input[type=text]').fill(name);
     if(gig) await page.locator('.modal input[type=date]').fill(gig);
@@ -1973,6 +1978,7 @@ async function stepGigDates(t){
 
   /* the fill-in: a name holding a full date is offered once, Fill in sets the gig and keeps the name */
   assert(!(await page.locator('.modal').count()), 'a dialog showed before any setlist name held a date');
+  await page.waitForTimeout(450);          // not a double tap (js/saving.js once(): the same button within 400 ms is ignored)
   await page.click('#view [data-newset]');
   await page.locator('.modal input[type=text]').fill('Sf October 18 2026');
   await page.click('.modal [data-ok]');
@@ -2010,6 +2016,7 @@ async function stepDownloads(t){
   /* a new setlist (New setlist opens it), with the picker's first song unless empty; then back to the list unless stayOpen */
   const make = async (name, date, withSong, stayOpen) => {
     await toSets();
+    await page.waitForTimeout(450);          // not a double tap (js/saving.js once(): the same button within 400 ms is ignored)
     await page.click('#view [data-newset]');
     await page.locator('.modal input[type=text]').fill(name);
     if(date) await page.locator('.modal input[type=date]').fill(date);
