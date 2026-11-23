@@ -2,6 +2,7 @@ import {$, esc, toast, form, hooks, modal, busy, pdfPageCount} from './util.js';
 import {putAll, get, load, state, songById, saveSong, newSong, sha256, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
 import {compareSongs, songMatches, cutName} from './names.js';
+import {stripHtml, fitStrip, STRIP_MIN} from './azstrip.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
@@ -37,7 +38,7 @@ const backupItems = () => [
 ];
 
 export function renderLibrary(v){
-  v.innerHTML = `${pickerHtml()}<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button></div>${menusRowHtml()}<div id="libNudge"></div><div id="libList"></div>
+  v.innerHTML = `${pickerHtml()}<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button></div>${menusRowHtml()}<div id="libNudge"></div><p id="libCount" class="hint libcount" aria-live="polite"></p><div class="libwrap" id="libWrap"><div id="libList"></div><div id="libStrip"></div></div>
     <label class="sw-row"><input type="checkbox" id="showArch" ${showArchived ? 'checked' : ''}>Show archived</label>
     <p class="hint" id="libBackupHint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
     <div id="libDriveLine"></div>
@@ -76,6 +77,14 @@ function renderLib(){
       : `<p class="hint">${arch.length ? 'No archived songs match.' : 'Nothing archived.'}</p>`);
   }
   $('#libList').innerHTML = html;
+  /* The song count and the A to Z strip (js/azstrip.js). The count is of live songs only: "74 songs", and "3 of 74 songs" when a search or
+     a collection shows fewer. Both are left out when there are no songs to show. The strip is for a long list, and not while searching. */
+  const total = state.songs.filter(s => !s.archived).length;
+  $('#libCount').textContent = !live.length || !total ? '' : list.length === total ? plural(total, 'song') : `${list.length} of ${plural(total, 'song')}`;
+  const strip = !q.trim() && list.length >= STRIP_MIN;
+  $('#libStrip').innerHTML = strip ? stripHtml(list) : '';
+  $('#libWrap').classList.toggle('hasaz', strip);
+  if(strip) fitStrip();
 }
 
 /* Reads one PDF: page count and hash. Throws if pdf.js cannot open it. */
@@ -262,6 +271,7 @@ export async function onClick(b, d){
     }});
     return true;
   }
+  if('az' in d) return true;                                     // the A to Z strip does its own jumping (js/azstrip.js)
   if('persist' in d){ await askPersist(b); return true; }
   if('problems' in d){ showProblemLog(); return true; }
   if(d.open){ openViewer([{type:'song', id:d.open}], 0); return true; }

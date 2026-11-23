@@ -840,7 +840,7 @@ async function backupMenuLoop(ctx){
         assert(await page.evaluate(sel => [...document.querySelectorAll('#view ' + sel)].filter(e => !e.closest('#libNudge')).length, gone) === 0, `${at}: the Library still has ${gone}`);
       /* the bottom: Show archived, the backup hint, ONE read-only Drive line, then the status lines; nothing else */
       const bottom = await page.evaluate(() => {
-        const list = document.querySelector('#libList'), out = [];
+        const list = document.querySelector('#libWrap'), out = [];       // the list and the A to Z strip's column are in #libWrap
         for(let e = list.nextElementSibling; e; e = e.nextElementSibling) out.push(e.id || e.className);
         const line = document.querySelector('#libDriveLine');
         return {out, line: line && line.textContent, buttons: line ? line.querySelectorAll('button').length : -1,

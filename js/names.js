@@ -99,6 +99,23 @@ export function compareSongs(a, b) {
     || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
+/* The A to Z strip on the Library (js/azstrip.js) reads the same collator as the sort above, so it can never disagree with the list.
+   LETTERS: "#" first (a number or a sign sorts before A), then A to Z. */
+export const LETTERS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
+/* The letter a song is listed under: the first character of its song name, compared like the sort (case and accents ignored:
+   "Água" is under A, "ébano" under E). Anything that is not A to Z (a digit, a sign, another alphabet) is "#". */
+export function songLetter(s) {
+  const c = [...sortKey(s.song || s.title)][0] || '';
+  return LETTERS.find(L => L !== '#' && COLLATOR.compare(c, L) === 0) || '#';
+}
+/* The jump target: the first song of a list (already in compareSongs order) whose song name sorts at or after the letter L. A letter
+   with no songs gives the next letter's first song; "#" is the top of the list (a name in another alphabet sorts after Z but is
+   labelled "#": the strip's "#" still goes to the top, which is the best a 27-button strip can do). */
+export function firstAtOrAfter(list, L) {
+  if (L === '#') return list[0] || null;
+  return list.find(s => COLLATOR.compare(sortKey(s.song || s.title), L) >= 0) || null;
+}
+
 /* The search match used by the Library's search box and by the song pickers ("Add songs", "Share songs", "Add songs to a collection"):
    a song (or a picker item) matches when the text typed is somewhere in its title, song, artist or version, case ignored. An empty
    search matches everything. */

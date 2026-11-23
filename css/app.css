@@ -45,6 +45,20 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 .row .t{font-weight:600;font-size:18px;line-height:1.25;overflow-wrap:anywhere}
 .row .rowmore{flex:none;width:48px;min-height:48px;padding:0;font-size:28px;line-height:1;font-weight:700}
 .row .s{color:var(--mute);font-size:14px;font-weight:500}
+/* Library: the song count and the A to Z strip (js/azstrip.js). The strip is fixed to the right edge, in the empty column #libStrip, from
+   where the list starts down to the foot of the screen (--az-top is that column's top, set by azstrip.js; it is not sticky, which
+   would lift it out of sight at the foot of the page). */
+.libcount{margin:0 0 6px}
+.libcount:empty{display:none}
+.libwrap.hasaz{display:grid;grid-template-columns:minmax(0,1fr) 40px;column-gap:12px}
+.libwrap.hasaz ~ *{margin-right:52px}          /* what is under the list (Show archived, the hints) stays clear of the strip too */
+.az{--y:max(var(--az-top,8px),calc(8px + env(safe-area-inset-top)));position:fixed;top:var(--y);display:flex;flex-direction:column;width:40px;
+  height:calc(100vh - var(--y) - 8px - env(safe-area-inset-bottom));
+  touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+@supports (height:100dvh){.az{height:calc(100dvh - var(--y) - 8px - env(safe-area-inset-bottom))}}   /* Chrome 100 to 107 and iPadOS 16.0 to 16.3: vh above */
+.az button{flex:1 1 0;min-height:0;padding:0;border:0;border-radius:8px;background:transparent;font-size:14px;font-weight:700;color:var(--acc);white-space:normal}
+.az button.none{color:var(--mute);opacity:.55}
+.row{scroll-margin-top:8px}
 .row .num{font-family:'Barlow Condensed',sans-serif;font-size:26px;width:2.2ch;text-align:right;color:var(--mute)}
 .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .acts button{padding:0 12px}
