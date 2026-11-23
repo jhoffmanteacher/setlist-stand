@@ -640,11 +640,12 @@ async function shareMenuLoop(ctx){
       await checkMenuBox(page, '#view [data-sharemenu]', 'Share / Import', 'Share / Import', [
         ['split', 'Split a songbook', 'Cut one big PDF into separate songs'],
         ['import', 'Import a share package', 'Add songs from a file someone sent you'],
+        ['chartupdate', 'Import chart updates', 'Replace charts with cleaned-up versions from one file'],
         ['share', 'Share songs', 'Pick songs, or send a setlist, as one file']], at);
       assert(await page.locator('#splitter:not([hidden])').count() === 0 && await page.locator('.modal').count() === 0, `${at}: Cancel started something`);
 
       /* each item starts its own action, and the box is gone */
-      for(const [item, id] of [['split', 'splitFile'], ['import', 'shareFile']]){
+      for(const [item, id] of [['split', 'splitFile'], ['import', 'shareFile'], ['chartupdate', 'chartUpdateFile']]){
         const [fc] = await Promise.all([page.waitForEvent('filechooser', {timeout: 8000}), openShareMenu(page, item)]);
         assert(await fc.element().evaluate(e => e.id) === id, `${at}: ${item} opened the wrong file chooser`);
         await noModal(page);
@@ -654,6 +655,41 @@ async function shareMenuLoop(ctx){
       assert(await page.locator('.modal.menubox').count() === 0, `${at}: the Share / Import box is still open behind the Share songs list`);
       assert((await page.locator('.modal [role=dialog] h2').first().textContent()).startsWith('Share songs'), `${at}: Share songs did not open its list`);
       await escapeBack(page, '#view [data-sharemenu]', `${at} Share songs from the box`);
+    } finally { await s.close(); }
+  }
+}
+
+
+/* ---------- (e3) Import chart updates: the list is a real dialog (js/chartupdate.js) ---------- */
+async function chartUpdateDialogLoop(ctx){
+  for(const [w, h] of [[1280, 800], [800, 1280]]){
+    const s = await ctx.session({viewport: {width: w, height: h}});
+    const at = `chart updates ${w}x${h}`;
+    try{
+      const {page} = s;
+      await s.goto(); await importFixtures(page);
+      const newPdf = await fsp.readFile(path.join(FIX, 'three-page.pdf'));
+      const z = new JSZip();
+      /* the library holds "One-page"; the file offers 40 charts: one for it (by name) and 39 that are new songs, so the list must scroll */
+      const charts = [{id: 'c1', target: 'gone', song: 'One-page', artist: '', version: '', hash: sha256(newPdf)}];
+      z.file('files/c1.pdf', newPdf);
+      for(let i = 2; i <= 40; i++){ const d = await PDFDocument.create(); d.addPage([200, 200]).drawText('x' + i, {x: 10, y: 100}); const b = Buffer.from(await d.save({updateMetadata: false}));
+        charts.push({id: 'c' + i, target: 'gone' + i, song: 'Brand new ' + i, artist: '', version: '', hash: sha256(b)}); z.file('files/c' + i + '.pdf', b); }
+      z.file('update.json', JSON.stringify({app: 'setlist-stand', kind: 'chart-update', version: 1, made: 'x', charts}));
+      const file = {name: 'u.zip', mimeType: 'application/zip', buffer: Buffer.from(await z.generateAsync({type: 'nodebuffer'}))};
+      const before = JSON.stringify(Object.values(await idbAll(page, 'songs')).map(x => [x.id, x.updated, x.hash]).sort());
+      await page.setInputFiles('#chartUpdateFile', file);
+      await page.locator('.modal .cu-list .cu-row').first().waitFor({timeout: 30000});
+      await checkDialog(page, at + ' list');
+      const fit = await page.evaluate(() => { const b = document.querySelector('.modal.chartupdate [role=dialog]').getBoundingClientRect(), ok = document.querySelector('.modal.chartupdate [data-ok]').getBoundingClientRect(), l = document.querySelector('.cu-list');
+        return {box: b.bottom <= innerHeight && b.top >= 0, ok: ok.bottom <= innerHeight && ok.top >= 0, scrolls: l.scrollHeight > l.clientHeight, okH: ok.height}; });
+      assert(fit.box && fit.ok, `${at}: the buttons are not on the screen: ${JSON.stringify(fit)}`);
+      assert(fit.scrolls && fit.okH >= 44, `${at}: the list does not scroll, or the button is small: ${JSON.stringify(fit)}`);
+      /* Escape is Cancel: nothing is written, the page is alive again */
+      await page.keyboard.press('Escape'); await noModal(page);
+      assert(await page.evaluate(() => !document.querySelector('.app').inert), `${at}: the page is still inert after Escape`);
+      assert(JSON.stringify(Object.values(await idbAll(page, 'songs')).map(x => [x.id, x.updated, x.hash]).sort()) === before, `${at}: Escape on the list changed the library`);
+      assert(s.errors.length === 0, `${at}: page errors: ` + s.errors.join(' | '));
     } finally { await s.close(); }
   }
 }
@@ -891,11 +927,12 @@ async function backupMenuLoop(ctx){
 }
 
 export const loops = [
+  {name: 'hygiene-ui chart updates: the list is a real dialog (focus kept, buttons on screen, the list scrolls, Escape cancels and writes nothing), also on a portrait tablet', run: chartUpdateDialogLoop},
   {name: 'hygiene: CSP holds for import, view, ink, notes, crop, print, backup, restore, service worker, fonts', run: cspLoop},
   {name: 'hygiene: dialogs trap focus, Escape cancels, focus returns, page behind is inert', run: dialogLoop},
   {name: 'hygiene: gig-date dialogs (New setlist with a date, Gig date, the fill-in) trap focus; Escape and Cancel change nothing; Enter in the name saves', run: gigDialogLoop},
   {name: 'hygiene: download dialogs (Download <name>, Download all, its busy box) trap focus; Escape cancels or stops and downloads nothing', run: downloadDialogLoop},
-  {name: 'hygiene-ui share menu: the Library bar has one Share / Import button; its box lists three items, traps focus, closes on Escape and Cancel, and each item starts its action (also on a portrait tablet)', run: shareMenuLoop},
+  {name: 'hygiene-ui share menu: the Library bar has one Share / Import button; its box lists four items, traps focus, closes on Escape and Cancel, and each item starts its action (also on a portrait tablet)', run: shareMenuLoop},
   {name: 'hygiene-ui setlist menu: an open setlist shows Play setlist, Add songs, Add break and More; the box lists Gig date, Download PDF, Share, Duplicate, Rename and Collections with hints, greys Download PDF and Share when empty, traps focus, gives focus back on Escape, Cancel and after Rename or Duplicate, and each item starts its action (also on a portrait tablet)', run: setMenuLoop},
   {name: 'hygiene-ui backup menu: the Library bar has a Back up / Sync button and its bottom only a read-only Drive line; the box lists four items, traps focus, closes on Escape and Cancel, each item starts its action, and the Google Drive box shows not connected, connected and sign-in ended and stays right while open (also on a portrait tablet)', run: backupMenuLoop},
   {name: 'hygiene: setlist rows reorder with arrow keys; tablet CSS (overscroll, touch-action, safe areas)', run: reorderLoop},

@@ -18,16 +18,16 @@ import {SHARE_VERSION} from './sharepack.js';
    list of files, in bytes (a real package needs a few hundred KB). Changeable by the tests. */
 export const limits = {maxPdfBytes:500e6, maxJson:20e6, maxSongs:5000, maxDirectory:2e6};
 const plural = (n, w) => `${n} ${w}${n == 1 ? '' : 's'}`;
-const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
-const okText = v => typeof v === 'string' && v.length <= 200;
-const short = v => typeof v === 'string' || typeof v === 'number' ? JSON.stringify(String(v)).slice(0, 40) : '(not text)';
-const mb = n => n >= 1e6 ? Math.round(n / 1e6) + ' MB' : Math.round(n / 1e3) + ' KB';
+export const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
+export const okText = v => typeof v === 'string' && v.length <= 200;
+export const short = v => typeof v === 'string' || typeof v === 'number' ? JSON.stringify(String(v)).slice(0, 40) : '(not text)';
+export const mb = n => n >= 1e6 ? Math.round(n / 1e6) + ' MB' : Math.round(n / 1e3) + ' KB';
 
 /* The CRC-32 a zip entry records for its bytes. */
 const CRC_TABLE = (() => { const t = new Uint32Array(256); for(let n = 0; n < 256; n++){ let c = n; for(let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
-const crc32 = bytes => { let c = 0xFFFFFFFF; for(let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+export const crc32 = bytes => { let c = 0xFFFFFFFF; for(let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
 
-const NOT_PACKAGE = 'That file is not a Setlist Stand share package.', TOO_MANY = 'That package has too many files in it.';
+export const NOT_PACKAGE = 'That file is not a Setlist Stand share package.', TOO_MANY = 'That package has too many files in it.';
 
 /* Why the zip's list of files (its "central directory") cannot be opened safely, as a plain sentence, or null when it is fine.
    JSZip builds heap for every record just to open a zip and has no limit of its own: a small file with a million records costs
@@ -35,7 +35,7 @@ const NOT_PACKAGE = 'That file is not a Setlist Stand share package.', TOO_MANY 
    JSZip searches the whole file backwards, so a guard that only looked at the last 64 KB would miss it), it must not be zip64 (JSZip then reads the 64-bit fields,
    not the 32-bit ones measured here), and the span from where the list starts to where that record sits must be small. A real
    package has none of the first two problems and a list of a few hundred KB. */
-async function directoryProblem(file){
+export async function directoryProblem(file){
   const tail = new DataView(await file.slice(Math.max(0, file.size - 65557)).arrayBuffer());
   for(let i = tail.byteLength - 22; i >= 0; i--){
     if(tail.getUint32(i, true) !== 0x06054b50) continue;
@@ -49,7 +49,7 @@ async function directoryProblem(file){
 
 /* A zip entry's bytes, read in pieces and counted as they come: resolves to null as soon as they pass `room` bytes (the
    rest is never inflated). Rejects with the zip's own error. */
-function readCapped(entry, room){
+export function readCapped(entry, room){
   return new Promise((res, rej) => {
     const chunks = []; let n = 0;
     const h = entry.internalStream('uint8array');
@@ -106,7 +106,8 @@ export async function readPackage(file, isStopped = () => false){
   try{ zip = await JSZip.loadAsync(file); }
   catch(err){ return bad(damaged(err) ? 'That package is damaged.' : 'That file is not a Setlist Stand share package.'); }
   const entry = zip.file('share.json');
-  if(!entry) return bad(zip.file('library.json') ? 'That is a backup, not a share package. Use Restore from backup.' : 'That file is not a Setlist Stand share package.');
+  if(!entry) return bad(zip.file('library.json') ? 'That is a backup, not a share package. Use Restore from backup.'
+    : zip.file('update.json') ? 'That is a chart update file, not a share package. Use Import chart updates.' : 'That file is not a Setlist Stand share package.');
   try{
     let data;
     try{
@@ -215,6 +216,7 @@ async function commit(plan){
    first is writing would read the library as it was before the first (so it would add every song again) and, once Cancel is
    tapped on the reading box, would hold two packages in memory. */
 let running = false;
+export const importRunning = () => running;
 export async function importPackage(file){
   if(!file) return;
   if(running){ toast('An import is still running. Try again when it has finished.'); return; }

@@ -43,3 +43,13 @@ What is different under WebKit (all in `tools/loops/browser.mjs` and `tools/loop
 - Each browser context is a persistent profile in the temp folder (deleted when it closes). A normal Playwright WebKit context is private, and a private WebKit session cannot store a PDF (a Blob) in IndexedDB, so no song could be added.
 - The test wipe deletes the database from a bare page (`css/app.css`): the app keeps it open, and WebKit drops a delete that was blocked when the page then reloads.
 - Skipped, with a one-line `SKIP ... (WebKit: ...)` message and a list at the end of the run: smoke steps 16 and 17 (touch drag; Playwright's WebKit can tap but not drag with a finger), and the loops that use Chromium's DevTools protocol to count reloads or slow the network (`update`, `kill switch`, `offline h`).
+
+## Chart update files (`make-chart-update.mjs`)
+
+Builds the file the app's Share / Import -> Import chart updates reads: cleaned-up charts, each to become the New version of a song.
+
+    node tools/make-chart-update.mjs --backup <backup.zip> --out <file.zip> [--add-new] <pdf>...
+
+- Each PDF is matched to ONE song of the backup by its file name ("Song (version) - Artist.pdf", read like Add PDFs reads it, compared case- and accent-blind). Archived songs are never matched.
+- One line per PDF: `MATCHED`, `LEFT OUT` (no song, several songs, or a second PDF for a song already taken) or, with `--add-new`, `NEW SONG` (it goes in with a target no library has, so the app offers it as a new song, unticked).
+- The PDFs go into the zip byte for byte. Write the output to `Claude outputs/`, never into the repo.

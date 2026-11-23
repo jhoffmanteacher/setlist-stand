@@ -11,6 +11,7 @@ import {initInk} from './ink.js';
 import {initCrop} from './crop.js';
 import {startSplit, initSplit} from './split.js';
 import {importPackage} from './shareimport.js';
+import {importChartUpdates} from './chartupdate.js';
 import {takeReturn} from './googleauth.js';
 import {driveClick, announceSignIn} from './syncui.js';
 import {onClick as collClick, initShown} from './collections.js';
@@ -52,6 +53,7 @@ $('#file').onchange = async e => { if(!ready){ e.target.value = ''; return; } co
 $('#newVersionFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await newVersion(f); };
 $('#splitFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await startSplit(f); };
 $('#shareFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importPackage(f); };
+$('#chartUpdateFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importChartUpdates(f); };
 $('#setTextFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importSetlistText(f, showSet); };
 $('#restoreFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
 

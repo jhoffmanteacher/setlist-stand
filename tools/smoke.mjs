@@ -1680,6 +1680,36 @@ async function stepShareImport(t){
   assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
 }
 
+/* Import chart updates: a file of two charts for two songs here (made in Node like tools/make-chart-update.mjs makes it); one
+   is unticked, the other applied. That song keeps its id and plays the new chart; the unticked one is unchanged. */
+async function stepChartUpdate(t){
+  const {page} = t, errs = t.errors.length;
+  await toLibrary(page);
+  const fx = ['one-page.pdf', 'two-page.pdf', 'three-page.pdf'].map((f, i) => { const b = fs.readFileSync(path.join(FIX, f)); return {b, pages: i + 1, hash: createHash('sha256').update(b).digest('hex')}; });
+  const songs = Object.values(await idbAll(page, 'songs')).filter(s => !s.deleted && !s.archived).slice(0, 2);
+  assert(songs.length === 2, 'the chart update step needs two songs');
+  const pickFor = s => fx.find(f => f.hash !== s.hash && f.pages !== s.pages && !songs.some(o => o.hash === f.hash));
+  const z = new JSZip(), charts = songs.map((s, i) => { const f = pickFor(s); assert(f, 'no fixture differs from ' + s.title); z.file(`files/c${i + 1}.pdf`, f.b, {createFolders: false}); return {id: 'c' + (i + 1), target: s.id, song: s.song, artist: s.artist, version: s.version, hash: f.hash, f}; });
+  z.file('update.json', JSON.stringify({app: 'setlist-stand', kind: 'chart-update', version: 1, made: new Date().toISOString(), charts: charts.map(({f, ...c}) => c)}));
+  await page.setInputFiles('#chartUpdateFile', {name: 'updates.zip', mimeType: 'application/zip', buffer: Buffer.from(await z.generateAsync({type: 'nodebuffer'}))});
+  await page.locator('.modal .cu-list .cu-row').first().waitFor({timeout: 30000});
+  assert(await page.locator('.modal .cu-row input:checked').count() === 2, 'both songs are not ticked');
+  await page.locator('.modal .cu-row', {hasText: songs[0].title}).locator('input').uncheck();
+  assert(await page.locator('.modal [data-ok]').textContent() === 'Apply 1', 'the button does not say Apply 1');
+  await page.click('.modal [data-ok]');
+  const done = page.locator('.modal [role=dialog]').filter({has: page.locator('button.pri[data-x]')});
+  await done.waitFor({timeout: 30000});
+  assert(/Updated 1 song\./.test(await done.textContent()), 'result: ' + await done.textContent());
+  await page.click('.modal [data-x]');
+  const after = Object.fromEntries(Object.values(await idbAll(page, 'songs')).filter(s => !s.deleted).map(s => [s.id, s]));
+  assert(after[songs[1].id].hash === charts[1].hash && after[songs[1].id].pages === charts[1].f.pages, 'the applied song does not hold the new chart');
+  assert(after[songs[0].id].hash === songs[0].hash && after[songs[0].id].updated === songs[0].updated, 'the unticked song changed');
+  await openSong(page, after[songs[1].id].title);
+  await page.waitForFunction(n => new RegExp(`Page 1 of ${n}$`).test(document.querySelector('#vSub').textContent), charts[1].f.pages, {timeout: 15000});
+  await toLibrary(page);
+  assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
+}
+
 async function stepCollections(t){
   const {page} = t;
   await toLibrary(page);
@@ -2238,6 +2268,7 @@ const STEPS = [
   ['28 split a songbook: bookmarks give the songs, each is added as its own PDF', stepSplitBook],
   ['29 share: songs from the Library and a setlist each download as a package with the PDFs, no annotations', stepShare],
   ['30 import a share package: the setlist comes back under a new name, songs already here are not added again', stepShareImport],
+  ['30a2 import chart updates: one of two charts unticked; the other song plays its new chart', stepChartUpdate],
   ['30b Collections: Band A and Band B, default opens on Band A, a new PDF joins it, a song in both, delete one keeps the song', stepCollections],
   ['30c Add songs in tap order: numbers, untap renumbers, Add N, setlist ends in that order; search keeps numbers', stepPickOrder],
   ['30d Backup reminder: after a backup none; a stroke or a rename brings it back on Library and Setlists, never in the viewer; a restore clears it', stepBackupReminder],

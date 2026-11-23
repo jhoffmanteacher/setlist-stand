@@ -248,3 +248,10 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
 .tl fieldset{border:0;margin:0;padding:0}
 .tl legend{padding:0}
 .textimport .box{width:min(640px,100%)}
+/* Import chart updates (js/chartupdate.js): one row per chart; the note under the title says why it is where it is */
+.chartupdate .box{width:min(640px,100%)}
+.cu-list{flex:1 1 auto;min-height:120px}
+.cu-row{display:flex;gap:12px;align-items:center;min-height:54px;padding:6px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.cu-row.cu-off{color:var(--mute)}
+.cu-b{display:flex;flex-direction:column;gap:2px;min-width:0}
+.cu-n{font-size:14px;color:var(--mute)}

@@ -1,12 +1,12 @@
 import {$, esc, toast, form, armed, hooks, modal, busy, pdfPageCount} from './util.js';
-import {putAll, get, load, state, songById, saveSong, newSong, sha256, upgradeInk, inkRecord, reconcile, ensureHashes, stamp} from './store.js';
+import {putAll, get, load, state, songById, saveSong, newSong, sha256, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
-import {displayName, compareSongs, songMatches} from './names.js';
+import {compareSongs, songMatches} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
 import {menuBox} from './menubox.js';
-import {unique} from './shareimport.js';
+import {newVersionOps} from './newversion.js';
 import {deleteOps} from './deleteops.js';
 import {renderDrive, driveSetUp, syncNow, openDriveBox} from './syncui.js';
 import {backupNow} from './backup.js';
@@ -15,6 +15,7 @@ import {renderNudge} from './nudge.js';
 import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
+export const newVersionRunning = () => nvRunning;
 
 /* Row 2 of the Library's top: one button for each menu. A new menu is one more button here and one more case in onClick(). */
 function menusRowHtml(){
@@ -23,6 +24,7 @@ function menusRowHtml(){
 const SHARE_ITEMS = [
   {id: 'split', label: 'Split a songbook', hint: 'Cut one big PDF into separate songs'},
   {id: 'import', label: 'Import a share package', hint: 'Add songs from a file someone sent you'},
+  {id: 'chartupdate', label: 'Import chart updates', hint: 'Replace charts with cleaned-up versions from one file'},
   {id: 'share', label: 'Share songs', hint: 'Pick songs, or send a setlist, as one file'},
 ];
 /* Back up / Sync (Jonathan, 2026-11-22: these were at the bottom of the Library). The Sync hint depends on whether Drive has been used here. */
@@ -132,7 +134,8 @@ function askDuplicates(names){
   });
 }
 
-/* New version (it took the place of Replace PDF, which threw the old chart and its marks away): the file picked becomes the
+/* (The records it writes are built by newVersionOps() in js/newversion.js, which Import chart updates uses too.)
+   New version (it took the place of Replace PDF, which threw the old chart and its marks away): the file picked becomes the
    song's chart, and the chart it had is kept as an archived song, so nothing is lost.
    - The song keeps its id, details and setlist places (its crop is cleared: the new chart starts uncropped, the old copy keeps the crop), so every setlist plays the new chart and no setlist is written.
      Its PDF, page count and hash become the new file's; its marks start fresh (each becomes a deletion marker through
@@ -172,24 +175,7 @@ async function runNewVersion(file, id, s){
   } finally { job.close(); }
   if(!(await askNewVersion(file.name, s, !!old))) return;
   try{
-    const {buf, pages:n, hash} = r, ops = [];
-    let copy = null;
-    if(old){
-      copy = newSong({song:s.song, artist:s.artist, version:oldVersion(s.version)}, s.pages, await sha256(old), s.colls || []);
-      copy.id = unique(new Set([...state.songs.map(x => x.id), ...state.sets.map(x => x.id)]));
-      copy.archived = true;
-      if(s.crop !== undefined) copy.crop = JSON.parse(JSON.stringify(s.crop));
-      ops.push({store:'files', key:copy.id, value:new Blob([old], {type:'application/pdf'})}, {store:'songs', key:copy.id, value:copy});
-    }
-    ops.push({store:'files', key:id, value:new Blob([buf], {type:'application/pdf'})});
-    for(let p = 1; p <= s.pages; p++){
-      const key = id + ':' + p, rec = upgradeInk(await get('ink', key)).record, cur = rec.strokes, marks = cur.filter(x => !x.deleted);
-      if(copy && marks.length) ops.push({store:'ink', key:copy.id + ':' + p, value:inkRecord(marks)});   // the old chart keeps its marks
-      if(p > n) ops.push({store:'ink', key, delete:true});                                       // that page no longer exists
-      else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []), rec)});     // keep deletion markers for the pages that remain (stamped over the marks and the page)
-    }
-    const {crop:_oldCrop, ...rest} = s;             // the crop belonged to the old chart's layout: the new chart starts uncropped (the archived copy keeps it)
-    ops.push({store:'songs', key:id, value:{...rest, pages:n, hash, title:displayName(s), updated:stamp(s)}});
+    const {ops, copy} = await newVersionOps(s, r.buf, {pages:r.pages, hash:r.hash}, old);
     /* load() makes new records: a different one here means the song was edited or deleted while the dialogs were open
        (do not bring it back). Checked last, with no wait between it and putAll, because the reads above take time. */
     const cur = await get('songs', id);          // the stored record too: another tab's edit or delete never reaches this tab's list
@@ -198,13 +184,6 @@ async function runNewVersion(file, id, s){
     await load(); hooks.render();
     toast((copy ? 'New version in place. The old one is in Archived.' : 'New version in place. Its marks were cleared.') + (s.crop ? ' Its crop was cleared.' : ''));
   }catch(err){ await load(); hooks.render(); toast(explainError(err)); }
-}
-/* The version an old copy gets: "old 2026-11-21", or "in G, old 2026-11-21" (the date here; the whole stays within the
-   200 characters a text field takes, so share import, which refuses longer text, still takes it). */
-function oldVersion(v){
-  const d = new Date(), tag = `old ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const keep = String(v || '').slice(0, 200 - tag.length - 2).trim();
-  return keep ? keep + ', ' + tag : tag;
 }
 /* The one question before New version writes anything. Resolves true for New version. */
 function askNewVersion(name, s, keeps){
@@ -226,6 +205,7 @@ export async function onClick(b, d){
     await menuBox({title: 'Share / Import', items: SHARE_ITEMS, opener: b, run: name => {
       if(name === 'split') $('#splitFile').click();             // runs inside the tap that chose it: a file chooser needs that
       else if(name === 'import') $('#shareFile').click();
+      else if(name === 'chartupdate') $('#chartUpdateFile').click();
       else return shareSongs();
     }});
     return true;
