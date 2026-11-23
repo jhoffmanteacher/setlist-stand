@@ -2,6 +2,7 @@ import {toast, saveBlob, hooks, busy} from './util.js';
 import {explainError} from './errors.js';
 import {gigOf} from './gigdate.js';
 import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, ensureHashes, putAll, sha256, ID_RE} from './store.js';
+import {crc32, readCapped, directoryProblem, NOT_PACKAGE, TOO_MANY, mb} from './zipread.js';
 
 /* Backup version 3: library.json has songs, sets, colls (collections) and ink (with their deletion markers); files/<id>.pdf holds
    each live song's PDF. Version 2 (no colls) and version 1 (the prototype and the MobileSheets converter) are still read, and
@@ -62,6 +63,12 @@ export async function backupNow(b){
   if(saved) hooks.render();         // the backup reminder on the Library changes
 }
 
+/* Caps for reading a backup (changeable by the tests). A backup made by the app or the converter is STORED (not compressed), so what
+   it unpacks to is about its own size; `ratio` and `slack` leave room for a backup someone re-zipped on a computer. maxFile: the
+   file itself; maxDirectory: the zip's list of files, in bytes (about 100000 files); maxJson: library.json; the PDFs together may
+   unpack to the file's size times `ratio` plus `slack`, and never more than 3 GB. */
+export const restoreLimits = {maxFile:1.5e9, maxDirectory:10e6, maxJson:200e6, ratio:10, slack:100e6};
+
 /* Restore is all or nothing. First everything is checked (the zip is readable and undamaged, library.json is ours,
    every song has its PDF and the PDF matches the hash the backup recorded); only then is it written, in one
    transaction. Any problem, or an interrupted page, leaves the library exactly as it was. */
@@ -73,21 +80,41 @@ export async function restoreFrom(f, render){
   const job = busy('Restoring a backup', 'Opening the backup…');
   const stop = msg => { job.close(); toast(msg); };
   const wasStopped = () => { if(!job.stopped) return false; stop('Restore stopped. Nothing was changed.'); return true; };
-  let data, zip;
+  let data, zip, room = 0;
+  if(f.size > restoreLimits.maxFile) return stop('That backup is too big for this tablet to open. Nothing was changed.');
   try{
-    zip = await JSZip.loadAsync(f, {checkCRC32:true});
-    data = JSON.parse(await zip.file('library.json').async('string'));
+    /* The zip's list of files is measured before JSZip opens it (it builds memory for every record), and it is opened WITHOUT
+       checkCRC32, which would inflate every entry just to open it: a small file of deflated zeros could ask for gigabytes.
+       Instead every entry is read against a cap, library.json is checked against the CRC-32 the zip records, and each PDF
+       against its recorded SHA-256 (or its CRC-32 when the backup has no hash, as a version 1 backup may not). */
+    const dir = await directoryProblem(f, restoreLimits.maxDirectory);
+    if(dir === TOO_MANY) return stop('That backup has too many files in it. Nothing was changed.');
+    if(dir === NOT_PACKAGE) return stop('That file is not a Setlist Stand backup');
+    zip = await JSZip.loadAsync(f);
+    const entry = zip.file('library.json');
+    if(!entry) throw new Error('not a backup');
+    /* a first, cheap refusal from the sizes the zip says it holds (they can lie: the reads below are the real guard) */
+    room = Math.min(3e9, f.size * restoreLimits.ratio + restoreLimits.slack);
+    let declared = 0;
+    for(const e of Object.values(zip.files)) if(!e.dir && (e.name === 'library.json' || /^files\/[^/]+\.pdf$/.test(e.name))) declared += Number(e._data && e._data.uncompressedSize) || 0;
+    if(declared > room) return stop('That backup is too big to read. Nothing was changed.');
+    const raw = await readCapped(entry, Math.min(restoreLimits.maxJson, room));
+    if(!raw) return stop('That backup is too big to read. Nothing was changed.');
+    const want = entry._data && entry._data.crc32;
+    if(typeof want !== 'number' || crc32(raw) !== want >>> 0) return stop('That backup is damaged. Nothing was changed.');
+    room -= raw.length;
+    data = JSON.parse(new TextDecoder().decode(raw));
     if(data.app !== 'setlist-stand' || !Array.isArray(data.songs) || !Array.isArray(data.sets)) throw new Error('not a backup');
   }catch(err){
     if(zip && zip.file('share.json')) return stop('That is a share package, not a backup. Use Import a share package. Nothing was changed.');
-    return stop(/crc/i.test(String(err && err.message)) ? 'That backup is damaged. Nothing was changed.' : 'That file is not a Setlist Stand backup');
+    return stop(/crc|corrupt/i.test(String(err && err.message)) ? 'That backup is damaged. Nothing was changed.' : 'That file is not a Setlist Stand backup');
   }
   if(wasStopped()) return;
   if(Number(data.version) > BACKUP_VERSION) return stop('That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.');
   const bad = validateBackup(data);
   if(bad) return stop(`That backup has something the app can't read (${bad}). Nothing was changed.`);
   let n = 0, sets = 0, k = 0, badGig = 0;
-  const total = data.songs.filter(s => !s.deleted).length;
+  const total = data.songs.filter(s => !s.deleted).length, room0 = room;
   try{
     const ops = [], skip = new Set();
     /* A deletion marker only wins over a record here that is not newer than it. */
@@ -105,9 +132,12 @@ export async function restoreFrom(f, render){
       job.say(`Checking song ${++k} of ${total}…`);
       const entry = zip.file('files/' + s.id + '.pdf');
       if(!entry) return stop(`That backup is missing the PDF for "${s.title || s.song || s.id}". Nothing was changed.`);
-      const buf = await entry.async('arraybuffer');
+      const buf = await readCapped(entry, room);
+      if(!buf) return stop(`That backup is too big to read: its PDFs add up to more than ${mb(room0)}. Nothing was changed.`);
+      room -= buf.length;
       if(s.hash) s.hash = s.hash.toLowerCase();
-      if(s.hash && await sha256(buf) !== s.hash) return stop(`That backup is damaged ("${s.title || s.song || s.id}" does not match). Nothing was changed.`);
+      /* JSZip no longer checks CRCs: a PDF is checked against its recorded SHA-256, or against the zip's CRC-32 when there is none */
+      if(s.hash ? await sha256(buf) !== s.hash : crc32(buf) !== (entry._data && entry._data.crc32) >>> 0) return stop(`That backup is damaged ("${s.title || s.song || s.id}" does not match). Nothing was changed.`);
       upgradeSong(s);
       /* this tablet's annotations of the song are replaced by the backup's (the ink puts come later in the same transaction) */
       ops.push({store:'files', key:s.id, value:new Blob([buf], {type:'application/pdf'})}, {store:'songs', key:s.id, value:s}, {deleteInkFor:s.id}); n++;

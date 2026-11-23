@@ -573,6 +573,92 @@ print(json.dumps(out))`;
   } finally { await s.close(); }
 }},
 
+{name: 'hardening: a restore zip bomb is refused before it fills memory, and changes nothing', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  /* limits are set from the page: the module instance is the one the app uses */
+  const setLimits = o => page.evaluate(`(async () => { const m = await import(new URL('js/backup.js', location.href).href); Object.assign(m.restoreLimits, ${JSON.stringify(o)}); })()`);
+  const std = {maxFile: 1.5e9, maxDirectory: 10e6, maxJson: 200e6, ratio: 10, slack: 100e6};
+  const deflate = {compression: 'DEFLATE', compressionOptions: {level: 9}};
+  /* the zip's central directory says an entry holds `size` bytes (a bomb says less than it holds): patched in the bytes */
+  const lie = (buf, name, size) => {
+    const out = Buffer.from(buf), nm = Buffer.from(name);
+    for(let i = 0; i + 46 < out.length; i++){
+      if(out.readUInt32LE(i) !== 0x02014b50) continue;
+      if(out.readUInt16LE(i + 28) === nm.length && out.subarray(i + 46, i + 46 + nm.length).equals(nm)){ out.writeUInt32LE(size, i + 24); return out; }
+    }
+    throw new Error('test setup: no directory record for ' + name);
+  };
+  const bytes = async (z, o = {}) => Buffer.from(await z.generateAsync({type: 'nodebuffer', ...o}));
+  let n = 0;
+  const write = async buf => { const f = path.join(TMP, `bomb-${++n}.zip`); await fsp.writeFile(f, buf); return f; };
+  const lib = (songs, extra = {}) => JSON.stringify({app: 'setlist-stand', version: 3, saved: new Date().toISOString(), songs, sets: [], colls: [], ink: {}, ...extra});
+  try{
+    await s.goto();
+    await importOne(page);
+    const before = await snapshot(page);
+    const t0 = Date.now();
+    /* (a) one PDF of 60 MB of zeros, deflated to about 60 KB, with its TRUE SHA-256 recorded (so only the size can refuse it) */
+    const zeros = Buffer.alloc(60e6), HZ = sha256(zeros);
+    const za = new JSZip();
+    za.file('files/z.pdf', zeros, deflate);
+    za.file('library.json', lib([liveSong('z', 'z', {hash: HZ})]));
+    const bomb = await bytes(za);
+    assert(bomb.length < 1e6, 'test setup: the bomb is ' + bomb.length + ' bytes');
+    await setLimits({slack: 2e6});                    // the PDFs together may unpack to about 2.6 MB
+    for(const [what, buf] of [['honest sizes', bomb], ['a zip that says 1 KB', lie(bomb, 'files/z.pdf', 1000)]]){
+      const msg = await restore(page, await write(buf));
+      assert(/^That backup is too big to read/.test(msg) && /Nothing was changed\.$/.test(msg), `(a) ${what}: toast ${JSON.stringify(msg)}`);
+    }
+    /* (b) library.json padded with 30 MB of spaces */
+    const zb = new JSZip();
+    zb.file('library.json', lib([]) + ' '.repeat(30e6), deflate);
+    const pad = await bytes(zb);
+    await setLimits({slack: 2e6, maxJson: 5e6});
+    for(const [what, buf] of [['honest sizes', pad], ['a zip that says 1 KB', lie(pad, 'library.json', 1000)]]){
+      const msg = await restore(page, await write(buf));
+      assert(/^That backup is too big to read\. Nothing was changed\.$/.test(msg), `(b) ${what}: toast ${JSON.stringify(msg)}`);
+    }
+    await setLimits(std);
+    /* (c) bytes after the end record, a zip64 marker, a list of files over the limit, and a file over the size limit */
+    const good = await bytes((() => { const z = new JSZip(); z.file('files/a.pdf', ONE); z.file('library.json', lib([liveSong('a', 'a')])); return z; })());
+    const at = good.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6]));
+    assert(at > 0, 'test setup: no end record');
+    const z64 = Buffer.from(good); z64.writeUInt16LE(0xFFFF, at + 10);
+    for(const [what, buf, re] of [
+      ['bytes after the end record', Buffer.concat([good, Buffer.alloc(70000)]), /^That file is not a Setlist Stand backup$/],
+      ['a zip64 marker', z64, /^That backup has too many files in it\. Nothing was changed\.$/],
+      ['not a zip', Buffer.from('hello, this is not a zip'), /^That file is not a Setlist Stand backup$/],
+    ]){
+      const msg = await restore(page, await write(buf));
+      assert(re.test(msg), `(c) ${what}: toast ${JSON.stringify(msg)}`);
+    }
+    await setLimits({maxDirectory: 100});
+    let msg = await restore(page, await write(good));
+    assert(/^That backup has too many files in it\. Nothing was changed\.$/.test(msg), `(c) a list of files over the limit: toast ${JSON.stringify(msg)}`);
+    await setLimits({...std, maxFile: 100});
+    msg = await restore(page, await write(good));
+    assert(/^That backup is too big for this tablet to open\. Nothing was changed\.$/.test(msg), `(c) a file over the size limit: toast ${JSON.stringify(msg)}`);
+    await setLimits(std);
+    /* (d) a backup with no hashes (version 1) with 16 bytes of its PDF changed: the zip's CRC-32 is still checked */
+    const noHash = liveSong('v', 'v'); delete noHash.hash;
+    const v1 = await bytes((() => { const z = new JSZip(); z.file('files/v.pdf', ONE); z.file('library.json', lib([noHash], {version: 1})); return z; })());
+    const flip = Buffer.from(v1), p0 = flip.indexOf(ONE);
+    assert(p0 > 0, 'test setup: no PDF bytes');
+    for(let i = 0; i < 16; i++) flip[p0 + Math.floor(ONE.length / 2) + i] ^= 0xff;
+    msg = await restore(page, await write(flip));
+    assert(/^That backup is damaged/.test(msg) && /Nothing was changed\.$/.test(msg), `(d) a changed PDF in a backup with no hashes: toast ${JSON.stringify(msg)}`);
+    /* the nine refusals changed nothing, and came fast (nothing was inflated to find out) */
+    expectSame(before, await snapshot(page), 'library after refusing every zip bomb');
+    assert(Date.now() - t0 < 60000, 'the refusals took ' + (Date.now() - t0) + ' ms');
+    /* (e) the unchanged v1 backup, and a normal backup, still restore */
+    msg = await restore(page, await write(v1), /Restored|damaged|not a/);
+    assert(msg === 'Restored 1 song and 0 setlists', '(e) a version 1 backup with no hashes: toast ' + JSON.stringify(msg));
+    msg = await restore(page, await write(good), /Restored|damaged|not a/);
+    assert(msg === 'Restored 1 song and 0 setlists', '(e) a normal backup: toast ' + JSON.stringify(msg));
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
 {name: 'hardening: a missing hash is not filled in from a PDF that was replaced while hashing', async run(ctx){
   const s = await ctx.session(), page = s.page;
   try{
