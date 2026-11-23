@@ -10,13 +10,15 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-import {FIX, TMP, ROOT, JSZip, assert, sleep, sha256, idbAll, fileHashes, snapshot, diff, backupNow, wipe} from './harness.mjs';
+import {FIX, TMP, ROOT, JSZip, PDFDocument, assert, sleep, sha256, idbAll, fileHashes, snapshot, diff, backupNow, wipe, download, openShareMenu} from './harness.mjs';
 import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
+import {readPackage} from './share-lib.mjs';
 
 const ONE = fs.readFileSync(path.join(FIX, 'one-page.pdf')), H1 = sha256(ONE);
 const CRAFTED = '" style="position:fixed;inset:0;opacity:0" data-del="ms123';
 const REFUSED = /^That backup has something the app can't read \(.+\)\. Nothing was changed\.$/;
 
+const waitFor = async (fn, what, ms = 8000) => { const end = Date.now() + ms; let v; while(Date.now() < end){ v = await fn(); if(v) return v; await sleep(80); } throw new Error(typeof what === 'function' ? await what() : what); };
 const clearToast = page => page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
 async function waitToast(page, re, ms = 20000){
   await page.waitForFunction(src => new RegExp(src).test(document.querySelector('#toast').textContent), re.source, {timeout: ms})
@@ -639,6 +641,12 @@ print(json.dumps(out))`;
     msg = await restore(page, await write(good));
     assert(/^That backup is too big for this tablet to open\. Nothing was changed\.$/.test(msg), `(c) a file over the size limit: toast ${JSON.stringify(msg)}`);
     await setLimits(std);
+    /* (c2) library.json with one changed byte: its CRC-32 is checked now that JSZip does not */
+    const jflip = Buffer.from(good), j0 = jflip.indexOf('Song a');
+    assert(j0 > 0, 'test setup: no library.json text');
+    jflip[j0 + 5] = 'X'.charCodeAt(0);
+    msg = await restore(page, await write(jflip));
+    assert(/^That backup is damaged\. Nothing was changed\.$/.test(msg), `(c) library.json with a changed byte: toast ${JSON.stringify(msg)}`);
     /* (d) a backup with no hashes (version 1) with 16 bytes of its PDF changed: the zip's CRC-32 is still checked */
     const noHash = liveSong('v', 'v'); delete noHash.hash;
     const v1 = await bytes((() => { const z = new JSZip(); z.file('files/v.pdf', ONE); z.file('library.json', lib([noHash], {version: 1})); return z; })());
@@ -657,6 +665,98 @@ print(json.dumps(out))`;
     assert(msg === 'Restored 1 song and 0 setlists', '(e) a normal backup: toast ' + JSON.stringify(msg));
     noErrors(s);
   } finally { await s.close(); }
+}},
+
+{name: 'hardening: names are cut to 200 characters where they are made, and a long name is never refused', async run(ctx){
+  const R = (ctx && ctx.root) || ROOT;
+  const {cutName} = await import(pathToFileURL(path.join(R, 'js', 'names.js')).href);
+  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  /* the helper: short and non-text values untouched, a cut at 200 that never splits an emoji and drops the trailing space */
+  assert(cutName('abc') === 'abc' && cutName(undefined) === undefined && cutName('') === '' && cutName('x'.repeat(200)) === 'x'.repeat(200), 'cutName changed a short name');
+  assert(cutName('x'.repeat(201)) === 'x'.repeat(200), 'cutName(201) is ' + cutName('x'.repeat(201)).length);
+  const emoji = cutName('a'.repeat(199) + '😀' + 'b'.repeat(20));
+  assert(emoji === 'a'.repeat(199) && !loneSurrogate.test(emoji), 'an emoji across character 200 was split: ' + emoji.length);
+  const fits = cutName('a'.repeat(198) + '😀' + 'b');
+  assert(fits.length === 200 && !loneSurrogate.test(fits), 'an emoji that fits was cut: ' + fits.length);
+  assert(cutName('a'.repeat(190) + ' '.repeat(20) + 'b') === 'a'.repeat(190), 'the space before the cut was kept');
+  const LONG = 'Long ' + 'x'.repeat(595), LONGER = 'q'.repeat(600);
+  let pkg;
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    /* Add PDFs: a 240-character file name */
+    const fileName = 'abcdefghij'.repeat(24);
+    await page.setInputFiles('#file', {name: fileName + '.pdf', mimeType: 'application/pdf', buffer: fs.readFileSync(path.join(FIX, 'two-page.pdf'))});
+    await waitSongs(page, 1); await waitToast(page, /^Added/);
+    let added = Object.values(await idbAll(page, 'songs'))[0];
+    assert(added.song.length === 200 && added.song.toLowerCase() === fileName.slice(0, 200) && added.title === added.song, `Add PDFs: a 240-character name was stored with ${added.song.length} characters: ${added.title.length} in the title`);
+    /* a backup that holds a 600-character song name (kept whole: restore keeps its records) and a version 1 record whose title is 600 */
+    const msg = await restore(page, await zipFile({songs: [liveSong('lg', 'lg', {song: LONG, title: 'x'}), {id: 'old', title: LONGER, pages: 1, hash: H1, added: 1, updated: 1}]}, {lg: ONE, old: ONE}));
+    assert(msg === 'Restored 2 songs and 0 setlists', 'the restore: ' + msg);
+    const st = await idbAll(page, 'songs');
+    assert(st.lg.song === LONG, 'restore changed a record it keeps whole: ' + st.lg.song.length);
+    assert(st.old.song.length === 200 && st.old.title === st.old.song && /^q+$/i.test(st.old.song), 'a version 1 title of 600 characters gives a song of ' + st.old.song.length);
+    /* Share songs: the package holds the cut name (the other tablet would refuse a long one) */
+    await page.click('#tLib');
+    await openShareMenu(page, 'share');
+    await page.locator('.modal .pick label', {hasText: 'Long xxxxxxxxxx'}).locator('input').check();
+    pkg = (await download(page, () => page.click('.modal [data-ok]'))).file;
+    await page.waitForSelector('.modal [data-x]'); await page.click('.modal [data-x]'); await page.waitForFunction(() => !document.querySelector('.modal'));
+    const made = await readPackage(pkg);
+    assert(made.share.songs.length === 1 && made.share.songs[0].song === LONG.slice(0, 200), 'the package holds a song name of ' + made.share.songs[0].song.length + ' characters');
+    /* Copy song of the long one: the copy's name is cut, the original is left as it is */
+    await songAct(page, 'copy', 'lg');
+    await page.fill('.modal.copyask input', 'live');
+    await page.click('.modal.copyask [data-ok]');
+    await waitSongs(page, 4);
+    const after = await idbAll(page, 'songs'), copy = Object.values(after).find(x => x.id !== 'lg' && x.version === 'live');
+    assert(copy && copy.song === LONG.slice(0, 200) && copy.title === `${copy.song} (live)`, 'the copy of a long name: ' + (copy && copy.song.length));
+    assert(after.lg.song === LONG, 'Copy song changed the original');
+    /* Edit song, Save: cut */
+    await songAct(page, 'edit', 'lg');
+    await page.waitForSelector('.modal input');
+    await page.click('.modal [data-ok]');
+    await waitFor(async () => (await idbAll(page, 'songs')).lg.song.length === 200, 'Edit song kept a name of ' + (await idbAll(page, 'songs')).lg.song.length + ' characters');
+    assert((await idbAll(page, 'songs')).lg.song === LONG.slice(0, 200), 'Edit song cut at the wrong place');
+    /* a package made by hand with a 1500-character song name is imported and cut; a chart update file likewise */
+    const T = fs.readFileSync(path.join(FIX, 'three-page.pdf')), HT = sha256(T);
+    const zipBuf = async (name, json, pdf, file) => { const z = new JSZip(); z.file(name, JSON.stringify(json)); z.file(file, pdf); return {name: 'x.zip', mimeType: 'application/zip', buffer: Buffer.from(await z.generateAsync({type: 'nodebuffer'}))}; };
+    await page.click('#tLib');
+    await page.setInputFiles('#shareFile', await zipBuf('share.json', {app: 'setlist-stand', kind: 'share', version: 1, saved: new Date().toISOString(), songs: [{id: 's1', song: 'Big ' + 'y'.repeat(1496), artist: 'z'.repeat(900), version: 'v', pages: 3, hash: HT}], setlist: null}, T, 'files/s1.pdf'));
+    const dlg = page.locator('.modal [role=dialog]', {hasText: 'Import share package'});
+    await dlg.waitFor({timeout: 30000});
+    assert(/1 new song will be added/.test(await dlg.textContent()), 'the package with a 1500-character name was not offered: ' + await dlg.textContent());
+    await page.click('.modal [data-ok]');
+    await waitToast(page, /^Added 1 song/);
+    const imp = Object.values(await idbAll(page, 'songs')).find(x => x.hash === HT);
+    assert(imp && imp.song === ('Big ' + 'y'.repeat(1496)).slice(0, 200) && imp.artist === 'z'.repeat(200) && imp.version === 'v', 'the imported long names: ' + (imp && [imp.song.length, imp.artist.length]));
+    await page.waitForFunction(() => !document.querySelector('.modal'));
+    const P4 = await (async () => { const d = await PDFDocument.create(); d.addPage([300, 300]).drawText('chart update', {x: 20, y: 150, size: 18}); return Buffer.from(await d.save({updateMetadata: false})); })();
+    await page.setInputFiles('#chartUpdateFile', await zipBuf('update.json', {app: 'setlist-stand', kind: 'chart-update', version: 1, made: new Date().toISOString(), charts: [{id: 'c1', target: 'nobody', song: 'Chart ' + 'w'.repeat(1494), artist: '', version: '', hash: sha256(P4)}]}, P4, 'files/c1.pdf'));
+    const row = page.locator('.modal .cu-list .cu-row').first();
+    await row.waitFor({timeout: 60000});
+    await row.locator('input').check();
+    await page.click('.modal [data-ok]');
+    await page.locator('.modal [role=dialog]').filter({has: page.locator('button.pri[data-x]')}).waitFor({timeout: 60000});
+    await page.click('.modal [data-x]'); await page.waitForFunction(() => !document.querySelector('.modal'));
+    const cu = Object.values(await idbAll(page, 'songs')).find(x => x.hash === sha256(P4));
+    assert(cu && cu.song === ('Chart ' + 'w'.repeat(1494)).slice(0, 200), 'the chart update song: ' + (cu && cu.song.length));
+    noErrors(s);
+  } finally { await s.close(); }
+  /* the other tablet takes the package made from the long name */
+  const s2 = await ctx.session(), p2 = s2.page;
+  try{
+    await s2.goto();
+    await p2.click('#tLib');
+    await p2.setInputFiles('#shareFile', pkg);
+    const dlg = p2.locator('.modal [role=dialog]', {hasText: 'Import share package'});
+    await dlg.waitFor({timeout: 30000});
+    assert(/1 new song will be added/.test(await dlg.textContent()), 'the package of a long name was not offered: ' + await dlg.textContent());
+    await p2.click('.modal [data-ok]');
+    await waitToast(p2, /^Added 1 song/);
+    assert(Object.values(await idbAll(p2, 'songs'))[0].song === LONG.slice(0, 200), 'the imported song name');
+    noErrors(s2);
+  } finally { await s2.close(); }
 }},
 
 {name: 'hardening: a missing hash is not filled in from a PDF that was replaced while hashing', async run(ctx){

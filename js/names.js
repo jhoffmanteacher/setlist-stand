@@ -78,6 +78,11 @@ export function displayName({ song = '', artist = '', version = '' } = {}) {
   return song + (version ? ` (${version})` : '') + (artist ? ` - ${artist}` : '');
 }
 
+/* A song, artist or version name as it is MADE here: at most 200 characters (what share import and chart update files take), cut at
+   a whole character (never half of an emoji) with the trailing space dropped. Anything else is returned as it is. */
+export const MAX_NAME = 200;
+export const cutName = v => typeof v === 'string' && v.length > MAX_NAME ? v.slice(0, /[\uD800-\uDBFF]/.test(v[MAX_NAME - 1]) ? MAX_NAME - 1 : MAX_NAME).trimEnd() : v;
+
 /* The order of songs in the library, the Archived list, search results and the song pickers: A to Z by song name.
    The song name is what is compared (the `song` field, the title for a record with no `song`), with extra spaces taken
    out and NOTHING else dropped: "The" and "A" are words like any other ("The Weight" is under T). Upper and lower case and

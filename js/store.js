@@ -1,4 +1,4 @@
-import {splitName, displayName, compareSongs} from './names.js';
+import {splitName, displayName, compareSongs, cutName} from './names.js';
 import {uid} from './util.js';
 
 /* Storage: IndexedDB `setlist-stand`, with an in-memory fallback. STORE_NAMES is the ONE list of stores: the upgrade, the
@@ -179,7 +179,7 @@ const now = () => Date.now();
 export function upgradeSong(s){
   if(s.deleted) return false;
   const before = JSON.stringify(s);
-  if(typeof s.song !== 'string'){ const n = splitName(s.title || ''); s.song = n.song; s.artist = n.artist; s.version = n.version; }
+  if(typeof s.song !== 'string'){ const n = splitName(s.title || ''); s.song = cutName(n.song); s.artist = cutName(n.artist); s.version = cutName(n.version); }
   s.artist = s.artist || ''; s.version = s.version || '';
   s.archived = !!s.archived;
   s.colls = cleanColls(s.colls);
@@ -235,7 +235,7 @@ export const saveSong = s => { s.title = displayName(s); s.updated = stamp(s); r
 /* The record for a new song whose PDF (pages, hash) is about to be saved under its id. name: {song, artist, version};
    colls: the collections it joins (joinColls() in js/collections.js; [] by default). */
 export function newSong(name, pages, hash, colls = []){
-  const t = now(), s = {id:uid(), ...name, archived:false, colls:[...colls], pages, hash, added:t, updated:t};
+  const t = now(), s = {id:uid(), ...name, song:cutName(name.song), artist:cutName(name.artist), version:cutName(name.version), archived:false, colls:[...colls], pages, hash, added:t, updated:t};
   s.title = displayName(s);
   return s;
 }

@@ -4,6 +4,7 @@
    each song's title parts, page count and crop, and for a setlist its order and breaks. It never carries annotations,
    archive flags, timestamps or this library's ids (songs are numbered s1, s2... inside the package). */
 import {get, songById, liveItems, sha256} from './store.js';
+import {cutName} from './names.js';
 
 export const SHARE_VERSION = 1;
 
@@ -41,7 +42,7 @@ export async function makePackage(songIds, set, opts = {}){
     if(!f){ skipped++; continue; }
     const buf = await f.arrayBuffer(), pid = 's' + (songs.length + 1);
     zip.file('files/' + pid + '.pdf', buf, {createFolders:false});       // no "files/" folder entry: the zip holds only share.json and the PDFs
-    const rec = {id:pid, song:s.song, artist:s.artist, version:s.version, pages:s.pages, hash:await sha256(buf)};
+    const rec = {id:pid, song:cutName(s.song), artist:cutName(s.artist), version:cutName(s.version), pages:s.pages, hash:await sha256(buf)};
     const crop = cropOf(s); if(crop) rec.crop = crop;
     songs.push(rec); local.set(id, pid);
   }

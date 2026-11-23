@@ -8,10 +8,10 @@
    replaced. Then ONE putAll() writes the new songs, their PDFs and the setlist: all or nothing. */
 import {esc, toast, modal, uid, hooks, pdfPageCount} from './util.js';
 import {state, putAll, load, newSong, sha256, ensureHashes, cleanCrop} from './store.js';
-import {displayName} from './names.js';
+import {displayName, cutName} from './names.js';
 import {explainError} from './errors.js';
 import {joinColls} from './collections.js';
-import {ID_RE, LIMITS} from './backup.js';
+import {ID_RE, LIMITS, okText as okName} from './backup.js';
 import {SHARE_VERSION} from './sharepack.js';
 import {crc32, readCapped, mb, directoryProblem as zipDirectoryProblem, NOT_PACKAGE, TOO_MANY} from './zipread.js';
 export {crc32, readCapped, mb, NOT_PACKAGE, TOO_MANY};         // chartfile.js and the tests read them from here
@@ -35,8 +35,8 @@ function checkShare(d){
     if(typeof s.id !== 'string' || !ID_RE.test(s.id)) return 'a song id ' + short(s.id);
     if(ids.has(s.id)) return `the song id ${s.id} twice`;
     ids.add(s.id);
-    if(typeof s.song !== 'string' || !s.song.trim() || s.song.length > 200) return `song ${s.id} has no usable title`;
-    for(const k of ['artist', 'version']) if(s[k] != null && !okText(s[k])) return `song ${s.id} has a ${k} that is not short text`;
+    if(typeof s.song !== 'string' || !s.song.trim() || s.song.length > LIMITS.text) return `song ${s.id} has no usable title`;
+    for(const k of ['artist', 'version']) if(s[k] != null && !okName(s[k])) return `song ${s.id} has a ${k} that is not short text`;
     if(!(typeof s.hash === 'string' && /^[0-9a-f]{64}$/i.test(s.hash))) return `song ${s.id} has no valid hash`;      // required: it is how a damaged PDF is noticed
   }
   const st = d.setlist;
@@ -95,7 +95,7 @@ export async function readPackage(file, isStopped = () => false){
     let room = limits.maxPdfBytes, dropped = 0;
     for(const ps of data.songs){
       if(isStopped()) return {error:'stopped'};                // Cancel was tapped: stop reading, so a retry does not hold two packages
-      const label = displayName({song:ps.song.trim(), artist:String(ps.artist || '').trim(), version:String(ps.version || '').trim()});
+      const label = displayName({song:cutName(ps.song.trim()), artist:cutName(String(ps.artist || '').trim()), version:cutName(String(ps.version || '').trim())});
       const pdf = zip.file('files/' + ps.id + '.pdf');
       if(!pdf) return bad(`That package is missing the PDF for "${label}".`);
       const bytes = await readCapped(pdf, room);

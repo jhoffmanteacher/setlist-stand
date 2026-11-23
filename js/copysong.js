@@ -1,6 +1,6 @@
 import {esc, modal, toast, hooks} from './util.js';
 import {putAll, get, load, state, songById, upgradeInk, inkRecord} from './store.js';
-import {displayName} from './names.js';
+import {displayName, cutName} from './names.js';
 import {explainError} from './errors.js';
 import {unique} from './shareimport.js';
 
@@ -48,7 +48,7 @@ export async function copySong(id){
     if(!f){ toast('This song has no PDF stored on this tablet, so it cannot be copied.'); return; }
     const bytes = await f.arrayBuffer();
     const taken = new Set([...state.songs.map(x => x.id), ...state.sets.map(x => x.id)]);
-    const copy = {...JSON.parse(JSON.stringify(cur)), id:unique(taken), version, archived:false, added:t, updated:t};
+    const copy = {...JSON.parse(JSON.stringify(cur)), id:unique(taken), song:cutName(cur.song), artist:cutName(cur.artist), version:cutName(version), archived:false, added:t, updated:t};
     copy.title = displayName(copy);
     const ops = [{store:'files', key:copy.id, value:new Blob([bytes], {type:'application/pdf'})}, {store:'songs', key:copy.id, value:copy}];
     /* The marks of every page: the live ones only, each with a fresh id and time (a deletion marker means nothing to a new song). */

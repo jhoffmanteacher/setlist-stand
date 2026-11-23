@@ -11,9 +11,9 @@
    accents ignored), and NEVER by hash; the hash only says "already up to date" and "this PDF is also in your library". */
 import {pdfPageCount} from './util.js';
 import {state, sha256, ensureHashes} from './store.js';
-import {compareSongs, displayName} from './names.js';
-import {ID_RE, LIMITS} from './backup.js';
-import {limits, isObj, okText, short, mb, crc32, readCapped, directoryProblem, NOT_PACKAGE, TOO_MANY} from './shareimport.js';
+import {compareSongs, displayName, cutName} from './names.js';
+import {ID_RE, LIMITS, okText as okName} from './backup.js';
+import {limits, isObj, short, mb, crc32, readCapped, directoryProblem, NOT_PACKAGE, TOO_MANY} from './shareimport.js';
 
 export const CHART_UPDATE_VERSION = 1;
 const NOT_UPDATE = 'That file is not a Setlist Stand chart update file.';
@@ -27,8 +27,8 @@ function checkCharts(d){
     if(ids.has(c.id)) return `the chart id ${c.id} twice`;
     ids.add(c.id);
     if(typeof c.target !== 'string' || !ID_RE.test(c.target)) return `chart ${c.id} has a target ${short(c.target)}`;
-    if(typeof c.song !== 'string' || !c.song.trim() || c.song.length > 200) return `chart ${c.id} has no usable title`;
-    for(const k of ['artist', 'version']) if(c[k] != null && !okText(c[k])) return `chart ${c.id} has a ${k} that is not short text`;
+    if(typeof c.song !== 'string' || !c.song.trim() || c.song.length > LIMITS.text) return `chart ${c.id} has no usable title`;
+    for(const k of ['artist', 'version']) if(c[k] != null && !okName(c[k])) return `chart ${c.id} has a ${k} that is not short text`;
     if(!(typeof c.hash === 'string' && /^[0-9a-f]{64}$/i.test(c.hash))) return `chart ${c.id} has no valid hash`;
   }
   return null;
@@ -70,7 +70,7 @@ export async function readChartFile(file, opts = {}){
     for(const c of data.charts){
       if(stopped()) return {error:'stopped'};
       say(`Reading chart ${++n} of ${data.charts.length}…`);
-      const name = {song:c.song.trim(), artist:String(c.artist || '').trim(), version:String(c.version || '').trim()}, label = displayName(name);
+      const name = {song:c.song.trim(), artist:String(c.artist || '').trim(), version:String(c.version || '').trim()}, label = displayName({song:cutName(name.song), artist:cutName(name.artist), version:cutName(name.version)});
       const pdf = zip.file('files/' + c.id + '.pdf');
       if(!pdf) return bad(`That file is missing the PDF for "${label}".`);
       const bytes = await readCapped(pdf, room);

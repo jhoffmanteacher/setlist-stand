@@ -1,7 +1,7 @@
 import {$, esc, toast, form, hooks, modal, busy, pdfPageCount} from './util.js';
 import {putAll, get, load, state, songById, saveSong, newSong, sha256, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
-import {compareSongs, songMatches} from './names.js';
+import {compareSongs, songMatches, cutName} from './names.js';
 import {explainError, getProblems, showProblemLog} from './errors.js';
 import {openViewer} from './viewer.js';
 import {shareSongs} from './share.js';
@@ -212,7 +212,7 @@ async function editSong(id){
   const s = songById(id); if(!s) return;
   const r = await form('Edit song', [{key:'song', label:'Title', value:s.song}, {key:'artist', label:'Artist', value:s.artist}, {key:'version', label:'Version', value:s.version}],
     {label:'Collections', options:collOptions(s)});
-  if(r && r.song){ s.song = r.song; s.artist = r.artist; s.version = r.version; s.colls = applyTicks(s, r.checks); await saveSong(s); await load(); hooks.render(); }
+  if(r && r.song){ s.song = cutName(r.song); s.artist = cutName(r.artist); s.version = cutName(r.version); s.colls = applyTicks(s, r.checks); await saveSong(s); await load(); hooks.render(); }
 }
 async function setArchived(id, on){
   const s = songById(id); if(!s) return;
