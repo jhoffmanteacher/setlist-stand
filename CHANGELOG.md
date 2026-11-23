@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-23: A to Z strip and a song count
+- The Library shows how many songs you have ("74 songs", or "3 of 74 songs" while you search or look at one collection).
+- With 30 or more songs, a strip of letters appears along the right edge: tap a letter, or slide your finger along the strip, to jump to the songs that start with it. Letters with no songs are dimmed.
+
 ## 2026-11-23: Updates that cannot get stuck
 - Setlist Stand now shows "Updated. Tap to reload" even if an update leaves the app blank, so a bad update can always be replaced by the next good one.
 - Left open, the app finds a new version by itself within about an hour (never during a song, and the banner waits while a box is open).
