@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-23: One ⋯ button per song, no Test connection
+- Each song in the Library has one **⋯** button for Edit, Copy, New version, Archive and Delete (Restore and Delete in Archived), so long titles fit: on an iPad held upright the title gets about twice the room. Delete asks "Delete <title>?" before it deletes anything.
+- The Google Drive box no longer has **Test connection**; Sync does the real job.
+
 ## 2026-11-23: Import chart updates
 - **Import chart updates:** Share / Import → Import chart updates takes one file of cleaned-up charts from Claude and gives each song its new chart, like New version: same place in every setlist, the old chart and its marks kept in Archived. You see the list first and can untick any song.
 - The list also shows charts that are already up to date, a chart for a song it cannot find (you can tick it to add it as a new song), and anything worth a second look ("Matched by name", "In the file: …", "This PDF is also in your library as …"). Apply saves everything ticked in one go, or nothing.

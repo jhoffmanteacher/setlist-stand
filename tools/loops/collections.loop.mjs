@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {FIX, assert, sha256, snapshot, normalise, diff, download, idbAll, openSetMenu} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 import {importFixtures, buildLibrary, closeDone, readPackage, songsOf} from './share-lib.mjs';
 
 const bytesOf = f => Array.from(fs.readFileSync(path.join(FIX, f)));
@@ -228,7 +229,7 @@ async function loopMemoryAndStaleDefault(ctx){
     await page.click('.collname [data-ok]');
     await page.locator('.collmgr .mname', {hasText: 'Memory Band'}).waitFor({timeout: 5000});
     await page.click('.collmgr [data-x]');
-    await page.click('#libList [data-edit]');
+    await songActIn(page, page.locator('#libList li.row').first(), 'edit');
     await page.locator('.modal fieldset.checks label', {hasText: 'Memory Band'}).locator('input').check();
     await page.click('.modal [data-ok]');
     await page.waitForFunction(() => !document.querySelector('.modal'));

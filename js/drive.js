@@ -164,9 +164,3 @@ export function listFolder(folderId, {signal} = {}){
   if(!okFileId(folderId)) throw odd('a folder id that is not one');
   return listAll({q:`'${folderId}' in parents and trashed = false`, fields:'nextPageToken,files(id,name,mimeType,modifiedTime,size,appProperties)', pageSize:'1000'}, {signal});
 }
-
-/* The Part 1 test: find or make the folder, list it. {created, count}. */
-export async function testConnection({signal} = {}){
-  const f = await ensureFolder({signal});
-  return {created:f.created, count:(await listFolder(f.id, {signal})).length};
-}

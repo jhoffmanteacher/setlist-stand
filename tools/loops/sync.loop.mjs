@@ -89,12 +89,25 @@ async function trip(h, auth = {}){
   await settled(page);
 }
 const connectOk = async h => { await trip(h); const t = await driveLine(h.page); assert(/Connected to Google Drive until/.test(t), 'not connected after a good sign-in: ' + t); };
-async function runTest(page){
-  await driveTap(page, 'drivetest');
-  const t = await until(async () => { const x = await dialogText(page).catch(() => null); return x && !/^Testing the connection/.test(x) ? x : null; }, 'the test never gave a result', 20000);
-  await closeDialog(page);
+/* What a Sync says. Test connection is gone (2026-11-23): Sync is now the one button that talks to Drive, so these loops tap it and read
+   the box it ends in: the report ("Sync finished", "Sync could not finish", "Sync stopped") or, when no sign-in is held, "Sign in to sync".
+   The first-time note ("Sync your tablets") is answered with Continue whenever it comes. The box is closed (OK or Cancel) unless
+   {close: false}. */
+async function syncResult(page, {close = true, timeout = 40000} = {}){
+  const t = await until(async () => {
+    const x = await dialogText(page).catch(() => null);
+    if(!x || /^Google Drive/.test(x) || /^Syncing/.test(x)) return null;
+    if(/^Sync your tablets/.test(x)){ await page.locator('.modal').last().locator('[data-ok]').click(); return null; }
+    return x;
+  }, 'the sync gave no result', timeout);
+  if(close) await closeDialog(page);
   return t;
 }
+async function runSync(page, opts){
+  await driveTap(page, 'syncnow');
+  return syncResult(page, opts);
+}
+const FINISHED = /^Sync finished/;
 
 /* ---------- 1a: Connect from a clean library ---------- */
 async function loopConnect(ctx){
@@ -181,7 +194,7 @@ async function loopConnect(ctx){
     assert(!holdsText(scanned, tok1), 'the token is in storage (localStorage, sessionStorage, a database, a cache) or in the page');
     assert(!scanned.ls.some(x => x.startsWith('ss-google=')) && !scanned.ss.some(x => /^ss-google=/.test(x)), 'a key ss-google exists');
     assert(!JSON.stringify(await snapshot(page)).includes(tok1), 'the token is in the library database');
-    assert(driveCalls(google).length === 0, 'Drive was called before Test connection was tapped');
+    assert(driveCalls(google).length === 0, 'Drive was called before Sync was tapped');
     const after = normalise(await snapshot(page));
     assert(!diff(before, after).length, 'signing in changed the library: ' + diff(before, after).join(' | '));
 
@@ -189,7 +202,7 @@ async function loopConnect(ctx){
     await page.reload(); await settled(page); await sleep(400);
     assert(await offersConnect(page), 'after a reload the Library does not offer Connect: ' + await driveLine(page));
     const reloaded = await driveState(page);
-    assert(!reloaded.count('drivetest') && !reloaded.count('drivedisconnect'), 'after a reload the Library still offers Test connection or Disconnect');
+    assert(!reloaded.count('drivedisconnect'), 'after a reload the Library still offers Disconnect');
     assert(driveCalls(google).length === 0, 'Drive was called by opening the app (only a button may do that)');
     assert(!holdsText(await everyStore(page), tok1), 'the token is in storage after a reload');
     /* a token an older version of the app left in storage goes when the app opens, and is never used */
@@ -197,13 +210,14 @@ async function loopConnect(ctx){
     await page.reload(); await settled(page); await sleep(400);
     assert(!('ss-google' in await ls(page)), 'an old ss-google key was left in storage');
     assert(await offersConnect(page), 'an old ss-google key was taken as a sign-in: ' + await driveLine(page));
-    assert(driveCalls(google).length === 0 && !(await driveState(page)).count('drivetest'), 'an old ss-google key was used');
+    assert(driveCalls(google).length === 0 && !(await driveState(page)).count('drivedisconnect'), 'an old ss-google key was used');
 
-    /* sign in again, then the test, then the token is searched for everywhere it must never be */
+    /* sign in again, then Sync, then the token is searched for everywhere it must never be */
     await trip(h);
     const tok = google.issued.at(-1);
     assert(tok !== tok1 && await isConnected(page), 'not connected after signing in again');
-    assert(/Connected\. Folder 'Setlist Stand' is ready \(0 files\)/.test(await runTest(page)), 'the test connection result');
+    const first = await runSync(page);
+    assert(FINISHED.test(first), 'the first Sync after signing in did not finish: ' + first);
     const calls = driveCalls(google);
     assert(calls.length >= 2 && calls.every(c => c.authorization === 'Bearer ' + tok && !c.tokenInUrl), 'a Drive call lacked the Authorization header, or put the token in the address');
     assert(google.requests.every(r => !r.tokenInUrl), 'the token was sent in an address');
@@ -291,13 +305,13 @@ async function loopRefused(ctx){
     assert(await isConnected(page), 'not connected after a good sign-in');
     const fragment = s.navs.filter(u => u.includes('#access_token=')).at(-1).slice(h.base.length);
     /* (1) in the page that holds the sign-in: the replay is refused (its note is gone), the address is cleaned, and the sign-in already held is untouched:
-       the Library still says connected and Test connection still works, so the answer neither replaced the token nor forgot it */
+       the Library still says connected and Sync still works, so the answer neither replaced the token nor forgot it */
     const replayed = await page.evaluate(async fragment => { history.replaceState(null, '', location.pathname + fragment); return (await import('./js/googleauth.js')).takeReturn(); }, fragment);
     assert(replayed && replayed.ok === false && replayed.kind === 'foreign', 'a replayed answer was accepted or not refused as foreign: ' + JSON.stringify(replayed));
     assert(await page.evaluate(() => location.hash === ''), 'a replayed answer was left in the address');
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     assert(await isConnected(page), 'a replayed answer made the app forget the sign-in it held: ' + await driveLine(page));
-    assert(/Connected\./.test(await runTest(page)), 'a replayed answer broke the sign-in it found: Test connection no longer works');
+    assert(FINISHED.test(await runSync(page)), 'a replayed answer broke the sign-in it found: Sync no longer works');
     /* (2) arriving fresh (a new page, a new life) with the same answer: refused in plain words, and nothing is connected or kept */
     await arrive(fragment);
     assert(/did not come from a sign-in started in this window/.test(await dialogText(page)), 'a replayed answer was accepted');
@@ -324,7 +338,7 @@ async function loopRefused(ctx){
   } finally { await s.close(); }
 }
 
-/* ---------- 1c: a token that is ending is not used; Connect again carries on with the test ---------- */
+/* ---------- 1c: a token that is ending is not used; Sync signs in again and carries on by itself ---------- */
 async function loopTokenLife(ctx){
   const h = await open(ctx), {s, page, google} = h;
   try{
@@ -332,28 +346,26 @@ async function loopTokenLife(ctx){
     assert(await isConnected(page), 'a token with 75 seconds left was not accepted');
     /* time passes (the page's clock moves; no storage is touched): with 25 seconds left (under the minute kept in hand) the token is not used */
     await driveBox(page);                                 // the Google Drive box is open, drawn while the token was good
-    await clockAhead(page, 50e3, {redraw: false});        // the box is not redrawn yet, so Test connection is still on screen: the request itself must refuse the token
+    await clockAhead(page, 50e3, {redraw: false});        // the box is not redrawn yet, so Sync is still on screen: the sync itself must refuse the token
     google.clearLog();
-    await driveTap(page, 'drivetest');
-    const text = await dialogText(page);
-    assert(/Your Google sign-in has run out\. Tap Connect again/.test(text), 'Test connection with an ending token: ' + text);
+    const text = await runSync(page, {close: false});
+    assert(/^Sign in to sync/.test(text) && /Sync needs you to sign in to Google first/.test(text), 'Sync with an ending token: ' + text);
     assert(google.requests.length === 0, 'an ending token was used for a request');
     await closeDialog(page);
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     assert(/ran out.*Connect again/.test(await driveLine(page)), 'an ending token is still shown as connected: ' + await driveLine(page));
-    await driveTap(page, 'drivetest');
-    /* Connect again from this dialog: the test the person asked for runs by itself when they are back */
+    await driveTap(page, 'syncnow');
+    /* Continue from this dialog: the Sync the person asked for runs by itself when they are back */
     await trip(h);
-    const res = await until(async () => { const x = await dialogText(page).catch(() => null); return x && /Connected\./.test(x) ? x : null; }, 'the test did not carry on after signing in again', 20000);
-    assert(/Folder 'Setlist Stand' is ready/.test(res), res);
-    await closeDialog(page);
+    const res = await syncResult(page);
+    assert(FINISHED.test(res), 'the Sync did not carry on after signing in again: ' + res);
     assert(await isConnected(page), 'not connected after signing in again');
     /* an hour later the new token has ended too: said so, with the time, and not used */
     await driveBox(page);
     await clockAhead(page, 4000e3, {redraw: false});
     google.clearLog();
-    await driveTap(page, 'drivetest');
-    assert(/Your Google sign-in has run out/.test(await dialogText(page)) && google.requests.length === 0, 'an ended token was used, or Test connection did not say so');
+    const t2 = await runSync(page, {close: false});
+    assert(/^Sign in to sync/.test(t2) && google.requests.length === 0, 'an ended token was used, or Sync did not say so: ' + t2);
     await closeDialog(page);
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     assert(/ran out at.*Connect again/.test(await driveLine(page)), 'an ended token is still shown as connected: ' + await driveLine(page));
@@ -361,31 +373,48 @@ async function loopTokenLife(ctx){
   } finally { await s.close(); }
 }
 
-/* ---------- 1d: the folder is made once and found again; every page of a listing is read ---------- */
+/* ---------- 1d: the folder is made once and found again; every page of a listing is read ----------
+   (Test connection used to show this through "Folder 'Setlist Stand' is ready (N files)". Sync does the same finding and listing as its first
+   steps, so the loop reads the stand-in's own files and the requests the app sent: the home folder, the sub-folders made inside it, which
+   folders were listed, and the "files in your Drive folder did not come from this app" line, which counts what Sync listed that it did not make.) */
+const SUB = {charts: 'Charts', data: 'Library data (do not edit)'};
+const subOf = (g, home, mark) => g.list(home).filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === mark);
+const homesIn = g => g.list().filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'home');
+/* a sub-folder as Sync finds it, made by hand: the app's mark on it, and a file in it that the app did not make */
+const seedSub = (g, home, mark, files = 0) => { const id = g.addFile({name: SUB[mark], mimeType: FOLDER, parents: [home], appProperties: {setlistStand: mark}}); for(let i = 0; i < files; i++) g.addFile({name: `chart${i}.pdf`, mimeType: 'application/pdf', parents: [id]}); return id; };
+const strayLine = n => new RegExp(`${n} ${n === 1 ? 'file' : 'files'} in your Drive folder did not come from this app and ${n === 1 ? 'was' : 'were'} left alone`);
 async function loopFolder(ctx){
   const h = await open(ctx), {s, page, google} = h;
   let made;
   try{
     await connectOk(h);
-    assert(/is ready \(0 files\)\. The folder was just made/.test(await runTest(page)), 'first test');
+    const posts = () => google.requests.filter(r => r.method === 'POST').length;
+    const r1 = await runSync(page);
+    assert(FINISHED.test(r1) && /Everything is up to date/.test(r1), 'first Sync: ' + r1);
     made = google.folders('Setlist Stand');
-    assert(made.length === 1 && made[0].mimeType === FOLDER && Object.keys(made[0].appProperties).length > 0, 'the first test did not make exactly one marked folder: ' + JSON.stringify(made));
-    const t2 = await runTest(page);
-    assert(/is ready \(0 files\)/.test(t2) && !/just made/.test(t2), 'second test: ' + t2);
-    assert(google.folders('Setlist Stand').length === 1, 'the second test made a second folder');
-    assert(google.requests.filter(r => r.method === 'POST').length === 1, 'folders created: ' + google.requests.filter(r => r.method === 'POST').length);
+    assert(made.length === 1 && made[0].mimeType === FOLDER && Object.keys(made[0].appProperties).length > 0, 'the first Sync did not make exactly one marked folder: ' + JSON.stringify(made));
+    assert(subOf(google, made[0].id, 'charts').length === 1 && subOf(google, made[0].id, 'data').length === 1, 'the first Sync did not make one Charts and one Library data folder inside it');
+    assert(posts() === 3, 'folders created by the first Sync (home, Charts, Library data): ' + posts());
+    const r2 = await runSync(page);
+    assert(FINISHED.test(r2), 'second Sync: ' + r2);
+    assert(google.folders('Setlist Stand').length === 1 && homesIn(google).length === 1, 'the second Sync made a second folder');
+    assert(posts() === 3, 'the second Sync made something new in an empty Drive: ' + (posts() - 3) + ' more');
     const queries = driveCalls(google).filter(r => r.method === 'GET').map(r => r.query.q || '');
-    const folderQ = queries.find(x => /appProperties has/.test(x)) || '', listQ = queries.find(x => /in parents/.test(x)) || '';
+    const folderQ = queries.find(x => /appProperties has/.test(x) && !/in parents/.test(x)) || '', listQ = queries.find(x => /in parents/.test(x) && !/mimeType/.test(x)) || '';
     for(const part of [`mimeType = '${FOLDER}'`, 'trashed = false', 'appProperties has']) assert(folderQ.includes(part), `the query that finds the folder lacks "${part}": ${folderQ}`);
     assert(!/name\s*(=|contains)/.test(folderQ) && !folderQ.includes('Setlist Stand'), `the query that finds the folder uses its name, so a folder renamed in Drive is lost: ${folderQ}`);
-    assert(!queries.some(x => /name\s*(=|contains)/.test(x) && !/in parents/.test(x)), 'a query looks for a folder by name: ' + queries.join(' | '));
-    assert(listQ.includes('trashed = false'), 'the listing of the folder counts trashed files: ' + listQ);
-    /* 250 files, Drive answers 100 at a time: all three pages are read */
-    for(let i = 0; i < 250; i++) google.addFile({name: `f${i}.json`, mimeType: 'application/json', parents: [made[0].id]});
+    assert(!queries.some(x => /name\s*(=|contains)/.test(x)), 'a query looks for a folder by name: ' + queries.join(' | '));
+    assert(listQ.includes('trashed = false'), 'the listing of a folder counts trashed files: ' + listQ);
+    /* 250 files in the library-data folder, Drive answers 100 at a time: all three pages are read (the 250 are not the app's, so Sync counts them) */
+    const dataId = subOf(google, made[0].id, 'data')[0].id;
+    for(let i = 0; i < 250; i++) google.addFile({name: `f${i}.json`, mimeType: 'application/json', parents: [dataId]});
     google.maxPage = 100; google.clearLog();
-    assert(/is ready \(250 files\)/.test(await runTest(page)), 'a listing in several pages was cut short');
-    const pages = driveCalls(google).filter(r => /in parents/.test(r.query.q || ''));
-    assert(pages.length === 3 && pages.filter(r => r.query.pageToken).length === 2, `the listing took ${pages.length} requests`);
+    const r3 = await runSync(page);
+    assert(FINISHED.test(r3) && strayLine(250).test(r3), 'a listing in several pages was cut short: ' + r3);
+    const pages = driveCalls(google).filter(r => (r.query.q || '').includes(`'${dataId}' in parents`));
+    /* Sync looks at the folder once before it acts and once after (two listings); each listing is three requests, the second and third carrying the page token */
+    const listings = pages.filter(r => !r.query.pageToken).length;
+    assert(listings >= 1 && pages.length === 3 * listings && pages.filter(r => r.query.pageToken).length === 2 * listings, `${listings} listing(s) of the folder took ${pages.length} requests`);
     assert(pages.every(r => /nextPageToken/.test(r.query.fields || '') && /files\(/.test(r.query.fields || '')), 'the app does not ask Drive for the fields it needs (Drive would send only id and name)');
     assert(pageErrors(s).length === 0, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
@@ -397,20 +426,23 @@ async function loopFolder(ctx){
     const newer = mk('2026-03-02T10:00:00.000Z'), older = mk('2026-03-01T10:00:00.000Z'), alike = mk('2026-01-01T10:00:00.000Z', {});
     const gone = mk('2026-01-02T10:00:00.000Z'); g.files.get(gone).trashed = true;                 // the oldest marked folder, but in the Drive trash
     const notDir = g.addFile({name: 'Setlist Stand', mimeType: 'application/json', appProperties: made[0].appProperties}); g.files.get(notDir).createdTime = '2026-01-03T10:00:00.000Z';   // marked, oldest, not a folder
-    g.addFile({name: 'chart.pdf', mimeType: 'application/pdf', parents: [older]});
+    seedSub(g, older, 'charts', 1);                                      // the folder Sync should use already holds a Charts folder with one file the app did not make
     await connectOk(o);
-    assert(/is ready \(1 file\)/.test(await runTest(o.page)), 'the other tablet\'s folder was not used');
-    assert(!g.requests.some(r => r.method === 'POST'), 'a second folder was made although one was there');
+    const r = await runSync(o.page);
+    assert(FINISHED.test(r) && strayLine(1).test(r), 'the other tablet\'s folder was not used (its Charts folder holds one file Sync should have counted): ' + r);
+    assert(g.folders('Setlist Stand').length === 3 && homesIn(g).length === 2, 'a second folder was made although one was there');
+    assert(subOf(g, older, 'data').length === 1 && g.requests.filter(x => x.method === 'POST').length === 1, 'the Library data folder was not made once, inside the oldest marked folder');
     assert(driveCalls(g).some(r => (r.query.q || '').includes(`'${older}' in parents`)) && ![newer, alike, gone, notDir].some(id => driveCalls(g).some(r => (r.query.q || '').includes(`'${id}' in parents`))), 'not the oldest marked, live folder');
   } finally { await o.s.close(); }
   const p = await open(ctx), g2 = p.google;
   try{
     const only = g2.addFile({name: 'Setlist Stand', mimeType: FOLDER});            // a look-alike with no mark
     await connectOk(p);
-    const said = await runTest(p.page), now = g2.folders('Setlist Stand');
-    assert(/just made/.test(said), 'a look-alike folder without the mark was used instead of making the app\'s own: ' + said);
-    assert(now.length === 2 && driveCalls(g2).some(r => r.method === 'POST'), `the look-alike was not left alone and a marked folder made (${now.length} folders)`);
-    assert(driveCalls(g2).filter(r => (r.query.q || '').includes('in parents')).every(r => !(r.query.q || '').includes(`'${only}' in parents`)), 'the look-alike folder was listed');
+    const said = await runSync(p.page), now = g2.folders('Setlist Stand');
+    assert(FINISHED.test(said), 'Sync with a look-alike folder in Drive: ' + said);
+    assert(now.length === 2 && homesIn(g2).length === 1 && now.some(f => f.id === only && !Object.keys(f.appProperties).length), `a look-alike folder without the mark was used instead of making the app's own, or was changed (${now.length} folders)`);
+    assert(driveCalls(g2).some(r => r.method === 'POST'), 'the app\'s own marked folder was not made');
+    assert(driveCalls(g2).filter(r => (r.query.q || '').includes('in parents')).every(r => !(r.query.q || '').includes(`'${only}' in parents`)) && g2.list(only).length === 0, 'the look-alike folder was listed or written to');
   } finally { await p.s.close(); }
 
   /* the app's folder renamed in Drive (it still has the mark): found, used, and no second one made; an unmarked "Setlist Stand" beside it is never taken */
@@ -418,32 +450,35 @@ async function loopFolder(ctx){
   try{
     const lookalike = g3.addFile({name: 'Setlist Stand', mimeType: FOLDER}); g3.files.get(lookalike).createdTime = '2026-01-01T10:00:00.000Z';        // oldest of all, but no mark
     const renamed = g3.addFile({name: 'My gig charts', mimeType: FOLDER, appProperties: made[0].appProperties}); g3.files.get(renamed).createdTime = '2026-03-01T10:00:00.000Z';
-    g3.addFile({name: 'chart.pdf', mimeType: 'application/pdf', parents: [renamed]});
+    seedSub(g3, renamed, 'charts', 1);
     await connectOk(r);
-    const said = await runTest(r.page);
-    assert(/is ready \(1 file\)/.test(said) && !/just made/.test(said), 'a folder renamed in Drive was not found: ' + said);
-    assert(!g3.requests.some(x => x.method === 'POST') && g3.list().filter(f => f.mimeType === FOLDER).length === 2, 'a second folder was made although the renamed one was there');
-    const lists = driveCalls(g3).filter(x => (x.query.q || '').includes('in parents')).map(x => x.query.q);
-    assert(lists.length >= 1 && lists.every(q => q.includes(`'${renamed}' in parents`)), 'the renamed folder was not the one listed: ' + lists.join(' | '));
+    const said = await runSync(r.page);
+    assert(FINISHED.test(said) && strayLine(1).test(said), 'a folder renamed in Drive was not found: ' + said);
+    assert(homesIn(g3).length === 1 && g3.list().filter(f => f.mimeType === FOLDER && f.name === 'Setlist Stand').length === 1 && g3.list(lookalike).length === 0, 'a second folder was made although the renamed one was there, or the look-alike was written to');
+    assert(subOf(g3, renamed, 'data').length === 1, 'the Library data folder was not made inside the renamed folder');
+    const lists = driveCalls(g3).filter(x => (x.query.q || '').includes('in parents') && (x.query.q || '').includes(FOLDER)).map(x => x.query.q);
+    assert(lists.length >= 1 && lists.every(q => q.includes(`'${renamed}' in parents`)), 'the renamed folder was not the one searched: ' + lists.join(' | '));
     assert(pageErrors(r.s).length === 0, 'page errors: ' + r.s.errors.join(' | '));
   } finally { await r.s.close(); }
 }
 
-/* ---------- 1e: failures are said plainly, and change nothing ---------- */
+/* ---------- 1e: failures are said plainly, and change nothing ----------
+   Each failure is read from the report Sync ends in ("Sync could not finish" and the plain sentence for what went wrong; what was done
+   before is kept and nothing is half written). */
 async function loopFailures(ctx){
   const h = await open(ctx, {fixtures: true}), {s, page, google} = h;
-  const say = async () => { const t = await runTest(page); return t; };
+  const say = () => runSync(page);
   try{
     await page.evaluate(async () => { (await import('./js/drive.js')).tuning.pauseMs = 5; });
     await connectOk(h);
     const before = normalise(await snapshot(page));
-    const plain = (t, re, what) => { assert(re.test(t) && /Nothing was changed/.test(t) && !/Error|undefined|status|\b\d{3}\b/.test(t.replace(/Folder.*?\)/, '')), `${what}: "${t}"`); };
+    const plain = (t, re, what) => { assert(/^Sync could not finish/.test(t) && re.test(t) && /nothing is half written/.test(t) && !/Error|undefined|status|\b\d{3}\b/.test(t), `${what}: "${t}"`); };
     const stillConnected = async what => assert(await isConnected(page), what + ': the sign-in was forgotten (the Library says: ' + await driveLine(page) + ')');
 
     /* offline: the app does not even try */
     google.clearLog(); await s.context.setOffline(true);
     const asked = s.requests.length;
-    plain(await say(), /Cannot reach Google/, 'offline');
+    plain(await say(), /connection to Google was lost/, 'offline');
     assert(google.requests.length === 0 && !s.requests.slice(asked).some(toGoogle), 'offline: a request was sent');
     /* Connect while offline must not leave the app (the tablet would be stranded on an error page) */
     const url = page.url();
@@ -454,9 +489,9 @@ async function loopFailures(ctx){
     assert(page.url() === url && authCount(google) === 0 && !('ss-google-pending' in await ls(page)), 'Connect while offline left the app or left a note');
     await closeDialog(page); await s.context.setOffline(false);
     await trip(h);                                                  // back to a good sign-in for the cases below
-    await driveBox(page); await page.waitForSelector('#driveCtl [data-drivetest]');
+    await driveBox(page); await page.waitForSelector('#driveCtl [data-syncnow]');
     /* online but Google unreachable */
-    google.clearLog(); google.offline = true; plain(await say(), /Cannot reach Google/, 'unreachable'); google.offline = false;
+    google.clearLog(); google.offline = true; plain(await say(), /connection to Google was lost/, 'unreachable'); google.offline = false;
     assert(google.requests.filter(r => r.status === 'aborted').length >= 2, 'a request that got no answer was not tried again before giving up');
     await stillConnected('offline');
     /* Drive full */
@@ -468,7 +503,7 @@ async function loopFailures(ctx){
     assert(log.some(e => /Drive off 403 accessNotConfigured/.test(e.msg)), 'the failure is not in the problem log: ' + JSON.stringify(log));
     /* busy: two 429s then success; then more 503s than the retries allow */
     google.clearLog(); google.failNext(429, {times: 2});
-    assert(/Connected\./.test(await say()), 'two 429s then success did not end in success');
+    assert(FINISHED.test(await say()), 'two 429s then success did not end in success');
     assert(google.requests.filter(r => r.status === 429).length === 2, 'the 429s were not retried');
     google.clearLog(); google.failNext(503, {times: 40});
     plain(await say(), /Google is busy/, 'busy');
@@ -477,7 +512,7 @@ async function loopFailures(ctx){
     google.faults.length = 0;
     /* the rate limit that Drive sends as a 403 is waited out like a 429; a refused permission is not retried */
     google.clearLog(); google.failNext(403, {reason: 'userRateLimitExceeded', times: 2});
-    assert(/Connected\./.test(await say()) && google.requests.filter(r => r.status === 403).length === 2, 'a 403 rate limit was not waited out');
+    assert(FINISHED.test(await say()) && google.requests.filter(r => r.status === 403).length === 2, 'a 403 rate limit was not waited out');
     google.clearLog(); google.failNext(403, {reason: 'insufficientPermissions', times: 5});
     plain(await say(), /did not give this app permission/, 'permission');
     assert(google.requests.filter(r => r.status === 403).length === 1, 'a refused permission was retried');
@@ -485,7 +520,7 @@ async function loopFailures(ctx){
     assert(!!(await problems(page)).some(e => /Drive denied 403 insufficientPermissions/.test(e.msg)), 'a refused permission is not in the problem log');
     /* Retry-After: Google's own wait is honoured (the app's pause is a few milliseconds here, so only Retry-After can take a second) */
     google.exposeHeaders.push('retry-after'); google.clearLog(); google.failNext(429, {retryAfter: 1});
-    const t0 = Date.now(); assert(/Connected\./.test(await say()), 'a 429 with Retry-After did not end in success');
+    const t0 = Date.now(); assert(FINISHED.test(await say()), 'a 429 with Retry-After did not end in success');
     assert(Date.now() - t0 >= 900, `Retry-After: 1 was not waited for (${Date.now() - t0} ms)`);
     /* an HTML error page instead of JSON (a proxy, a 502): still "busy", never a stack trace */
     google.clearLog(); google.failNext(502, {times: 8, body: Buffer.from('<html><h1>Bad Gateway</h1></html>')});
@@ -505,42 +540,52 @@ async function loopFailures(ctx){
     assert(!diff(before, after).length, 'failures changed the library: ' + diff(before, after).join(' | '));
     await stillConnected('failures');
 
-    /* Cancel while Google is slow: no result, no error, the page is fine */
+    /* Stop while Google is slow: the run ends as "Sync stopped" (not an error, nothing in the problem log), the request in flight is
+       taken with it and nothing more is sent or made */
     const logged = (await problems(page)).length;
     google.latency = 1500; google.clearLog();
-    await driveTap(page, 'drivetest');
-    await until(() => driveCalls(google).length >= 1, 'the test sent no request', 8000);
+    await driveTap(page, 'syncnow');
+    await until(() => driveCalls(google).length >= 1, 'the sync sent no request', 8000);
     const sent = driveCalls(google).length;
-    await page.locator('.modal').last().locator('[data-x]').click(); await noModal(page);
+    await page.locator('.modal').last().locator('[data-x]').click();            // Stop, in the "Syncing" box
+    const stopped = await syncResult(page);
+    assert(/^Sync stopped/.test(stopped) && /You stopped it/.test(stopped), 'Stop did not end in "Sync stopped": ' + stopped);
     await sleep(2400);
-    assert(!(await page.locator('.modal:not(.drivebox)').count()) && (await problems(page)).length === logged, 'Cancel was followed by a result or an error');
-    assert(driveCalls(google).length === sent && !google.requests.some(r => r.method === 'POST'), `Cancel did not stop the work: ${driveCalls(google).length - sent} more request(s) after it`);
+    assert(!(await page.locator('.modal:not(.drivebox)').count()) && (await problems(page)).length === logged, 'Stop was followed by an error or another box');
+    assert(driveCalls(google).length === sent && !google.requests.some(r => r.method === 'POST'), `Stop did not stop the work: ${driveCalls(google).length - sent} more request(s) after it`);
     google.latency = 0;
 
-    /* Google takes the token back: the app says so and forgets it. Cancel leaves focus on the Library line (the button that was
-       tapped is gone, redrawn as Connect), not on the page behind */
+    /* Google takes the token back: the sync says so and the app forgets it. OK leaves focus in the Google Drive box (the button that
+       was tapped is gone, redrawn as Connect), not on the page behind */
     google.expire();
-    await driveTap(page, 'drivetest');
-    await until(async () => /Sign in again/.test(await dialogText(page).catch(() => '')), 'a refused token did not ask to sign in again', 15000);
+    const refused = await runSync(page, {close: false});
+    assert(/^Sync could not finish/.test(refused) && /Your Google sign-in ran out\. Tap Sync to sign in again/.test(refused), 'a refused token was not said plainly: ' + refused);
     await closeDialog(page);
-    assert(await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest('.modal.drivebox #driveCtl')), 'after Cancel on "Sign in again" focus is not in the Google Drive box');
-    assert(await offersConnect(page) && !(await driveState(page)).count('drivetest'), 'a token Google refused is still kept: the Library says ' + await driveLine(page));
-    /* and Connect again carries on with the test */
-    await trip(h); google.expire(); await driveTap(page, 'drivetest');
-    await until(async () => /Sign in again/.test(await dialogText(page).catch(() => '')), 'a second refused token did not ask to sign in again', 15000);
+    assert(await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest('.modal.drivebox #driveCtl')), 'after OK on "Sync could not finish" focus is not in the Google Drive box');
+    assert(await offersConnect(page) && !(await driveState(page)).count('drivedisconnect'), 'a token Google refused is still kept: the Library says ' + await driveLine(page));
+    /* and the next Sync asks to sign in, then carries on by itself */
+    const again = await runSync(page, {close: false});
+    assert(/^Sign in to sync/.test(again), 'Sync after a refused token did not ask to sign in: ' + again);
     await trip(h);
-    assert(await until(async () => { const x = await dialogText(page).catch(() => null); return x && /Connected\./.test(x) ? x : null; }, 'no test after signing in again', 20000));
-    await closeDialog(page);
+    const carried = await syncResult(page);
+    assert(FINISHED.test(carried), 'Sync did not carry on after signing in again: ' + carried);
+    google.expire();                                                          // signed in again by the Sync above: Google takes this token back too
+    assert(/^Sync could not finish/.test(await runSync(page)), 'a second refused token was not said');
+    const second = await runSync(page, {close: false});
+    assert(/^Sign in to sync/.test(second), 'a second Sync after a refused token did not ask to sign in: ' + second);
+    await trip(h);
+    assert(FINISHED.test(await syncResult(page)), 'no Sync after signing in again');
 
     /* the folder IS made, but the answer is lost on the way back: the app must not send the creation again (that would make a
-       second folder), and the next test finds the one that was made */
+       second folder), and the next Sync finds the one that was made */
     for(const f of google.folders('Setlist Stand')) google.files.delete(f.id);
     const posts = () => google.requests.filter(r => r.method === 'POST').length;
+    const homes = () => google.list().filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'home').length;
     google.clearLog(); google.loseAnswerNext({match: r => r.method === 'POST'});
-    plain(await say(), /Cannot reach Google/, 'a lost answer');
+    plain(await say(), /connection to Google was lost/, 'a lost answer');
     assert(posts() === 1, `a folder creation whose answer was lost was sent ${posts()} times`);
     assert(google.folders('Setlist Stand').length === 1, `${google.folders('Setlist Stand').length} folders after a lost answer`);
-    assert(/Connected\./.test(await say()) && google.folders('Setlist Stand').length === 1 && posts() === 1, 'the next test made another folder instead of finding the one that was made');
+    assert(FINISHED.test(await say()) && google.folders('Setlist Stand').length === 1 && homes() === 1, 'the next Sync made another folder instead of finding the one that was made');
     assert(pageErrors(s).length === 0, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 }
@@ -557,12 +602,12 @@ async function loopDisconnect(ctx){
     assert(await isConnected(page), 'Cancel disconnected');
     await driveTap(page, 'drivedisconnect'); await page.keyboard.press('Escape'); await noModal(page);
     assert(await isConnected(page), 'Escape disconnected');
-    assert(/Connected\./.test(await runTest(page)), 'after Cancel and Escape the sign-in no longer works');
+    assert(FINISHED.test(await runSync(page)), 'after Cancel and Escape the sign-in no longer works');
     const n = google.requests.length;
     await driveTap(page, 'drivedisconnect'); await page.click('.modal [data-ok]'); await noModal(page);
     const kept = await ls(page);
     assert(!('ss-google' in kept) && !('ss-google-pending' in kept), 'Disconnect left the sign-in: ' + Object.keys(kept));
-    assert(await offersConnect(page) && !(await driveState(page)).count('drivetest'), 'the Library does not offer Connect after Disconnect: ' + await driveLine(page));
+    assert(await offersConnect(page) && !(await driveState(page)).count('drivedisconnect'), 'the Library does not offer Connect after Disconnect: ' + await driveLine(page));
     /* the token is really forgotten, not just hidden: a redrawn Library (the tablet picked up again) does not bring the sign-in back */
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     assert(await offersConnect(page), 'a redrawn Library shows the sign-in again after Disconnect: ' + await driveLine(page));
@@ -621,7 +666,7 @@ async function loopOffline(ctx){
     await page.click('#libList [data-open]'); await page.waitForSelector('body.playing');
     await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
     assert(google.requests.length === 0 && !s.requests.some(toGoogle), 'a library that never touched Connect still talked to Google');
-    /* connected, then offline with the stand-in switched off: the app (still open) plays, says nothing to Google, and Test says it cannot reach Google */
+    /* connected, then offline with the stand-in switched off: the app (still open) plays, says nothing to Google, and Sync says the connection to Google was lost */
     await connectOk(h);
     await ready();
     await google.close();
@@ -636,9 +681,8 @@ async function loopOffline(ctx){
         assert(!s.requests.slice(n).some(toGoogle), 'a request to Google left while a song was open');
         await page.click('#vBack'); await page.waitForFunction(() => !document.body.classList.contains('playing'));
       }
-      await driveTap(page, 'drivetest');
-      assert(/Cannot reach Google/.test(await until(async () => { const x = await dialogText(page).catch(() => null); return x && !/^Testing/.test(x) ? x : null; }, 'no answer offline', 15000)), 'offline test message');
-      await closeDialog(page);
+      const offlineSync = await runSync(page, {timeout: 60000});
+      assert(/^Sync could not finish/.test(offlineSync) && /connection to Google was lost/.test(offlineSync), 'offline Sync message: ' + offlineSync);
       /* reopened offline (a reload forgets the sign-in): the app opens and plays, offers Connect, and sends nothing to Google */
       if(WEBKIT) console.log('    note: playing and reopening the app offline need the service worker, which Playwright\'s WebKit cannot intercept; that part is skipped here');
       else{
@@ -662,7 +706,7 @@ async function loopOffline(ctx){
 export const loops = [
   {name: 'sync 1a: Connect goes out with the right client, scope and state, comes back clean, keeps the token in memory only (no storage, no key ss-google, gone after a reload, an old key removed); the library is unchanged', run: loopConnect},
   {name: 'sync 1b: a refused, foreign, old or replayed sign-in changes nothing and says so in plain words', run: loopRefused},
-  {name: 'sync 1c: a token with under a minute left (or ended) is not used; Connect again carries on with the test', run: loopTokenLife},
+  {name: 'sync 1c: a token with under a minute left (or ended) is not used; Sync signs in again and carries on by itself', run: loopTokenLife},
   {name: 'sync 1d: the folder is made once, another tablet\'s is found by its mark alone (even renamed), every page of a listing is read', run: loopFolder},
   {name: 'sync 1e: offline, full, busy, off, rubbish, Cancel and a refused token are each said plainly and change nothing', run: loopFailures},
   {name: 'sync 1f: Disconnect forgets the sign-in here (the app is not connected again until Connect) and calls nobody', run: loopDisconnect},

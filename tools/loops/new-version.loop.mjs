@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {FIX, assert, sleep, sha256, idbAll, snapshot, diff, backupNow, restoreZip, wipe} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 const H = Object.fromEntries(['one-page.pdf', 'two-page.pdf', 'three-page.pdf'].map(f => [f, sha256(fs.readFileSync(path.join(FIX, f)))]));
 const FULL = 'The tablet is full. Free up some space, then try again. Nothing was changed.';
@@ -75,10 +76,11 @@ async function addPdfs(page, files){
 async function pickNewVersion(page, id, file){
   await page.click('#tLib');
   await clearToast(page);
-  const b = page.locator(`#libList [data-newversion="${id}"]`);
-  assert(await b.textContent() === 'New version', `the library button says "${await b.textContent()}"`);
+  const b = page.locator(`#libList [data-songmenu="${id}"]`);
   await b.click();
-  assert(await b.textContent() === 'New version', `one tap on New version changed the button to "${await b.textContent()}" (there is no two-tap confirm: the question after the pick is the check)`);
+  const it = page.locator('.modal.menubox [data-item="newversion"]');
+  assert(await it.textContent().then(t => /^New version/.test(t)), `the menu item says "${await it.textContent()}"`);
+  await it.click();
   await page.setInputFiles('#newVersionFile', path.join(FIX, file));
   await page.waitForFunction(() => !!document.querySelector('.modal.dupask, .modal.nvask'), null, {timeout: 15000})
     .catch(async () => { throw new Error('no question after picking ' + file + '; toast "' + await page.locator('#toast').textContent() + '"'); });
@@ -161,7 +163,7 @@ async function archivedRows(page){
   await page.click('#tLib');
   await page.locator('#showArch').setChecked(true);
   await page.waitForFunction(() => [...document.querySelectorAll('#libList h2')].some(h => h.textContent === 'Archived'), null, {timeout: 5000});
-  const rows = await page.evaluate(() => [...document.querySelectorAll('#libList li.row')].filter(li => li.querySelector('[data-restoresong]'))
+  const rows = await page.evaluate(() => [...document.querySelectorAll('#libList li.row')].filter(li => / · Archived$/.test(li.querySelector('.s').textContent))
     .map(li => ({id: li.querySelector('.main').dataset.open, t: li.querySelector('.t').textContent, s: li.querySelector('.s').textContent})));
   await page.locator('#showArch').setChecked(false);
   return rows;
@@ -341,7 +343,7 @@ export const loops = [
     const nowA = {song: s2.songs[A], file: s2.files[A], ink: Object.fromEntries(Object.entries(s2.ink).filter(([k]) => k.startsWith(A + ':'))), sets: s2.sets};
     await page.click('#tLib');
     await page.locator('#showArch').setChecked(true);
-    await page.click(`#libList [data-del="${O1}"]`); await page.click(`#libList [data-del="${O1}"]`);
+    await songDelete(page, O1);
     await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), O1, {timeout: 5000});
     await page.locator('#showArch').setChecked(false);
     const s3 = await snapshot(page);
@@ -358,7 +360,7 @@ export const loops = [
     const nowO3 = {song: s4.songs[O3], file: s4.files[O3], ink: Object.fromEntries(Object.entries(s4.ink).filter(([k]) => k.startsWith(O3 + ':')))};
     assert(Object.keys(nowO3.ink).length === 0, 'the second old copy has marks, but the chart it kept had only deletion markers');
     await page.click('#tLib');
-    await page.click(`#libList [data-del="${A}"]`); await page.click(`#libList [data-del="${A}"]`);
+    await songDelete(page, A);
     await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), A, {timeout: 5000});
     const s5 = await snapshot(page);
     expectSame(nowO3, {song: s5.songs[O3], file: s5.files[O3], ink: Object.fromEntries(Object.entries(s5.ink).filter(([k]) => k.startsWith(O3 + ':')))}, 'the old copy after the new chart was deleted');
@@ -409,7 +411,7 @@ export const loops = [
     await page.click('#tLib');
     await clearToast(page); await resetWrites(page);
     await page.evaluate(() => { window.__failRead = true; });
-    await page.click(`#libList [data-newversion="${A}"]`);
+    await songAct(page, 'newversion', A);
     await page.setInputFiles('#newVersionFile', path.join(FIX, 'three-page.pdf'));
     await page.waitForFunction(() => !!document.querySelector('.modal.nvask, .modal.dupask') || /Could not read/.test(document.querySelector('#toast').textContent), null, {timeout: 15000})
       .catch(async () => { throw new Error('neither a refusal nor a question; toast "' + await page.locator('#toast').textContent() + '"'); });
@@ -454,13 +456,13 @@ export const loops = [
         await S.load();
       }, id),
       'edited in another tab': id => inOtherTab(async p2 => {
-        await p2.click(`#libList [data-edit="${id}"]`);
+        await songAct(p2, 'edit', id);
         await p2.locator('.modal input[data-k=song]').fill('Edited Elsewhere');
         await p2.click('.modal [data-ok]');
         await p2.waitForFunction(id => document.querySelector(`#libList [data-open="${id}"] .t`)?.textContent.startsWith('Edited Elsewhere'), id, {timeout: 5000});
       }),
       'deleted in another tab': id => inOtherTab(async p2 => {
-        await p2.click(`#libList [data-del="${id}"]`); await p2.click(`#libList [data-del="${id}"]`);
+        await songDelete(p2, id);
         await p2.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), id, {timeout: 5000});
       }),
     };
@@ -495,7 +497,7 @@ export const loops = [
     await page.click('#tLib');
     await clearToast(page); await resetWrites(page);
     await page.evaluate(() => { window.__slowPick = 4000; });          // the picked file takes 4 s to read, like a big PDF
-    await page.click(`#libList [data-newversion="${A}"]`);
+    await songAct(page, 'newversion', A);
     await page.setInputFiles('#newVersionFile', path.join(FIX, 'three-page.pdf'));
     await page.waitForFunction(() => [...document.querySelectorAll('.modal [role=status]')].some(p => p.textContent === 'Reading three-page.pdf…'), null, {timeout: 2000})
       .catch(async () => { throw new Error('no "Reading three-page.pdf…" box while the new PDF is read; dialogs: ' + JSON.stringify(await page.locator('.modal').allTextContents())); });
@@ -504,10 +506,11 @@ export const loops = [
     await page.click(`#libList [data-open="${A}"]`, {force: true});
     await sleep(200);
     assert(!(await page.locator('#viewer.on').count()), 'a song opened behind the Reading box');
-    /* a second New version while the first is reading (as a tap on another song's button would start it) is turned away */
-    await page.evaluate(`(async () => { const L = await import(new URL('js/library.js', location.href).href); await L.onClick(document.createElement('button'), {newversion: ${JSON.stringify(B)}}); })()`);
+    /* a second file picked while the first is reading is turned away. The menu is out of reach behind the Reading box, so the
+       "already in progress" toast can no longer be made from the page (the pick has no song to belong to: newVersion() returns
+       before it): what is checked is that nothing starts. */
     await page.setInputFiles('#newVersionFile', path.join(FIX, 'three-page.pdf'));
-    assert(await waitToast(page, /already in progress/, 3000) === 'A New version is already in progress.', 'second New version: toast');
+    await sleep(500);
     assert(await page.locator('.modal').count() === 1, 'a second box or question opened: ' + JSON.stringify(await page.locator('.modal').allTextContents()));
     /* the first one goes on: its question replaces the box */
     await page.locator('.modal.nvask').waitFor({timeout: 15000});

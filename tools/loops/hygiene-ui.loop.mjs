@@ -200,18 +200,19 @@ async function dialogLoop(ctx){
     await s.goto();
     await importFixtures(page);
 
-    /* library Edit (form) */
-    const id = await page.locator('#libList [data-edit]').first().getAttribute('data-edit');
-    const ed = `#libList [data-edit="${id}"]`;
-    await page.focus(ed); await page.keyboard.press('Enter');
+    /* library Edit (form), reached by keyboard through the row's one button, ⋯ (its menu box, then the Edit item); the dialog gives the focus back to ⋯ */
+    const id = await page.locator('#libList [data-songmenu]').first().getAttribute('data-songmenu');
+    const ed = `#libList [data-songmenu="${id}"]`;
+    await viaKeys(page, ed, 'edit');
+    await page.locator('.modal.menubox').waitFor({state: 'detached'});
     await page.locator('.modal').waitFor();
     await checkDialog(page, 'Edit dialog');
     await escapeBack(page, ed, 'Edit dialog');
     assert(!(await page.locator('.modal').count()), 'Edit dialog still open');
 
     /* library Copy (a text field) */
-    const cp = `#libList [data-copy="${id}"]`;
-    await page.focus(cp); await page.keyboard.press('Enter');
+    const cp = ed;
+    await viaKeys(page, cp, 'copy');
     await page.locator('.modal.copyask').waitFor();
     await checkDialog(page, 'Copy dialog');
     await escapeBack(page, cp, 'Copy dialog');
@@ -238,7 +239,7 @@ async function dialogLoop(ctx){
     await page.keyboard.press('Escape');                                    // Escape on the manager (Done)
     await noModal(page).catch(() => { throw new Error('Escape did not close the Collections manager'); });
     assert(await page.evaluate(() => document.activeElement === document.querySelector('[data-collmanage]')), 'focus did not return to the Collections button');
-    await page.focus(ed); await page.keyboard.press('Enter');
+    await viaKeys(page, ed, 'edit');
     await page.locator('.modal fieldset.checks').waitFor();
     await checkDialog(page, 'Edit dialog with Collections tick boxes');
     await escapeBack(page, ed, 'Edit dialog with Collections tick boxes');
@@ -818,7 +819,7 @@ const BACKUP_ITEMS = hintSync => [
   ['backup', 'Back up everything', 'Save one file with every PDF, setlist and note'],
   ['restore', 'Restore from backup', 'Bring your library back from a backup file'],
   ['sync', 'Sync with Google Drive', hintSync],
-  ['drive', 'Google Drive settings', 'Connect, test or disconnect']];
+  ['drive', 'Google Drive settings', 'Connect or disconnect']];
 async function backupMenuLoop(ctx){
   for(const [w, h] of [[1280, 800], [800, 1280]]){
     /* Playwright's WebKit cannot intercept a request made by a page a service worker controls (see sync.loop.mjs): off there */
@@ -833,7 +834,7 @@ async function backupMenuLoop(ctx){
       /* row 2 holds both menu buttons; the old bottom buttons and the old Drive control are gone */
       const row2 = await page.locator('#view #libMenus button').allTextContents();
       assert(JSON.stringify(row2) === JSON.stringify(['Share / Import', 'Back up / Sync']), `${at}: row 2 holds ${JSON.stringify(row2)}`);
-      for(const gone of ['[data-backup]', '[data-restore]', '#libDrive', '[data-drivetest]', '[data-driveconnect]', '[data-drivedisconnect]', '[data-syncnow]'])
+      for(const gone of ['[data-backup]', '[data-restore]', '#libDrive', '[data-driveconnect]', '[data-drivedisconnect]', '[data-syncnow]'])
         assert(await page.evaluate(sel => [...document.querySelectorAll('#view ' + sel)].filter(e => !e.closest('#libNudge')).length, gone) === 0, `${at}: the Library still has ${gone}`);
       /* the bottom: Show archived, the backup hint, ONE read-only Drive line, then the status lines; nothing else */
       const bottom = await page.evaluate(() => {
@@ -887,22 +888,20 @@ async function backupMenuLoop(ctx){
       if(await page.locator('.modal').count()) throw new Error(`${at}: a box after signing in: ` + await page.locator('.modal').last().textContent());
       await checkMenuBox(page, opener, 'Back up / Sync', 'Back up / Sync', BACKUP_ITEMS('Keep your tablets the same'), `${at} connected`);
       await driveBox(page);
-      await driveBoxIs(page, at, 'connected', /^Connected to Google Drive until .+\. Not synced on this tablet yet\.$/, [['syncnow', 'Sync'], ['drivetest', 'Test connection'], ['drivedisconnect', 'Disconnect']]);
-      /* Test connection: the result comes over the box; OK gives the focus back inside the box, which is still right */
-      await page.click('.modal.drivebox [data-drivetest]');
-      await page.locator('.modal [role=dialog]', {hasText: "Folder 'Setlist Stand' is ready"}).waitFor({timeout: 15000});
-      await checkDialog(page, `${at} Test connection result`);
-      await page.locator('.modal').last().locator('[data-ok]').click();
-      await waitFor(() => page.evaluate(() => document.querySelectorAll('.modal').length === 1), `${at}: the test result did not close`);
-      assert((await driveDrawn(page)).focusIn, `${at}: after the test result focus is not in the Google Drive box`);
-      /* Google takes the token back during a Test: the box must show the new state at once (Connect, no Test) */
+      await driveBoxIs(page, at, 'connected', /^Connected to Google Drive until .+\. Not synced on this tablet yet\.$/, [['syncnow', 'Sync'], ['drivedisconnect', 'Disconnect']]);
+      /* Google takes the token back during a Sync (the first Sync on this tablet starts with its note: Continue): the report comes over the
+         box, OK gives the focus back inside the box, which is still right, and the box shows the new state at once (Connect, no Disconnect) */
       google.expire();
-      await page.click('.modal.drivebox [data-drivetest]');
-      await page.locator('.modal [role=dialog]', {hasText: 'Sign in again'}).waitFor({timeout: 15000});
-      await page.locator('.modal').last().locator('[data-x]').click();
-      await waitFor(() => page.evaluate(() => document.querySelectorAll('.modal').length === 1), `${at}: Sign in again did not close`);
+      await page.click('.modal.drivebox [data-syncnow]');
+      await page.locator('.modal [role=dialog]', {hasText: 'Sync your tablets'}).waitFor({timeout: 8000});
+      await page.locator('.modal').last().locator('[data-ok]').click();
+      await page.locator('.modal [role=dialog]', {hasText: 'Sync could not finish'}).waitFor({timeout: 20000});
+      await checkDialog(page, `${at} Sync report`);
+      assert(/Your Google sign-in ran out\. Tap Sync to sign in again/.test(await page.locator('.modal').last().textContent()), `${at}: a refused token was not said in the report`);
+      await page.locator('.modal').last().locator('[data-ok]').click();
+      await waitFor(() => page.evaluate(() => document.querySelectorAll('.modal').length === 1), `${at}: the Sync report did not close`);
       const after = await driveBoxIs(page, at, 'after a refused token', new RegExp('^' + NOT_SET_UP.replace(/\./g, '\\.') + '$'), [['syncnow', 'Sync'], ['driveconnect', 'Connect Google Drive']]);
-      assert(after.focusIn, `${at}: after Cancel on Sign in again focus is not in the Google Drive box`);
+      assert(after.focusIn, `${at}: after OK on the Sync report focus is not in the Google Drive box`);
       /* connect again, then the sign-in runs out while the box is open: it is redrawn in place */
       await page.click('.modal.drivebox [data-driveconnect]');
       await page.click('.modal [data-ok]');
@@ -912,7 +911,7 @@ async function backupMenuLoop(ctx){
       await page.clock.setFixedTime(Date.now() + 4000e3);
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));          // the tablet is picked up again
       await driveBoxIs(page, at, 'sign-in ended', /^Your Google sign-in ran out at .+\. Tap Sync or Connect again\. Not synced on this tablet yet\.$/,
-        [['syncnow', 'Sync'], ['driveconnect', 'Connect again'], ['drivetest', 'Test connection'], ['drivedisconnect', 'Disconnect']], true);
+        [['syncnow', 'Sync'], ['driveconnect', 'Connect again'], ['drivedisconnect', 'Disconnect']], true);
       /* Disconnect from the box: the box shows Connect at once, the focus stays in it, Close gives it back to the menu button */
       await page.click('.modal.drivebox [data-drivedisconnect]');
       await page.locator('.modal').last().locator('[data-ok]').click();

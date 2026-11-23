@@ -9,6 +9,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {FIX, TMP, assert, sha256, sleep, idbAll, download, openSetMenu} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 import {makeSiteCopy, removeCopy, intercept, cacheName, precachePaths, waitInstalled, askUpdate, until} from './site-copy.mjs';
 
 const RED = '#d62828';
@@ -472,7 +473,7 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     const {id, title: t} = (await importFiles(page, [path.join(FIX, 'one-page.pdf')]))['one-page.pdf'];
     const song = async () => (await idbAll(page, 'songs'))[id];
     const before = await song();
-    await page.click(`#libList [data-edit="${id}"]`);
+    await songAct(page, 'edit', id);
     await page.locator('.modal input[data-k=song]').fill('Changed by mistake');
     await page.locator('.modal [data-x]').focus();
     assert(await page.evaluate(() => document.activeElement?.hasAttribute('data-x')), 'test setup: Cancel is not focused');
@@ -482,7 +483,7 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     await sleep(500);
     const after = await song();
     assert(after.song === before.song && after.title === t, `Enter on Cancel saved: song "${after.song}", title "${after.title}" (was "${before.song}")`);
-    await page.click(`#libList [data-edit="${id}"]`);
+    await songAct(page, 'edit', id);
     await page.locator('.modal input[data-k=song]').fill('Saved On Purpose');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('.modal'), null, {timeout: 5000})
@@ -666,7 +667,7 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
   try{
     await s.goto();
     const {id} = (await importFiles(page, [path.join(FIX, 'one-page.pdf')]))['one-page.pdf'];
-    await page.click(`#libList [data-edit="${id}"]`);
+    await songAct(page, 'edit', id);
     await page.waitForSelector('.modal input[data-k=song]');
     /* A synthetic Tab never moves focus by the browser's own rules, so only the dialog's own handling can move it. */
     const tab = shift => page.evaluate(shift => {

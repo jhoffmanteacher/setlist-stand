@@ -21,7 +21,7 @@ let held = null;                      // {token, exp} while signed in; {token:nu
 const TRIP_MS = 15 * 60e3;            // an answer for a trip older than this is not believed
 export const MARGIN_MS = 60e3;        // a token with less than this left is not used (a request could outlive it)
 const MAX_LIFE_S = 86400;             // Google gives about an hour; anything longer than a day is not believed
-const THEN = ['connect', 'test', 'sync'];     // what the person had tapped: carried over the trip so it can carry on afterwards
+const THEN = ['connect', 'sync'];     // what the person had tapped: carried over the trip so it can carry on afterwards (a note an older version wrote with 'test' becomes 'connect')
 
 const read = key => { try{ const v = JSON.parse(localStorage.getItem(key) || 'null'); return v && typeof v === 'object' && !Array.isArray(v) ? v : null; }catch(e){ return null; } };
 const drop = key => { try{ localStorage.removeItem(key); }catch(e){} };

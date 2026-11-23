@@ -250,7 +250,7 @@ export async function closeDriveBox(page){
   const box = page.locator('.modal.drivebox');
   if(await box.count()){ await box.locator(':scope > [role=dialog] > .btns [data-x]').click(); await box.waitFor({state: 'detached', timeout: 8000}); }
 }
-/* Taps a button of the Google Drive box ('driveconnect', 'drivetest', 'drivedisconnect', 'syncnow'), opening the box first. */
+/* Taps a button of the Google Drive box ('driveconnect', 'drivedisconnect', 'syncnow'), opening the box first. */
 export async function driveTap(page, what){
   const box = await driveBox(page);
   await box.locator(`#driveCtl [data-${what}]`).click();

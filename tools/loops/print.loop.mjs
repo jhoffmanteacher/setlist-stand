@@ -9,6 +9,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, fileHashes, download, requireUmd, JSZip, snapshot, diff, openSetMenu} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 const PL = requireUmd(path.join(ROOT, 'vendor', 'pdf-lib.min.js'));
 const PW = 612, PH = 792;                                  // fixture page size (letter, points)
@@ -504,7 +505,7 @@ export const loops = [
     await addSong(page, songs0[A].title); await addSong(page, songs0[C].title); await addBreak(page); await addSong(page, songs0[B].title);
     /* archive C after it is in the set (the picker hides archived songs) */
     await toLibrary(page);
-    await page.click(`#libList [data-archive="${C}"]`);
+    await songAct(page, 'archive', C);
     await waitFor(async () => (await songsById(page))[C].archived === true, 'song C not archived');
     const set = Object.values(await idbAll(page, 'sets')).find(x => x.name === 'Order' && !x.deleted);
     assert(set.items.map(i => i.type === 'break' ? '|' : letter[i.id]).join('') === 'AB|AC|B', 'set items ' + fmt(set.items));

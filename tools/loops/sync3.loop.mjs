@@ -17,6 +17,7 @@ import {openTablet, tapSync, finishSync, syncTap, libraryOf, readDrive, reportCo
 import {startPair, roles, live, libOnly, timeless, whole, assertWhole, deleteSongUi, deleteSetUi, deleteCollUi, saveSong, saveSet,
   writeRecords, putRecordFile, removeDriveFile, recordFileId, pdfFileId, waitBox, pageErrors, H, titleOf, addCopies} from './sync-kit.mjs';
 import {inkDiff, splitInkKey} from './sync-model.mjs';
+import {songAct} from './songrow.mjs';
 
 /* A check whose failure is collected and reported at the end of the loop (with every other one), so one gap does not hide the
    checks after it. The loop still FAILS. */
@@ -488,7 +489,7 @@ async function newVersionB(t, id, file){
   const {page} = t;
   await page.click('#tLib');
   if(await page.locator('.collbar [data-collpick="all"]').count()) await page.click('.collbar [data-collpick="all"]');
-  await page.click(`#libList [data-newversion="${id}"]`);
+  await songAct(page, 'newversion', id);
   await page.setInputFiles('#newVersionFile', file);
   await page.waitForSelector('.modal.nvask', {timeout: 15000});
   await page.click('.modal.nvask [data-ok]');

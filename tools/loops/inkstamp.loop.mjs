@@ -12,6 +12,7 @@
  */
 import path from 'node:path';
 import {FIX, assert, sleep, idbAll} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 const HOUR = 36e5;
 const fmt = o => JSON.stringify(o, (k, v) => typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 1e4) / 1e4 : v);
@@ -224,8 +225,7 @@ async function loopNewVersion(ctx){
   const {s, page, id, key} = await setup(ctx, {strokes: [A, B, M, N], pageU: F + HOUR, open: false});
   try{
     const before = await inkRec(page, key);
-    const b = page.locator(`#libList [data-newversion="${id}"]`);
-    await b.click();
+    await songAct(page, 'newversion', id);
     await page.setInputFiles('#newVersionFile', path.join(FIX, 'two-page.pdf'));
     await page.locator('.modal.nvask [data-ok]').waitFor({timeout: 15000}).catch(async () => { throw new Error('no New version question; toast "' + await page.locator('#toast').textContent() + '"'); });
     await page.click('.modal.nvask [data-ok]');

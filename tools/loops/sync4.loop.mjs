@@ -15,6 +15,7 @@ import {openTablet, tapSync, finishSync, syncTap, signIn, libraryOf, readDrive, 
 import {canon} from './sync-model.mjs';
 import {startA, startPair, roles, live, libOnly, whole, saveSong, saveSet, writeRecords, addCopies, songRecord, putRecordFile, putPdfFile,
   pdfFileId, waitBox, pageErrors, H, fixture, titleOf, YEAR, addMark, marksOn, deleteSongUi} from './sync-kit.mjs';
+import {songAct} from './songrow.mjs';
 
 const WEBKIT = process.env.SS_BROWSER === 'webkit';
 const finished = (r, what) => assert(r.state === 'finished', `${what}: the sync did not finish: ${r.title}: ${r.text.slice(0, 500)}`);
@@ -67,7 +68,7 @@ async function newVersionUi(t, id, file){
   const {page} = t;
   await page.click('#tLib');
   if(await page.locator('.collbar [data-collpick="all"]').count()) await page.click('.collbar [data-collpick="all"]');
-  await page.click(`#libList [data-newversion="${id}"]`);
+  await songAct(page, 'newversion', id);
   await page.setInputFiles('#newVersionFile', file);
   await page.waitForSelector('.modal.nvask, .modal.dupask', {timeout: 15000});
   if(await page.locator('.modal.dupask').count()){ await page.click('.modal.dupask [data-dupadd]'); await page.waitForSelector('.modal.nvask', {timeout: 15000}); }

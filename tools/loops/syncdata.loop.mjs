@@ -18,6 +18,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {FIX, TMP, JSZip, assert, idbAll, snapshot, diff, openSetMenu} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 const YEAR = 365 * 864e5;
 const H64 = 'ab'.repeat(32);
@@ -127,15 +128,15 @@ async function loopStamps(ctx){
     });
     await page.click('#tLib');
     await edit('edit details', [['songs', A.id]], async () => {
-      await page.click(`#libList [data-edit="${A.id}"]`);
+      await songAct(page, 'edit', A.id);
       await page.locator('.modal input[data-k=artist]').fill('Year Ahead');
       await page.click('.modal [data-ok]'); await noModal(page);
     });
-    await edit('archive', [['songs', C.id]], () => page.click(`#libList [data-archive="${C.id}"]`));
+    await edit('archive', [['songs', C.id]], () => songAct(page, 'archive', C.id));
     await edit('unarchive', [['songs', C.id]], async () => {
       await page.locator('#showArch').setChecked(true);
-      await page.click(`#libList [data-restoresong="${C.id}"]`);
-      await page.waitForFunction(id => !document.querySelector(`[data-restoresong="${id}"]`), C.id, {timeout: 5000});
+      await songAct(page, 'restore', C.id);
+      await page.waitForFunction(id => { const b = document.querySelector(`#libList [data-songmenu="${id}"]`); return !b || !/ · Archived$/.test(b.closest('li').querySelector('.s').textContent); }, C.id, {timeout: 5000});
       await page.locator('#showArch').setChecked(false);
     });
     await edit('crop', [['songs', B.id]], async () => {
@@ -152,7 +153,7 @@ async function loopStamps(ctx){
     const tNv = Date.now();
     await edit('New version', [['songs', C.id]], async () => {
       await page.click('#tLib'); await clearToast(page);
-      await page.click(`#libList [data-newversion="${C.id}"]`);
+      await songAct(page, 'newversion', C.id);
       await page.setInputFiles('#newVersionFile', path.join(FIX, 'one-page.pdf'));
       await page.waitForFunction(() => !!document.querySelector('.dupask, .nvask'), null, {timeout: 15000});
       if(await page.locator('.dupask').count()) await page.click('.dupask [data-dupadd]');
@@ -196,8 +197,7 @@ async function loopStamps(ctx){
     assert((await rec(page, 'sets', S3.id)).deleted === true, 'the deleted setlist is not a marker');
     await edit('delete a song that is in a setlist', [['songs', A.id], ['sets', S1.id]], async () => {
       await page.click('#tLib');
-      const b = page.locator(`#libList [data-del="${A.id}"]`);
-      await b.click(); await b.click();
+      await songDelete(page, A.id);
       await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), A.id, {timeout: 5000});
     });
     assert((await rec(page, 'songs', A.id)).deleted === true, 'the deleted song is not a marker');

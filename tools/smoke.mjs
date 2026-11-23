@@ -22,6 +22,7 @@ import zlib from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {launchBrowser, WEBKIT} from './loops/browser.mjs';
 import {acquireSlot} from './loops/slot.mjs';
+import {songAct, songActIn, answerDelete, songDelete} from './loops/songrow.mjs';
 import {splitName, displayName} from '../js/names.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -354,11 +355,13 @@ async function stepBackup(t){
   for(const s of data.songs) assert(zip.file('files/' + s.id + '.pdf'), 'zip lacks files/' + s.id + '.pdf');
 
   for(let i = 0; i < 2; i++){
-    const b = page.locator('#libList [data-del]').first();
-    await b.click();
-    assert(await b.textContent() === 'Tap again', 'first tap on Delete did not arm it');
-    assert(await songCount(page) === 2 - i, 'one tap deleted a song');
-    await b.click();
+    const did = await page.locator('#libList [data-songmenu]').first().getAttribute('data-songmenu');
+    await songAct(page, 'del', did);
+    await page.locator('.modal.delask').waitFor({timeout: 5000});
+    assert(await songCount(page) === 2 - i, 'the Delete menu item alone deleted a song');
+    await answerDelete(page, false);
+    assert(await songCount(page) === 2 - i, 'Cancel on the Delete question deleted a song');
+    await songDelete(page, did);
     await page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, 1 - i, {timeout: 5000})
       .catch(async () => { throw new Error(`after delete expected ${1 - i} songs, got ${await songCount(page)}`); });
   }
@@ -432,7 +435,7 @@ async function stepEditSong(t){
   const row = rowFor(page, '#libList', 'Two-page');
   await row.waitFor();
   t.data.edId = await row.locator('[data-open]').getAttribute('data-open');
-  await row.locator('[data-edit]').click();
+  await songActIn(page, row, 'edit');
   const m = page.locator('.modal');
   await m.waitFor();
   assert(await m.locator('input[data-k=song]').inputValue() === 'Two-page', 'edit dialog Title field = ' + await m.locator('input[data-k=song]').inputValue());
@@ -463,7 +466,7 @@ async function stepArchive(t){
   const {page} = t;
   const id = t.data.edId;
   await toLibrary(page);
-  await rowFor(page, '#libList', ED_TITLE).locator('[data-archive]').click();
+  await songActIn(page, rowFor(page, '#libList', ED_TITLE), 'archive');
   await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), id, {timeout: 5000})
     .catch(() => { throw new Error('archived song still listed in the library'); });
   assert(await songCount(page) === 1, 'library shows ' + await songCount(page) + ' songs after archiving one of 2');
@@ -491,10 +494,10 @@ async function stepArchive(t){
   await toLibrary(page);
   await page.check('#showArch');
   await page.locator('#libList h2', {hasText: 'Archived'}).waitFor({timeout: 3000}).catch(() => { throw new Error('no "Archived" heading with Show archived on'); });
-  const arow = page.locator(`#libList li.row:has([data-restoresong="${id}"])`);
-  assert(await arow.count() === 1, 'archived song not listed with a Restore button');
-  await arow.locator('[data-restoresong]').click();
-  await page.waitForFunction(id => !document.querySelector(`[data-restoresong="${id}"]`) && document.querySelectorAll('#libList [data-edit]').length === 2, id, {timeout: 5000})
+  const arow = page.locator(`#libList li.row:has([data-songmenu="${id}"])`);
+  assert(await arow.count() === 1, 'archived song not listed with a menu button');
+  await songActIn(page, arow, 'restore');
+  await page.waitForFunction(id => document.querySelectorAll('#libList [data-songmenu]').length === 2, id, {timeout: 5000})
     .catch(() => { throw new Error('Restore did not bring the song back to the library'); });
   await page.uncheck('#showArch');
   assert((await songRec(page, s => s.id === id)).archived === false, 'song record still archived after Restore');
@@ -520,9 +523,10 @@ async function stepNewVersion(t){
   assert(posBefore >= 0, 'song not in Gig before New version');
   assert(before.pages === 2, 'pages before New version = ' + before.pages);
   await toLibrary(page);
-  const b = rowFor(page, '#libList', ED_TITLE).locator('[data-newversion]');
-  assert(await b.textContent() === 'New version', 'the library button says "' + await b.textContent() + '", not "New version"');
-  await b.click();                                   // one tap opens the file picker (the confirm comes after the pick)
+  const nvRow = rowFor(page, '#libList', ED_TITLE);
+  await nvRow.locator('[data-songmenu]').click();
+  assert((await page.locator('.modal.menubox [data-item="newversion"] b').textContent()).trim() === 'New version', 'the menu item says "' + await page.locator('.modal.menubox [data-item="newversion"] b').textContent() + '", not "New version"');
+  await page.locator('.modal.menubox [data-item="newversion"]').click();                                // one tap opens the file picker (the confirm comes after the pick)
   await page.setInputFiles('#newVersionFile', path.join(FIX, 'one-page.pdf'));
   const m = page.locator('.modal.nvask');
   await m.waitFor({timeout: 10000}).catch(() => { throw new Error('no New version question after the pick'); });
@@ -561,7 +565,7 @@ async function stepNewVersion(t){
   /* in Archived it opens with its marks; deleting it there never touches the new chart */
   await toLibrary(page);
   await page.check('#showArch');
-  const orow = page.locator(`#libList li.row:has([data-restoresong="${old.id}"])`);
+  const orow = page.locator(`#libList li.row:has([data-songmenu="${old.id}"])`);
   assert(await orow.count() === 1, 'the old copy is not listed under Archived');
   await orow.locator('[data-open]').click();
   await page.waitForFunction(t => document.querySelector('#vTitle').textContent === t && !!document.querySelector('#stage .ink'), old.title, {timeout: 8000});
@@ -570,8 +574,7 @@ async function stepNewVersion(t){
   await page.click('#vBack');
   await toLibrary(page);
   const nowNew = {song: await songRec(page, s => s.id === id), ink: Object.fromEntries(Object.entries(await idbAll(page, 'ink')).filter(([k]) => k.startsWith(id + ':'))), file: (await idbAll(page, 'files'))[id]};
-  const del = page.locator(`#libList [data-del="${old.id}"]`);
-  await del.click(); await del.click();
+  await songDelete(page, old.id);
   await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), old.id, {timeout: 5000})
     .catch(() => { throw new Error('deleted old copy still listed'); });
   await page.uncheck('#showArch');
@@ -591,10 +594,13 @@ async function stepCopySong(t){
   const origLive = Object.values(await inkOf(orig.id)).flatMap(liveOf);
   assert(origLive.length >= 1, 'Three-page has no marks to copy');
   await toLibrary(page);
-  assert(await rowFor(page, '#libList', 'Three-page').locator('[data-copy]').textContent() === 'Copy', 'the library row has no Copy button');
+  await rowFor(page, '#libList', 'Three-page').locator('[data-songmenu]').click();
+  assert((await page.locator('.modal.menubox [data-item="copy"] b').textContent()).trim() === 'Copy', 'the library row menu has no Copy item');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('.modal'));
 
   /* the dialog: shows the original, Save waits for a name, the original's own version is refused (ED_TITLE has "live take") */
-  await rowFor(page, '#libList', ED_TITLE).locator('[data-copy]').click();
+  await songActIn(page, rowFor(page, '#libList', ED_TITLE), 'copy');
   let m = page.locator('.modal.copyask');
   await m.waitFor();
   assert((await m.locator('p').first().textContent()) === 'Copy of ' + ED_TITLE, 'dialog line: ' + await m.locator('p').first().textContent());
@@ -607,7 +613,7 @@ async function stepCopySong(t){
   await page.waitForFunction(() => !document.querySelector('.modal'));
   assert(Object.keys(await idbAll(page, 'songs')).length === known.size, 'a cancelled or refused Copy made a song');
 
-  await rowFor(page, '#libList', 'Three-page').locator('[data-copy]').click();
+  await songActIn(page, rowFor(page, '#libList', 'Three-page'), 'copy');
   m = page.locator('.modal.copyask');
   await m.waitFor();
   await m.locator('input').fill('copy test');
@@ -645,8 +651,7 @@ async function stepCopySong(t){
   assert(Object.values(await inkOf(copy.id)).flatMap(liveOf).length === origLive.length + 1, 'the copy lost a mark after reload');
   await rowFor(page, '#libList', title).waitFor({timeout: 5000});
   /* leave the library as it was for the steps after this one: the copy goes (two taps) */
-  const del = page.locator(`#libList [data-del="${copy.id}"]`);
-  await del.click(); await del.click();
+  await songDelete(page, copy.id);
   await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), copy.id, {timeout: 5000});
 }
 
@@ -654,8 +659,13 @@ async function stepDelete(t){
   const {page} = t;
   const id = t.data.edId;
   await toLibrary(page);
-  const b = rowFor(page, '#libList', ED_TITLE).locator('[data-del]');
-  await b.click(); await b.click();
+  await songActIn(page, rowFor(page, '#libList', ED_TITLE), 'del');
+  await page.locator('.modal.delask').waitFor({timeout: 5000});
+  assert(!(await idbAll(page, 'songs'))[id].deleted, 'the Delete menu item alone deleted the song');
+  await answerDelete(page, false);
+  assert(!(await idbAll(page, 'songs'))[id].deleted, 'Cancel on the Delete question deleted the song');
+  await songActIn(page, rowFor(page, '#libList', ED_TITLE), 'del');
+  await answerDelete(page, true);
   await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), id, {timeout: 5000})
     .catch(() => { throw new Error('deleted song still in the library'); });
   assert(await songCount(page) === 1, 'library shows ' + await songCount(page) + ' songs after delete');
@@ -704,7 +714,7 @@ async function stepRestoreV1(t){
     .catch(async () => { throw new Error('v1 song not in library after restore; toast: ' + await page.locator('#toast').textContent()); });
   /* Title-only records go through the legacy splitter (js/names.js). */
   const want = splitName(legacyTitle);
-  await page.locator(`#libList li.row:has([data-open="${id}"]) [data-edit]`).click();
+  await songAct(page, 'edit', id);
   const mo = page.locator('.modal'); await mo.waitFor();
   const got = {};
   for(const k of ['song', 'artist', 'version']) got[k] = await mo.locator(`input[data-k=${k}]`).inputValue();
@@ -1444,8 +1454,8 @@ async function stepCropBackup(t){
   for(const pn of [1, 2]) for(const n of notes[pn])
     assert(liveOf(data.ink[id + ':' + pn]).some(x => JSON.stringify(x) === JSON.stringify(n)), `backup lacks note "${n.text}" on page ${pn}`);
 
-  const b = rowFor(page, '#libList', 'Three-page').locator('[data-del]');
-  await b.click(); await b.click();
+  await songActIn(page, rowFor(page, '#libList', 'Three-page'), 'del');
+  await answerDelete(page, true);
   await page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), id, {timeout: 5000})
     .catch(() => { throw new Error('Three-page not deleted'); });
   assert((await idbAll(page, 'songs'))[id].deleted === true, 'song record not a deletion marker');
@@ -1744,7 +1754,7 @@ async function stepCollections(t){
   assert(JSON.stringify(mine.colls) === JSON.stringify([A]), 'the new PDF is not in the default collection: ' + JSON.stringify(mine.colls));
 
   /* put it in both bands; a new setlist joins the shown collection; B shows only that song, on both tabs */
-  await page.click(`#libList [data-edit="${mine.id}"]`);
+  await songAct(page, 'edit', mine.id);
   await page.locator('.modal fieldset.checks').waitFor();
   assert(await page.locator(`.modal fieldset.checks input[value="${A}"]`).isChecked() && !(await page.locator(`.modal fieldset.checks input[value="${B}"]`).isChecked()), 'the Edit tick boxes do not show the song in Band A only');
   await page.locator(`.modal fieldset.checks input[value="${B}"]`).check();

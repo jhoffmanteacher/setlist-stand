@@ -17,6 +17,7 @@ import {FIX, assert, sleep, diff, sha256, idbAll} from './harness.mjs';
 import {buildLibrary} from './share-lib.mjs';
 import {openTablet, makeFromBackup, syncTap, libraryOf, readDrive} from './sync-two.mjs';
 import {canonHash, titleOf} from './sync-model.mjs';
+import {songDelete} from './songrow.mjs';
 
 export const YEAR = 365 * 864e5;
 export const H = f => sha256(fs.readFileSync(path.join(FIX, f)));
@@ -98,8 +99,7 @@ export async function deleteSongUi(t, id){
   await until(t, 'songs', id, async () => {
     await showAll(page);
     if(!(await page.isChecked('#showArch').catch(() => false))) await page.check('#showArch').catch(() => {});
-    const b = page.locator(`#libList [data-del="${id}"]`);
-    await b.click(); await b.click();
+    await songDelete(page, id);
   });
 }
 export async function deleteSetUi(t, id){

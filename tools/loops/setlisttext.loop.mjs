@@ -10,6 +10,7 @@
  * survives a reload and a backup -> wipe -> restore.
  */
 import {PDFDocument, assert, sleep, snapshot, diff, idbAll, backupNow, wipe, restoreZip} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 /* Wraps IDBDatabase.prototype.transaction before the app starts (the same probe as the share import loop). */
 const TX_PROBE = () => {
@@ -51,12 +52,12 @@ async function buildLibrary(page){
   await page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, LIB.length, {timeout: 20000});
   const by = await songsByTitle(page);
   for(const t of LIB) assert(by.has(t), `the fixture "${t}" did not get that title: ` + [...by.keys()].join(' | '));
-  /* Copy song (the real button) and Archive */
-  await page.locator(`#libList [data-copy="${by.get('Yesterday - The Beatles').id}"]`).click();
+  /* Copy song (the real menu item) and Archive */
+  await songAct(page, 'copy', by.get('Yesterday - The Beatles').id);
   await page.locator('.modal input[type=text]').fill('for duo');
   await page.click('.modal [data-ok]');
   await waitFor(async () => (await songsByTitle(page)).has(COPY), 'Copy song did not make the copy');
-  await page.locator(`#libList [data-archive="${by.get(ARCHIVED).id}"]`).click();
+  await songAct(page, 'archive', by.get(ARCHIVED).id);
   await waitFor(async () => (await songsByTitle(page)).get(ARCHIVED).archived, 'the song was not archived');
 }
 

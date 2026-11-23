@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {FIX, TMP, assert, sleep, sha256, idbAll, snapshot, diff, restoreZip, JSZip, openShareMenu} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 /* [song, artist, version, archived]; the title shown is "Song (version) - Artist". The ids follow this order, which is made the OPPOSITE of
    the expected order for the same-name songs (Beta before Alpha, version b before a), so a missing tie-break cannot pass by luck. */
@@ -124,7 +125,7 @@ async function loopOrder(ctx){
     /* a rename moves a song to its place at once: "Zebra" becomes "Aardvark" (after "A Hard Day's Night", before "An Angel") */
     await page.click('#tLib'); await page.waitForSelector('#libList');
     const id = Object.values(after.songs).find(x => x.song === 'Zebra').id;
-    await page.click(`#libList [data-edit="${id}"]`);
+    await songAct(page, 'edit', id);
     await page.locator('.modal input[data-k=song]').fill('Aardvark');
     await page.click('.modal [data-ok]');
     await page.waitForFunction(() => !document.querySelector('.modal') && [...document.querySelectorAll('#libList .t')].some(e => e.textContent.startsWith('Aardvark')), null, {timeout: 5000});

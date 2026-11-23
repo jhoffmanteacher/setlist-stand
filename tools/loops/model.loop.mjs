@@ -48,6 +48,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {FIX, sha256, idbAll, snapshot, diff, restoreZip, backupNow, wipe, sleep, openSetMenu} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 const NAME = 'model: random action sequences match the model, survive reload and a backup round trip';
 const DEFAULT_CASES = 10, ACTIONS = 22, FULL_EVERY = 6;   // ~100 s: sized so a full run does not hog the Mac (see CLAUDE.md)
@@ -313,7 +314,7 @@ async function openSetUI(s, M, set, keep = false){
 const readLib = page => page.evaluate(() => {
   const L = document.querySelector('#libList');
   return {rows: [...L.querySelectorAll('li.row')].map(li => ({id: li.querySelector('.main').dataset.open, t: li.querySelector('.t').textContent,
-    s: li.querySelector('.s').textContent, arch: !!li.querySelector('[data-restoresong]')})),
+    s: li.querySelector('.s').textContent, arch: / · Archived$/.test(li.querySelector('.s').textContent)})),
     empty: !!L.querySelector('.empty h2'), emptyH: L.querySelector('.empty h2')?.textContent || null, addBtn: L.querySelector('[data-addcollsongs]')?.textContent || null, archHead: [...L.querySelectorAll('h2')].some(h => h.textContent === 'Archived')};
 });
 function checkLib(M, got, showArch){
@@ -645,7 +646,7 @@ A.edit = {w: 3.5, plan: (M, r) => { const c = libSongs(M); if(!c.length) return 
   async run(s, M, a){
     const song = songOf(M, a.song);
     await toLib(s, M);
-    await s.page.click(`#libList [data-edit="${song.id}"]`);
+    await songAct(s.page, 'edit', song.id);
     const m = s.page.locator('.modal');
     await m.waitFor();
     const shown = await m.locator('input[data-k=song]').inputValue();
@@ -660,7 +661,7 @@ A.archive = {w: 1.2, plan: (M, r) => { const c = libSongs(M); return c.length ? 
   async run(s, M, a){
     const song = songOf(M, a.song);
     await toLib(s, M);
-    await s.page.click(`#libList [data-archive="${song.id}"]`);
+    await songAct(s.page, 'archive', song.id);
     song.archived = true;
   }};
 A.unarchive = {w: 1.2, plan: (M, r) => { const c = liveSongs(M).filter(x => x.archived); return c.length ? {song: r.pick(c).label} : null; },
@@ -671,21 +672,22 @@ A.unarchive = {w: 1.2, plan: (M, r) => { const c = liveSongs(M).filter(x => x.ar
     await setShowArch(s, true);
     const got = await readLib(s.page), p = checkLib(M, got, true);
     if(p.length) throw new Error('with Show archived on: ' + p.join('\n    '));
-    await s.page.click(`#libList [data-restoresong="${song.id}"]`);
+    await songAct(s.page, 'restore', song.id);
     song.archived = false;
-    await s.page.waitForFunction(id => !document.querySelector(`[data-restoresong="${id}"]`), song.id, {timeout: 5000});
+    await s.page.waitForFunction(id => { const b = document.querySelector(`#libList [data-songmenu="${id}"]`); return !b || !/ · Archived$/.test(b.closest('li').querySelector('.s').textContent); }, song.id, {timeout: 5000});
     await setShowArch(s, false);
   }};
 A.deleteSong = {w: 0.8, plan: (M, r) => { const c = liveSongs(M); return c.length ? {song: r.pick(c).label} : null; },
-  desc: a => `delete song ${a.song} (two taps)`,
+  desc: a => `delete song ${a.song} (menu, then the confirm)`,
   async run(s, M, a){
     const song = songOf(M, a.song);
     await toLib(s, M);
     if(song.archived) await setShowArch(s, true);
-    const b = s.page.locator(`#libList [data-del="${song.id}"]`);
-    await b.click();
-    if(await b.textContent() !== 'Tap again') throw new Error(`first tap on Delete shows "${await b.textContent()}"`);
-    await b.click();
+    await songAct(s.page, 'del', song.id);
+    const dm = s.page.locator('.modal.delask');
+    await dm.waitFor({timeout: 5000});
+    if(await s.page.locator(`#libList [data-open="${song.id}"]`).count() !== 1) throw new Error('the Delete menu item alone removed the song');
+    await answerDelete(s.page, true);
     await s.page.waitForFunction(id => !document.querySelector(`#libList [data-open="${id}"]`), song.id, {timeout: 5000});
     if(song.archived) await setShowArch(s, false);
     song.deleted = true; song.ink = new Map();
@@ -697,11 +699,9 @@ A.newVersion = {w: 1.5, plan: (M, r) => { const c = libSongs(M); return c.length
   async run(s, M, a){
     const song = songOf(M, a.song), fx = FIXTURES[a.file], page = s.page;
     await toLib(s, M);
-    const b = page.locator(`#libList [data-newversion="${song.id}"]`);
-    if(await b.textContent() !== 'New version') throw new Error(`the button for ${song.label} says "${await b.textContent()}"`);
     await clearToast(page);
     const days = [today()], dup = liveSongs(M).some(x => x.hash === fx.hash);     // archived songs and the song itself count
-    await b.click();
+    await songAct(page, 'newversion', song.id);
     await page.setInputFiles('#newVersionFile', path.join(FIX, a.file));
     /* a PDF already in the library first brings up the duplicate question (the model always adds anyway), then the confirm */
     await page.waitForFunction(() => !!document.querySelector('.dupask, .nvask'), null, {timeout: 15000});
@@ -744,7 +744,7 @@ A.copySong = {w: 1.5, plan: (M, r) => {
     await toLib(s, M);
     await clearToast(page);
     const known = new Set(M.songs.map(x => x.id));
-    await page.click(`#libList [data-copy="${song.id}"]`);
+    await songAct(page, 'copy', song.id);
     const m = page.locator('.modal.copyask');
     await m.waitFor({timeout: 5000});
     if(!(await m.locator('[data-ok]').isDisabled())) throw new Error('Save is on while the version name is empty');
@@ -1104,7 +1104,7 @@ A.editColls = {w: 2.5, plan: (M, r) => { const c = libSongs(M); if(!c.length || 
   async run(s, M, a){
     const song = songOf(M, a.song);
     await toLib(s, M);
-    await s.page.click(`#libList [data-edit="${song.id}"]`);
+    await songAct(s.page, 'edit', song.id);
     await s.page.locator('.modal fieldset.checks').waitFor({timeout: 5000});
     await setTicks(s, M, song, a.ticks, song.label);
   }};

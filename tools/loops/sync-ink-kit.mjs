@@ -26,6 +26,7 @@ import {assert, sleep, idbAll, PDFDocument, sha256, TMP, download, openSetMenu} 
 import {canon, canonHash} from './sync-model.mjs';
 import {syncTap} from './sync-two.mjs';
 import {showAll, noModal} from './sync-kit.mjs';
+import {songAct} from './songrow.mjs';
 
 export const MARKS_NAME = 'Marks (do not edit)';
 export const HOUR = 36e5;
@@ -308,7 +309,7 @@ export async function makePdf(pages, name){
 export async function newVersionUi(t, id, file){
   const {page} = t;
   await showAll(page);
-  await page.click(`#libList [data-newversion="${id}"]`);
+  await songAct(page, 'newversion', id);
   await page.setInputFiles('#newVersionFile', file);
   await page.waitForSelector('.modal.nvask, .modal.dupask', {timeout: 15000});
   if(await page.locator('.modal.dupask').count()){ await page.click('.modal.dupask [data-dupadd]'); await page.waitForSelector('.modal.nvask', {timeout: 15000}); }

@@ -37,6 +37,7 @@ import {openTablet, makeFromBackup, syncTap, tapSync, finishSync, libraryOf, rea
 import {marksCounts} from './sync-ink-kit.mjs';
 import {newModel, addTablet, copyTablet, localEdit, localNew, localDelete, adopt, sync, compareTablet, compareDrive, KINDS, pdfName, titleOf, canonHash,
   inkSeed, inkSync, inkCompareTablet, inkCompareDrive, inkDiff, splitInkKey, inkAdoptLoose} from './sync-model.mjs';
+import {songAct, songDelete} from './songrow.mjs';
 
 const YEAR = 365 * 864e5;
 const VERBOSE = process.argv.includes('--verbose');
@@ -72,7 +73,7 @@ async function act(t, store, id, fn){
 async function editSong(t, id, {song, artist, version, colls = {}}){
   const {page} = t;
   await showAll(page);
-  await page.click(`#libList [data-edit="${id}"]`);
+  await songAct(page, 'edit', id);
   const m = page.locator('.modal').last();
   for(const [k, v] of Object.entries({song, artist, version})) if(v !== undefined) await m.locator(`input[data-k="${k}"]`).fill(v);
   for(const [c, on] of Object.entries(colls)) await m.locator(`fieldset.checks input[value="${c}"]`).setChecked(on);
@@ -82,12 +83,12 @@ async function setArchived(t, id, on){
   const {page} = t;
   await showAll(page);
   if(!on && !(await page.isChecked('#showArch'))) await page.check('#showArch');
-  await page.click(on ? `#libList [data-archive="${id}"]` : `#libList [data-restoresong="${id}"]`);
+  await songAct(page, on ? 'archive' : 'restore', id);
 }
 async function copySongUi(t, id, version){
   const {page} = t;
   await showAll(page); await clearToast(page);
-  await page.click(`#libList [data-copy="${id}"]`);
+  await songAct(page, 'copy', id);
   await page.locator('.modal.copyask input').fill(version);
   await page.click('.modal.copyask [data-ok]');
   await waitToast(page, /^Copied/);
@@ -95,7 +96,7 @@ async function copySongUi(t, id, version){
 async function newVersionUi(t, id, file){
   const {page} = t;
   await showAll(page); await clearToast(page);
-  await page.click(`#libList [data-newversion="${id}"]`);
+  await songAct(page, 'newversion', id);
   await page.setInputFiles('#newVersionFile', path.join(FIX, file));
   await page.waitForSelector('.modal.nvask, .modal.dupask', {timeout: 15000});
   if(await page.locator('.modal.dupask').count()){ await page.click('.modal.dupask [data-dupadd]'); await page.waitForSelector('.modal.nvask', {timeout: 15000}); }
@@ -132,8 +133,7 @@ async function renameCollUi(t, cid, name){
 async function deleteSongUi(t, id){
   const {page} = t;
   await showAll(page);
-  const b = page.locator(`#libList [data-del="${id}"]`);
-  await b.click(); await b.click();
+  await songDelete(page, id);
 }
 async function deleteSetUi(t, id){
   const {page} = t;

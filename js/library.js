@@ -1,4 +1,4 @@
-import {$, esc, toast, form, armed, hooks, modal, busy, pdfPageCount} from './util.js';
+import {$, esc, toast, form, hooks, modal, busy, pdfPageCount} from './util.js';
 import {putAll, get, load, state, songById, saveSong, newSong, sha256, ensureHashes} from './store.js';
 import {parseFileName} from './importname.js';
 import {compareSongs, songMatches} from './names.js';
@@ -32,7 +32,7 @@ const backupItems = () => [
   {id: 'backup', label: 'Back up everything', hint: 'Save one file with every PDF, setlist and note'},
   {id: 'restore', label: 'Restore from backup', hint: 'Bring your library back from a backup file'},
   {id: 'sync', label: 'Sync with Google Drive', hint: driveSetUp() ? 'Keep your tablets the same' : 'Connect Google Drive first'},
-  {id: 'drive', label: 'Google Drive settings', hint: 'Connect, test or disconnect'},
+  {id: 'drive', label: 'Google Drive settings', hint: 'Connect or disconnect'},
 ];
 
 export function renderLibrary(v){
@@ -48,6 +48,17 @@ export function renderLibrary(v){
   renderDrive();
 }
 const matches = s => songMatches(s, q);
+/* A row's one button (Jonathan, 2026-11-23): everything a song can do is in its menu (songItems), so the title gets the room. */
+const moreBtn = s => `<button class="rowmore" data-songmenu="${esc(s.id)}" aria-label="Actions for ${esc(s.title)}" aria-haspopup="dialog">\u22ef</button>`;
+const cut = t => t.length > 40 ? t.slice(0, 40) + '\u2026' : t;
+const songItems = s => s.archived
+  ? [{id: 'restore', label: 'Restore', hint: 'Bring it back into the Library'},
+     {id: 'del', label: 'Delete', hint: 'Remove it, its PDF and its marks from this tablet'}]
+  : [{id: 'edit', label: 'Edit', hint: 'Change the title, artist, version or collections'},
+     {id: 'copy', label: 'Copy', hint: 'A second version of this chart, marked up another way'},
+     {id: 'newversion', label: 'New version', hint: 'Use a new PDF; the old chart moves to Archived'},
+     {id: 'archive', label: 'Archive', hint: 'Hide it from the Library; it still plays in setlists'},
+     {id: 'del', label: 'Delete', hint: 'Remove it, its PDF and its marks from this tablet'}];
 const pages = s => `${esc(s.pages)} page${s.pages == 1 ? '' : 's'}`;
 function renderLib(){
   const sorted = state.songs.filter(inShown).sort(compareSongs);      // A to Z by song name, when the list is drawn (the same for Archived and search); only the collection being shown
@@ -56,11 +67,11 @@ function renderLib(){
   let html = coll && !live.length
     ? `<div class="empty"><h2>No songs in ${esc(coll.name)} yet</h2><p>Add songs from your library to this collection.</p><button class="pri" data-addcollsongs="${esc(coll.id)}">Add songs to ${esc(coll.name)}</button></div>`
     : live.length
-    ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button><div class="acts"><button data-edit="${id}">Edit</button><button data-copy="${id}">Copy</button><button data-archive="${id}">Archive</button><button data-newversion="${id}">New version</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
+    ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button>${moreBtn(s)}</li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
     : `<div class="empty"><h2>No music yet</h2><p>Add PDF charts from your tablet's files or Drive. They're saved on this device.</p></div>`;
   if(showArchived){
     html += `<h2 style="margin-top:28px;font-size:26px">Archived</h2>` + (alist.length
-      ? `<ul class="list">${alist.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)} · Archived</span></button><div class="acts"><button data-restoresong="${id}">Restore</button><button data-del="${id}">Delete</button></div></li>`; }).join('')}</ul>`
+      ? `<ul class="list">${alist.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)} · Archived</span></button>${moreBtn(s)}</li>`; }).join('')}</ul>`
       : `<p class="hint">${arch.length ? 'No archived songs match.' : 'Nothing archived.'}</p>`);
   }
   $('#libList').innerHTML = html;
@@ -197,6 +208,38 @@ function askNewVersion(name, s, keeps){
   });
 }
 
+async function editSong(id){
+  const s = songById(id); if(!s) return;
+  const r = await form('Edit song', [{key:'song', label:'Title', value:s.song}, {key:'artist', label:'Artist', value:s.artist}, {key:'version', label:'Version', value:s.version}],
+    {label:'Collections', options:collOptions(s)});
+  if(r && r.song){ s.song = r.song; s.artist = r.artist; s.version = r.version; s.colls = applyTicks(s, r.checks); await saveSong(s); await load(); hooks.render(); }
+}
+async function setArchived(id, on){
+  const s = songById(id); if(!s) return;
+  s.archived = on;
+  await saveSong(s); await load(); hooks.render();
+}
+/* Delete is the menu item and then this question (the two taps the "Never" list asks for). Cancel changes nothing. */
+function askDelete(s){
+  return new Promise(res => {
+    const m = modal(`<h2>Delete ${esc(cut(s.title))}?</h2><p>Its PDF and its marks are removed from this tablet, and it leaves every setlist it is in.</p>
+      <div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Delete</button></div>`);
+    m.classList.add('delask');
+    const ok = m.querySelector('[data-ok]'); ok.disabled = true; setTimeout(() => { ok.disabled = false; }, 400);      // a quick double tap on the menu's Delete must not land on this one
+    m.querySelector('[data-x]').onclick = () => { m.remove(); res(false); };
+    m.querySelector('[data-ok]').onclick = () => { m.remove(); res(true); };
+  });
+}
+async function deleteSong(id){
+  const s = songById(id); if(!s || !(await askDelete(s))) return;
+  /* One transaction: the PDF and ink go, the song becomes a deletion marker and the setlists that had it are updated (js/deleteops.js,
+     shared with sync's "Delete here"; each record gets a time later than its own last one, so the deletion beats what it was made from). */
+  const ops = await deleteOps('song', id);
+  try{ await putAll(ops); }
+  catch(err){ toast(explainError(err)); }
+  await load(); hooks.render();
+}
+
 /* Returns true when the click was for the library. */
 export async function onClick(b, d){
   if('add' in d){ $('#file').click(); return true; }
@@ -223,28 +266,21 @@ export async function onClick(b, d){
   if('persist' in d){ await askPersist(b); return true; }
   if('problems' in d){ showProblemLog(); return true; }
   if(d.open){ openViewer([{type:'song', id:d.open}], 0); return true; }
-  if(d.edit){
-    const s = songById(d.edit);
-    const r = await form('Edit song', [{key:'song', label:'Title', value:s.song}, {key:'artist', label:'Artist', value:s.artist}, {key:'version', label:'Version', value:s.version}],
-      {label:'Collections', options:collOptions(s)});
-    if(r && r.song){ s.song = r.song; s.artist = r.artist; s.version = r.version; s.colls = applyTicks(s, r.checks); await saveSong(s); await load(); hooks.render(); }
+  if(d.songmenu){
+    const id = d.songmenu, s = songById(id); if(!s) return true;
+    b.focus();                                                  // Safari does not focus a button that was tapped: the box and the dialogs after it give focus back to it
+    await menuBox({title: cut(s.title), items: songItems(s), opener: b, run: act => {
+      if(act === 'edit') return editSong(id);
+      if(act === 'copy') return copySong(id);
+      if(act === 'newversion'){ newVersionOf = id; $('#newVersionFile').click(); return; }    // inside the tap that chose it: a file chooser needs that. Nothing is lost: the confirm after the pick is the check
+      if(act === 'archive' || act === 'restore') return setArchived(id, act === 'archive');
+      if(act === 'del') return deleteSong(id);
+    }});
+    /* The list is drawn again after most of these: the button that opened the menu may be gone (a deleted song's row). */
+    if(!document.querySelector('.modal') && (!document.activeElement || document.activeElement === document.body)){
+      const mb = document.querySelector(`#libList [data-songmenu="${CSS.escape(id)}"]`) || $('[data-add]'); if(mb) mb.focus();
+    }
     return true;
-  }
-  if(d.copy){ await copySong(d.copy); return true; }
-  if(d.archive || d.restoresong){
-    const s = songById(d.archive || d.restoresong); s.archived = !!d.archive;
-    await saveSong(s); await load(); hooks.render(); return true;
-  }
-  if(d.newversion){ newVersionOf = d.newversion; $('#newVersionFile').click(); return true; }    // nothing is lost: the confirm after the pick is the check
-  if(d.del){
-    if(!armed(b)) return true;
-    const s = songById(d.del); if(!s) return true;
-    /* One transaction: the PDF and ink go, the song becomes a deletion marker and the setlists that had it are updated (js/deleteops.js,
-       shared with sync's "Delete here"; each record gets a time later than its own last one, so the deletion beats what it was made from). */
-    const ops = await deleteOps('song', s.id);
-    try{ await putAll(ops); }
-    catch(err){ toast(explainError(err)); }
-    await load(); hooks.render(); return true;
   }
   return false;
 }

@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, snapshot, diff, backupNow, download} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 const songCount = page => page.locator('#libList [data-open]').count();
 const waitSongs = (page, n, ms = 15000) => page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, n, {timeout: ms})
@@ -69,7 +70,7 @@ export const loops = [
     assert(await nudgeText(page) === '', 'after a reload with nothing changed: ' + await nudgeText(page));
 
     /* a change (a rename) brings it back, without a reload, on both tabs, with the plain wording */
-    await page.click('#libList [data-edit]');
+    await songActIn(page, page.locator('#libList li.row').first(), 'edit');
     await page.locator('.modal input[data-k=song]').fill('Changed Name');
     await page.click('.modal [data-ok]');
     await shown('after a rename', /^Changes since your last backup \(today\)\.\s*Back up now$/);
@@ -306,7 +307,7 @@ export const loops = [
     expectSame(snap1, await snapshot(page), 'library after skipping a duplicate');
 
     /* an archived song still counts */
-    await page.click('#libList [data-archive]');
+    await songActIn(page, page.locator('#libList li.row').first(), 'archive');
     await waitSongs(page, 0);
     await importFiles(page, [one]);
     await page.waitForSelector('.dupask', {timeout: 15000}).catch(() => { throw new Error('no question for a PDF that is archived'); });

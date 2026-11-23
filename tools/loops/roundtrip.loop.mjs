@@ -10,6 +10,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, snapshot, diff, restoreZip, backupNow, wipe, JSZip, PDFDocument, openSetMenu} from './harness.mjs';
+import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 
 /* ---------- small UI helpers (approaches copied from tools/smoke.mjs) ---------- */
 const liveOf = v => (v && Array.isArray(v.strokes) ? v.strokes : []).filter(s => !s.deleted);
@@ -153,7 +154,7 @@ async function tickIn(page, ids){
 }
 async function tickSong(page, songId, ids){
   await toLibrary(page);
-  await page.click(`#libList [data-edit="${songId}"]`);
+  await songAct(page, 'edit', songId);
   await tickIn(page, ids);
 }
 async function tickSet(page, name, ids){
@@ -202,7 +203,7 @@ async function buildRich(s){
   assert(Object.values(ids).every(Boolean), 'imported songs not found by title: ' + JSON.stringify(Object.keys(by)));
 
   /* Edit title / artist / version */
-  await page.click(`#libList [data-edit="${ids.two}"]`);
+  await songAct(page, 'edit', ids.two);
   const m = page.locator('.modal'); await m.waitFor();
   await m.locator('input[data-k=song]').fill('Round Trip');
   await m.locator('input[data-k=artist]').fill('The Loops');
@@ -210,7 +211,7 @@ async function buildRich(s){
   await m.locator('[data-ok]').click();
   await waitFor(async () => (await songRec(page, ids.two)).song === 'Round Trip', 'edit not saved');
   /* Archive */
-  await page.click(`#libList [data-archive="${ids.one}"]`);
+  await songAct(page, 'archive', ids.one);
   await waitFor(async () => (await songRec(page, ids.one)).archived === true, 'archive not saved');
 
   /* Pen, highlighter, a text note, a page crop on Three-page; a whole-song crop on Round Trip */
@@ -243,7 +244,7 @@ async function buildRich(s){
   await waitFor(async () => (await idbAll(page, 'sets'))[scratch]?.deleted === true, 'set deletion marker not saved');
   /* Delete a song (it leaves a marker and drops out of Gig) */
   await toLibrary(page);
-  await twoTap(page, `#libList [data-del="${ids.doomed}"]`);
+  await songDelete(page, ids.doomed);
   await waitFor(async () => (await songRec(page, ids.doomed))?.deleted === true, 'song deletion marker not saved');
   /* Three collections: Round Trip is in two of them at once, Three-page in the second and the third; Gig is in the first.
      The third is deleted again, so it is a marker and Three-page no longer lists it. */
@@ -716,7 +717,7 @@ async function loopUnknownFields(ctx){
     const C = await makeColl(page, 'Keep');
     /* Edit (title, plus a collection tick), then a tick on the setlist */
     await toLibrary(page);
-    await page.click(`#libList [data-edit="${one}"]`);
+    await songAct(page, 'edit', one);
     await page.locator('.modal input[data-k=song]').fill('Edited Name');
     await page.locator(`.modal fieldset.checks input[value="${C}"]`).check();
     await page.click('.modal [data-ok]'); await noModal(page);
@@ -726,7 +727,7 @@ async function loopUnknownFields(ctx){
     await keep('after Edit and a collection tick');
     /* Copy keeps them too (it spreads the whole record) */
     await toLibrary(page);
-    await page.click(`#libList [data-copy="${one}"]`);
+    await songAct(page, 'copy', one);
     await page.locator('.copyask input').fill('with field');
     await page.click('.copyask [data-ok]'); await noModal(page);
     const copy = await waitFor(async () => (await songs(page)).find(x => x.version === 'with field'), 'copy not saved');
