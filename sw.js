@@ -41,6 +41,7 @@ const PRECACHE = [
   'js/ink.js',
   'js/print.js',
   'js/names.js',
+  'js/azstrip.js',
   'js/importname.js',
   'js/crop.js',
   'js/songlist.js',
