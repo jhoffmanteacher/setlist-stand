@@ -4,6 +4,7 @@
 import {esc, modal, armed} from './util.js';
 import {explainError} from './errors.js';
 import {LIMIT} from './sync.js';
+import {KEEP} from './drivebackup.js';
 
 const WORD = {song:['song', 'songs'], set:['setlist', 'setlists'], coll:['collection', 'collections']};
 const count = (n, kind) => `${n} ${WORD[kind][n === 1 ? 0 : 1]}`;
@@ -56,6 +57,23 @@ export function failureText(err){
   return explainError(err);
 }
 
+/* The backup copy's line(s) (js/drivebackup.js): after the body and never one of its `lines`, so "Everything is up to date." still shows
+   when the only thing that happened is a copy. A copy that was not due says nothing. */
+function backupLines(b){
+  if(!b || b.state === 'notdue') return '';
+  const P = [];
+  if(b.state === 'saved'){
+    P.push(`Saved a backup copy in your Google Drive (${b.name}, ${b.mb} MB). The last ${KEEP} are kept in the Backups folder.`);
+    if(b.skipped) P.push(`${b.skipped} ${b.skipped === 1 ? 'song had' : 'songs had'} no PDF on this tablet and ${b.skipped === 1 ? 'was' : 'were'} left out.`);
+    if(b.removed < 0) P.push('Older backup copies could not be tidied up; they are left in the Backups folder.');
+  }
+  else if(b.state === 'stopped') P.push('The backup copy was stopped. The sync itself is done; a copy is made at a later sync.');
+  else if(b.state === 'full') P.push('Your Google Drive is full, so no backup copy was saved. The sync itself is done.');
+  else if(b.state === 'toobig') P.push(`Your library (${b.mb} MB) is too big for a backup copy in Google Drive. Use Back up everything instead.`);
+  else if(b.state === 'failed') P.push(`The backup copy could not be saved in Google Drive (${b.why}). The sync itself is done; it is tried again at the next sync.`);
+  return P.length ? `<div class="syncrep syncbackup"><p>${P.map(esc).join('</p><p>')}</p></div>` : '';
+}
+
 /* The report, which stays until OK. state: 'done' | 'stopped' | 'failed'. */
 export function reportDialog(rep, state = 'done', failure = ''){
   const lines = [], P = text => lines.push(esc(text));   // every line is HTML that is already safe
@@ -84,7 +102,7 @@ export function reportDialog(rep, state = 'done', failure = ''){
     : state === 'stopped' ? '<p>You stopped it. What was done before is kept, and nothing is half written.</p>' : '';
   const quiet = !lines.length || (lines.length === 1 && rep.strays);                    // nothing but a note about files that are not ours
   const body = (state === 'done' && !rep.skipped.length && quiet ? '<p>Everything is up to date.</p>' : '') + (lines.length ? `<div class="syncrep"><p>${lines.join('</p><p>')}</p></div>` : '');
-  const m = modal(`<h2>${title}</h2>${lead}${body}${skipped}<div class="btns"><button class="pri" data-x data-ok>OK</button></div>`);
+  const m = modal(`<h2>${title}</h2>${lead}${body}${skipped}${backupLines(rep.backup)}<div class="btns"><button class="pri" data-x data-ok>OK</button></div>`);
   m.querySelector('[data-ok]').onclick = () => m.remove();
   return m;
 }

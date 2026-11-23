@@ -6,6 +6,8 @@
      Charts                          one PDF per song: name "<title>.pdf", properties {k:'pdf', id:<song id>, h:<sha-256 hex>}
      Library data (do not edit)      one JSON file per record: name "<kind>-<id>.json", the record itself as the content,
                                      properties {k:<kind>, id, u:<updated>, c:<canonical hash>, d:'1' for a deletion marker}
+     Backups                         the backup copies (js/drivebackup.js): "setlist-stand-backup-<date>.zip", properties {k:'backup', t:<ms when packing began>}.
+                                     Made at the first copy; NEVER listed by listLibrary, so a sync never reads, merges, counts or sweeps it.
      Marks (do not edit)             one JSON file per ink page (Part 3): name "ink-<song id>-<page>.json" (inkFileName in
                                      js/syncink.js), the page record {updated, strokes} as the content, properties
                                      {k:'ink', id:<song id>, p:<page>, u:<updated>, c:<canonical hash>, h:<the chart's sha-256>}
@@ -19,7 +21,7 @@ import {ID_RE} from './store.js';
 import {parseInkProps, DATE_MAX} from './syncink.js';
 
 export const MULTIPART_MAX = 5 * 1024 * 1024;       // up to this, one request; over it, a resumable upload (needs the session address to be readable)
-const SUBS = {charts:'Charts', data:'Library data (do not edit)', ink:'Marks (do not edit)'};
+const SUBS = {charts:'Charts', data:'Library data (do not edit)', ink:'Marks (do not edit)', backups:'Backups'};
 const LIST_FIELDS = 'nextPageToken,files(id,name,mimeType,createdTime,size,appProperties)';
 const FILE_FIELDS = 'id,name,appProperties';
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -57,6 +59,23 @@ export async function ensureLayout({signal} = {}){
 export async function ensureInk(layout, {signal} = {}){
   if(!layout.ink) layout.ink = await ensureSub(layout.home, 'ink', {signal});
   return layout.ink;
+}
+
+/* ---------- the Backups folder (js/drivebackup.js): found by its mark like the others, made only when the first copy is sent ---------- */
+export async function findBackups(layout, {signal} = {}){
+  const found = await findSub(layout.home, 'backups', {signal});
+  return found.length ? found[0].id : null;
+}
+export async function ensureBackups(layout, {signal} = {}){
+  return ensureSub(layout.home, 'backups', {signal});
+}
+/* The backup copies in the folder, NEWEST first (Drive's own createdTime, then the larger file id): only files with the mark k:'backup'
+   (a file someone put there by hand is not ours and is never listed, so it is never trashed). */
+export async function listBackups(folderId, {signal} = {}){
+  const out = [];
+  for(const f of await listAll({q:`'${folderId}' in parents and trashed = false`, fields:LIST_FIELDS, pageSize:'1000'}, {signal}))
+    if(f.appProperties && f.appProperties.k === 'backup' && okFileId(f.id)) out.push({id:f.id, name:f.name, createdTime:String(f.createdTime || ''), size:Number(f.size) || 0});
+  return out.sort((a, b) => -byAge(a, b));
 }
 
 /* The better of two files for one thing: the larger `u` (records only), then the older, then the smaller file id. */
@@ -187,6 +206,11 @@ export async function patchFile(fileId, {name, appProperties}, {signal} = {}){
   const res = await call('/files/' + encodeURIComponent(fileId), {method:'PATCH', query:{fields:FILE_FIELDS}, signal,
     json:{...(name != null ? {name} : {}), ...(appProperties ? {appProperties} : {})}});
   return readJson(res);
+}
+/* Moves a file to the Drive bin (it can be taken back there for 30 days). */
+export async function trashFile(fileId, {signal} = {}){
+  try{ await call('/files/' + encodeURIComponent(fileId), {method:'PATCH', query:{fields:FILE_FIELDS}, signal, json:{trashed:true}}); }
+  catch(e){ if(!(e instanceof DriveError && e.status === 404)) throw e; }
 }
 /* Removes a file for good. A file that is already gone is done (somebody deleted it by hand). */
 export async function deleteFile(fileId, {signal} = {}){

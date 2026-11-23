@@ -16,7 +16,8 @@
         is written WITH its record (and Drive's pages of marks for it, merged) in ONE putAll, and only if the local record still
         has the `updated` that was read (ifUpdated);
      5. the pages of marks of the songs already here, page by page (js/syncmarks.js), then the sweeps of a deleted song's files;
-     6. the report.
+     6. the report;
+     7. after `ss-last-sync` is written, a backup copy of the whole library into Drive's Backups folder if one is due (js/drivebackup.js).
    Every unit is safe to repeat. A run that is stopped, loses the network or the sign-in, or is cut off by a reload leaves the
    library whole and the next run finishes the job. Nothing on this tablet is deleted because something is missing from Drive.
    Everything from Drive is untrusted: ids, lengths and counts are checked like a restore (songProblem and the other two from
@@ -25,6 +26,7 @@ import {ensureLayout} from './driveops.js';
 import {survey, nameOf} from './syncplan.js';
 import {runUps, runDowns, downs, deleteHere, keep, repairPdfs, sweepPdfs} from './syncapply.js';
 import {syncMarks, sweepMarks} from './syncmarks.js';
+import {driveBackup} from './drivebackup.js';
 
 export const LAST_SYNC = 'ss-last-sync';            // localStorage: when this tablet last finished a sync (ms). Per tablet: never synced, backed up or shared.
 export const LIMIT = {pdf:100e6, run:500e6, record:1e6, records:50e6,     // bytes: one PDF, all the PDFs downloaded in one run, one record file, all the record files of one run (his library is 43 MB in 74 PDFs, the largest 2.3 MB)
@@ -40,7 +42,7 @@ export class Stopped extends Error { constructor(report){ super('stopped'); this
 /* Drive, the network or this tablet's storage failed part-way; `cause` is the error, `report` what was done before. */
 export class Failed extends Error { constructor(cause, report){ super(cause && cause.message || 'failed'); this.name = 'Failed'; this.cause = cause; this.report = report; } }
 
-export const blankReport = () => ({sent:{coll:0, song:0, set:0}, got:{coll:0, song:0, set:0}, marks:{sent:0, got:0}, both:[], skipped:[], future:[], kept:0, removed:0, later:0, limited:0, strays:0, changedMeanwhile:0, archived:0, repaired:0, survived:[], unapplied:0});
+export const blankReport = () => ({sent:{coll:0, song:0, set:0}, got:{coll:0, song:0, set:0}, marks:{sent:0, got:0}, both:[], skipped:[], future:[], kept:0, removed:0, later:0, limited:0, strays:0, changedMeanwhile:0, archived:0, repaired:0, survived:[], unapplied:0, backup:null});
 export const lastSync = () => { try{ const t = Number(localStorage.getItem(LAST_SYNC)); return t > 0 && t <= Date.now() + 864e5 ? t : 0; }catch(e){ return 0; } };     // a time saved while the clock was ahead counts as never: it must not hide later changes
 
 /* `ui`: {say(text), stopped(), signal, decide(items) -> Promise<Map "kind:id" -> 'delete' | 'keep'>}.
@@ -110,6 +112,9 @@ export async function runSync(ui = {}){
     /* "Synced up to here": when the last survey of this tablet began. A change made after that, in this or another tab, is a change since
        the last sync (js/nudge.js); a record dated ahead is bounded there (store.js), so it cannot hide real changes. */
     try{ localStorage.setItem(LAST_SYNC, String(ctx.startedAt)); }catch(e){}
+    /* 7. the sync is finished. A backup copy in Drive is made now if one is due (js/drivebackup.js, weekly): it never throws, and
+          whatever happens to it (stopped, Drive full, an error) only changes its own line in the report, never the sync's result. */
+    rep.backup = await driveBackup(ctx, stopped);
     return rep;
   }catch(e){
     if(e instanceof Stopped || e instanceof Failed) throw e;

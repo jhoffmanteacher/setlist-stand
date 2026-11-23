@@ -12,7 +12,7 @@
  *        close: 'done' | 'escape'), reads the report box and closes it: {title, text, state: 'finished'|'stopped'|'failed', asked: [row texts]}
  *        Split in two for loops that act mid-run: await tapSync(A) (returns once a sync box is up), then await finishSync(A, opts).
  *   await libraryOf(A) -> {songs, sets, colls, files: {id: sha256}, ink}   the tablet's stored library (snapshot(), normalised)
- *   readDrive(A.google) -> {home, charts, data, marks, recs: {song, set, coll: Map id -> record}, pdfs: Map id -> {hash, name, fileId},
+ *   readDrive(A.google) -> {home, charts, data, marks, backupFolder, backups: [backup copies, newest first: {id, name, createdTime, bytes, t}], recs: {song, set, coll: Map id -> record}, pdfs: Map id -> {hash, name, fileId},
  *                           ink: Map "songId:page" -> page of marks, foreign: [files that are not ours], problems: [layout faults]}
  *                           read from the stand-in's own files
  *   reportCounts(rep.text) -> {sent: {song, set, coll}, got: {...}, upToDate, both: 'the "changed on both tablets" part'}
@@ -32,7 +32,7 @@ import {KINDS, canonHash, pdfName, titleOf} from './sync-model.mjs';
 const FOLDER = 'application/vnd.google-apps.folder';
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 const authCount = g => g.requests.filter(r => r.kind === 'auth').length;
-export const HOME_NAME = 'Setlist Stand', CHARTS_NAME = 'Charts', DATA_NAME = 'Library data (do not edit)', MARKS_NAME = 'Marks (do not edit)';
+export const HOME_NAME = 'Setlist Stand', CHARTS_NAME = 'Charts', DATA_NAME = 'Library data (do not edit)', MARKS_NAME = 'Marks (do not edit)', BACKUPS_NAME = 'Backups';
 export const REPORT_TITLES = /^Sync (finished|stopped|could not finish)/;
 
 export async function openTablet(ctx, {name = 'A', share = null, fixtures = false} = {}){
@@ -277,11 +277,13 @@ export const setClock = (t, ms) => t.page.clock.setSystemTime(Date.now() + ms);
 /* What is on the shared Drive, read from the stand-in's own store (not through the app), with the design's layout checked. */
 export function readDrive(google){
   const live = [...google.files.values()].filter(f => !f.trashed), problems = [];
-  const out = {home: null, charts: null, data: null, marks: null, recs: {song: new Map(), set: new Map(), coll: new Map()}, pdfs: new Map(), ink: new Map(), inkH: new Map(), foreign: [], problems, files: live};
+  const out = {home: null, charts: null, data: null, marks: null, backupFolder: null, backups: [], recs: {song: new Map(), set: new Map(), coll: new Map()}, pdfs: new Map(), ink: new Map(), inkH: new Map(), foreign: [], problems, files: live};
   const charts = live.filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'charts');
   const data = live.filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'data');
   /* Part 3: the Marks folder is made at the first page of marks that has to be sent, so it may be missing; at most one */
   const marks = live.filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'ink');
+  /* Job 4: the Backups folder (js/drivebackup.js) is made at the first backup copy; at most one; the sync never lists it */
+  const backupDirs = live.filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'backups');
   if(!charts.length && !data.length){ if(live.some(f => f.appProperties.k)) problems.push('files of the app with no sub-folders'); return out; }
   if(charts.length !== 1 || data.length !== 1){ problems.push(`${charts.length} Charts folders and ${data.length} data folders (one of each expected)`); }
   out.charts = charts[0] || null; out.data = data[0] || null; out.marks = marks[0] || null;
@@ -289,11 +291,14 @@ export function readDrive(google){
   if(out.marks && out.marks.name !== MARKS_NAME) problems.push(`the Marks folder is named "${out.marks.name}"`);
   if(out.charts && out.charts.name !== CHARTS_NAME) problems.push(`the charts folder is named "${out.charts.name}"`);
   if(out.data && out.data.name !== DATA_NAME) problems.push(`the data folder is named "${out.data.name}"`);
-  const parents = new Set([...charts, ...data, ...marks].flatMap(f => f.parents));
+  out.backupFolder = backupDirs[0] || null;
+  if(backupDirs.length > 1) problems.push(`${backupDirs.length} Backups folders (one expected)`);
+  if(out.backupFolder && out.backupFolder.name !== BACKUPS_NAME) problems.push(`the Backups folder is named "${out.backupFolder.name}"`);
+  const parents = new Set([...charts, ...data, ...marks, ...backupDirs].flatMap(f => f.parents));
   if(parents.size !== 1) problems.push('the sub-folders are not in one folder');
   out.home = google.files.get([...parents][0]) || null;
   if(!out.home || out.home.mimeType !== FOLDER || out.home.name !== HOME_NAME || !Object.keys(out.home.appProperties).length) problems.push('the sub-folders are not in the marked "Setlist Stand" folder');
-  const ours = new Set([out.home && out.home.id, out.charts && out.charts.id, out.data && out.data.id, out.marks && out.marks.id].filter(Boolean));
+  const ours = new Set([out.home && out.home.id, out.charts && out.charts.id, out.data && out.data.id, out.marks && out.marks.id, ...backupDirs.map(f => f.id)].filter(Boolean));
   const keys = f => Object.keys(f.appProperties).sort().join(',');
   for(const f of live){
     const p = f.appProperties, k = p.k;
@@ -340,6 +345,16 @@ export function readDrive(google){
       }
       if(out.ink.has(key)) problems.push(`two ink files for the page ${key}`);
       out.ink.set(key, page); out.inkH.set(key, p.h);
+    }else if(k === 'backup'){
+      /* a backup copy: in the Backups folder only, a zip, properties exactly k and t (when packing began), named like Back up everything's file */
+      const where = `the backup copy "${f.name}"`;
+      const inFolder = !!out.backupFolder && f.parents.includes(out.backupFolder.id);
+      if(!inFolder) problems.push(`${where} is not in the Backups folder`);
+      if(keys(f) !== 'k,t') problems.push(`${where} has the properties ${keys(f)} (k, t expected)`);
+      if(!/^\d{10,}$/.test(p.t || '')) problems.push(`${where} has t=${p.t}`);
+      if(f.mimeType !== 'application/zip') problems.push(`${where} is stored as ${f.mimeType}`);
+      if(!/^setlist-stand-backup-\d{4}-\d{2}-\d{2}\.zip$/.test(f.name)) problems.push(`${where} is not named like a backup file`);
+      if(inFolder) out.backups.push({id: f.id, name: f.name, createdTime: f.createdTime, bytes: google.fileBytes(f.id), t: Number(p.t)});
     }else problems.push(`a file of an unknown kind k=${k}: "${f.name}"`);
   }
   for(const [id, pdf] of out.pdfs){
@@ -354,6 +369,7 @@ export function readDrive(google){
     if(rec && rec.deleted) problems.push(`the marks ${key} are on Drive for a deleted song`);
     else if(rec && !(pn >= 1 && pn <= rec.pages)) problems.push(`the marks ${key} are on Drive for a page "${rec.title}" does not have (${rec.pages} pages)`);
   }
+  out.backups.sort((a, b) => (a.createdTime < b.createdTime ? 1 : a.createdTime > b.createdTime ? -1 : a.id < b.id ? 1 : -1));
   return out;
 }
 
