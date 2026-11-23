@@ -9,9 +9,11 @@ import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from
 import {gigOf, gigLong, gigShort, groupSets, isOpen, toggleGroup} from './gigdate.js';
 import {gigDialog, newSetDialog, offerFill} from './gigui.js';
 import {menuBox} from './menubox.js';
+import {chooseTextFile} from './setlisttext.js';
 
 export let openSet = null;
 export const closeSet = () => { openSet = null; };
+export const showSet = id => { openSet = id; };          // a setlist made elsewhere (js/setlisttext.js) opens on the Setlists tab
 
 const HANDLE = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>';
 const MOVE_LABEL = 'Drag to reorder, or press the up and down arrow keys';
@@ -36,7 +38,7 @@ export function renderSetlists(v){
       : `<div class="empty"><h2>Empty setlist</h2><p>Tap Add songs to pick charts from your library.</p></div>`}`;
   } else {
     const shownSets = sets.filter(inShown), coll = shownColl();
-    v.innerHTML = pickerHtml() + `<div class="bar"><button class="pri" data-newset>New setlist</button><button data-dlall ${shownSets.some(st => songCount(st)) ? '' : 'disabled'}>Download all</button></div><div id="libNudge"></div>` +
+    v.innerHTML = pickerHtml() + `<div class="bar"><button class="pri" data-newset>New setlist</button><button data-importtext>Import from a text file</button><button data-dlall ${shownSets.some(st => songCount(st)) ? '' : 'disabled'}>Download all</button></div><div id="libNudge"></div>` +
       (shownSets.length ? listHtml(shownSets)
       : coll ? `<div class="empty"><h2>No setlists in ${esc(coll.name)} yet</h2><p>A new setlist joins ${esc(coll.name)} while it is shown.</p></div>`
       : `<div class="empty"><h2>No setlists yet</h2><p>Make one for each gig or rehearsal.</p></div>`);
@@ -94,6 +96,7 @@ export async function onClick(b, d){
     if(r){ const st = {id:uid(), name:r.name, items:[], colls:joinColls(), created:Date.now()}; if(r.gig) st.gig = r.gig; await saveSet(st); await load(); openSet = st.id; hooks.render(); }
     return true;
   }
+  if('importtext' in d){ chooseTextFile(); return true; }        // the file chooser opens in the tap; js/setlisttext.js does the rest
   if(d.grp){ const g = groups.find(x => x.id === d.grp); if(g){ toggleGroup(g); hooks.render(); const h = document.querySelector(`[data-grp="${CSS.escape(g.id)}"]`); if(h) h.focus(); } return true; }
   if('dlall' in d){ downloadAll(sets.filter(inShown), shownColl()); return true; }
   if(d.set){ openSet = d.set; hooks.render(); return true; }

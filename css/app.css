@@ -239,3 +239,12 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
   #splitMain{border-left:0;border-top:1px solid var(--line);padding-left:max(12px,env(safe-area-inset-left))}
 }
 #splitter,#splitter .pg{-webkit-touch-callout:none}
+/* Import a setlist from a text file: the review box (js/setlisttext.js). The list scrolls; the buttons stay in view. */
+.tlines{margin:0;padding:0;list-style:none;overflow:auto;min-height:0;flex:1 1 auto;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.tl{display:flex;flex-direction:column;gap:2px;padding:10px 4px;border-bottom:1px solid var(--line)}
+.tl-in{font-weight:600}
+.tl-out{font-size:14px;color:var(--mute)}
+.tl.none .tl-out{color:var(--acc)}
+.tl fieldset{border:0;margin:0;padding:0}
+.tl legend{padding:0}
+.textimport .box{width:min(640px,100%)}

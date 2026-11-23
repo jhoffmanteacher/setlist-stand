@@ -2,7 +2,8 @@ import {initErrors, explainError} from './errors.js';
 import {$, esc, hooks} from './util.js';
 import {openStore, load, ensureHashes, initChanged, songById} from './store.js';
 import {renderLibrary, onClick as libraryClick, addFiles, newVersion} from './library.js';
-import {renderSetlists, onClick as setlistClick, closeSet, initSetlists} from './setlists.js';
+import {renderSetlists, onClick as setlistClick, closeSet, showSet, initSetlists} from './setlists.js';
+import {importSetlistText} from './setlisttext.js';
 import {backupNow, restoreFrom} from './backup.js';
 import {initViewer, openViewer, resumeState} from './viewer.js';
 import {dropLeftover, sync as syncHistory} from './backnav.js';
@@ -51,6 +52,7 @@ $('#file').onchange = async e => { if(!ready){ e.target.value = ''; return; } co
 $('#newVersionFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await newVersion(f); };
 $('#splitFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await startSplit(f); };
 $('#shareFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importPackage(f); };
+$('#setTextFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await importSetlistText(f, showSet); };
 $('#restoreFile').onchange = async e => { if(!ready){ e.target.value = ''; return; } const f = e.target.files[0]; e.target.value = ''; await restoreFrom(f, render); };
 
 $('#view').addEventListener('click', async e => {

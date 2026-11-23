@@ -151,8 +151,9 @@ export async function readPackage(file, isStopped = () => false){
   }catch(err){ return bad(damaged(err) ? 'That package is damaged.' : 'That package could not be read.'); }
 }
 
-/* The name the imported setlist will get: its own, or "<name> (2)", "(3)" when a setlist here already has that name. */
-function freeSetName(setlist){
+/* The name the imported setlist will get: its own, or "<name> (2)", "(3)" when a setlist here already has that name.
+   A setlist imported from a text file (js/setlisttext.js) is named by it too. */
+export function freeSetName(setlist){
   const names = new Set(state.sets.map(x => x.name)), base = setlist.name.trim() || 'Shared setlist';
   let name = base;
   for(let n = 2; names.has(name); n++) name = `${base} (${n})`;

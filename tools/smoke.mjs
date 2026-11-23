@@ -2104,6 +2104,38 @@ async function stepDownloads(t){
   assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
 }
 
+/* Import a setlist from a text file: the button on the Setlists list, the review box, one new setlist with the songs in
+   file order, a break, a line with no match left out; nothing else in the library changes. */
+const readStores = page => page.evaluate(() => new Promise(res => { const r = indexedDB.open('setlist-stand'); r.onsuccess = () => { const d = r.result, out = {};
+  const tx = d.transaction(['songs', 'ink', 'sets']); let n = 3; for(const s of ['songs', 'ink', 'sets']){ const q = tx.objectStore(s).getAll(); q.onsuccess = () => { out[s] = q.result; if(!--n){ d.close(); res(out); } }; } }; }));
+async function stepTextSetlist(t){
+  const {page} = t, errs = t.errors.length;
+  await toLibrary(page);
+  const before = await readStores(page);
+  /* two songs whose full title no other song shares (a title shared by two songs is a "Which one?" line, proven in the loop) */
+  const live = before.songs.filter(s => !s.deleted), key = s => s.title.toLowerCase();
+  const titles = live.filter(s => /^[a-z]/i.test(s.title) && live.filter(o => key(o) === key(s)).length === 1).slice(0, 2).map(s => s.title);
+  assert(titles.length === 2, 'the library has fewer than two songs with a title of their own');
+  await page.click('#tSets');
+  if(await page.locator('#view [data-allsets]').count()) await page.click('#view [data-allsets]');
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.tap('#view [data-importtext]')]);
+  await fc.setFiles({name: 'Text gig.txt', mimeType: 'text/plain', buffer: Buffer.from(`1. ${titles[0].toUpperCase()}\r\nBreak\r\n2. ${titles[1]}\r\nNo Such Song Here\r\n`)});
+  const box = page.locator('.modal.textimport'); await box.waitFor();
+  const counts = await box.locator('[data-counts]').textContent();
+  assert(counts === '2 songs found, 1 break, 1 line not found.', 'the review box counts: ' + counts);
+  await box.locator('[data-ok]').tap();
+  await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Text gig');
+  const st = await setByName(page, 'Text gig');
+  const after = await readStores(page);
+  const name = id => (after.songs.find(s => s.id === id) || {}).title;
+  const got = st.items.map(it => it.type === 'break' ? 'B:' + it.name : name(it.id));
+  assert(JSON.stringify(got) === JSON.stringify([titles[0], 'B:Break', titles[1]]), 'the text setlist holds ' + JSON.stringify(got));
+  assert(/Added the setlist Text gig: 2 songs, 1 line left out/.test(await page.locator('#toast').textContent()), 'toast: ' + await page.locator('#toast').textContent());
+  after.sets = after.sets.filter(x => x.id !== st.id);
+  assert(JSON.stringify(after) === JSON.stringify(before), 'the import changed songs, ink or another setlist');
+  assert(t.errors.length === errs, 'page errors: ' + t.errors.slice(errs).join(' | '));
+}
+
 /* The back gesture (page.goBack is the same traversal): one layer at a time, then the song, then the app. Taps are touch taps.
    The walk starts on about:blank so "left the app" is the browser being on about:blank; the app is opened again at the end. */
 async function stepBackSwipe(t){
@@ -2211,6 +2243,7 @@ const STEPS = [
   ['30d Backup reminder: after a backup none; a stroke or a rename brings it back on Library and Setlists, never in the viewer; a restore clears it', stepBackupReminder],
   ['30e Gig dates: Upcoming, this year, No date, last year closed; set, change, clear; kept on reload; the fill-in from a name, once', stepGigDates],
   ['30f Downloads: Download PDF names the file with the gig date; Download all zips each chart once (Songs/) and a list per setlist with songs (Setlists/, " (2)" on a clash); Stop part-way and the size refusal download nothing; the library is unchanged', stepDownloads],
+  ['30f2 Import a setlist from a text file: the review box counts, songs in file order, a break, a no-match line left out, nothing else changed', stepTextSetlist],
   ['30g Back swipe: closes Annotate, the Crop screen, a dialog, then the song (back to the Library or the setlist); then leaves the app', stepBackSwipe],
   ['31 no request left localhost during the run', stepNoExternal],
 ];

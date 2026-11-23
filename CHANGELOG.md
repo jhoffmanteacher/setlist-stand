@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-22: Import a setlist from a text file
+- On the Setlists list, **Import from a text file** reads a plain text file with one song per line (numbers and bullets at the start are ignored; a line that says Break or `---` becomes a break). A box shows what was found, lets you pick when two songs match, and says which lines have no song in your Library. Tap **Add** and the setlist is made, named after the file. Nothing in your Library changes, and no song is made from a line.
+
 ## 2026-11-22: The back swipe closes the open song, not the app
 - With a song open, the Android back gesture (and the iPad edge swipe) now takes you back **one step at a time**: a message box first, then the Crop screen, then Annotate, then the song itself, back to the list you opened it from. From the list, back leaves the app as it always did.
 - Opening, closing and turning pages do not pile up history, and an update reload does not trap you in the app.

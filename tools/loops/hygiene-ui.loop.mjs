@@ -244,7 +244,19 @@ async function dialogLoop(ctx){
     await escapeBack(page, ed, 'Edit dialog with Collections tick boxes');
 
     /* a setlist's Add songs (numbers, a search box): focus starts on the dialog, not the search box; Escape adds nothing */
+    const aSong = await page.locator('#libList [data-open] .t').first().evaluate(l => l.firstChild.textContent);
     await page.click('#tSets');
+
+    /* Setlists -> Import from a text file: the review box traps focus, Escape writes nothing, focus goes back to the button */
+    const it = '#view [data-importtext]', setsBefore = await page.locator('#view [data-set]').count();
+    await page.focus(it);
+    const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.keyboard.press('Enter')]);
+    await fc.setFiles({name: 'Hygiene text.txt', mimeType: 'text/plain', buffer: Buffer.from(`${aSong}\nBreak\nNo such song at all\n`)});
+    await page.locator('.modal.textimport').waitFor();
+    await checkDialog(page, 'Text setlist review box');
+    await escapeBack(page, it, 'Text setlist review box');
+    assert(await page.locator('#view [data-set]').count() === setsBefore && !(await page.getByText('Hygiene text').count()), 'Escape on the text setlist review box made a setlist');
+
     await page.click('#view [data-newset]');
     await page.locator('.modal input[type=text]').fill('Pick Dialog');
     await page.click('.modal [data-ok]');
