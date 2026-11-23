@@ -46,8 +46,34 @@ const escData = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').repl
 const escProp = (s) => escData(s).replace(/:/g, '%3A').replace(/,/g, '%2C');
 const plain = (s) => String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 // One annotation's message may be up to 64 KB; each line is capped and the whole kept well below that.
-const fold = (lines) => { const out = lines.map(l => { const p = plain(l); return p.length > 600 ? p.slice(0, 600) + ' …' : p; }).join('\n'); return out.length > 48000 ? '…\n' + out.slice(-48000) : out; };
-const annotate = (level, title, lines) => console.log(`::${level} title=${escProp(title)}::${escData(fold(lines))}`);
+const fold = (lines, keep = 'tail') => {
+  const out = lines.map(l => { const p = plain(l); return p.length > 600 ? p.slice(0, 600) + ' …' : p; }).join('\n');
+  if (out.length <= 48000) return out;
+  return keep === 'head' ? out.slice(0, out.lastIndexOf('\n', 46000)) + '\n… (cut: see the artifact)' : '…\n' + out.slice(-48000);
+};
+const annotate = (level, title, lines, keep) => console.log(`::${level} title=${escProp(title)}::${escData(fold(lines, keep))}`);
+/* The tools' own failure lines (2026-11-23): loops.mjs and smoke.mjs print "FAIL: <name>: <why>", checks.mjs prints
+   "FAIL <name>: <why>". A loop's message continues on lines starting "      | " (tools/loops.mjs), a smoke step's on
+   "      screenshot:" / "      page errors:". The final "N of M loops FAILED" line, when there is one, always comes last. */
+const FAIL_RE = /^\s*FAIL\b/;
+const CONT_RE = /^\s{4,}(\||screenshot:|page errors:)/;
+const FINAL_RE = /^\s*(\d+ of \d+ loops FAILED|all \d+ loops ran clean)\s*$/;
+const MAX_FAILS = 40, MAX_CONT = 8;
+function failBlocks(all) {
+  const out = []; let shown = 0, more = 0;
+  for (let i = 0; i < all.length; i++) {
+    const l = plain(all[i]);
+    if (!FAIL_RE.test(l)) continue;
+    if (shown >= MAX_FAILS) { more++; continue; }
+    shown++; out.push(l.trim());
+    for (let j = i + 1, k = 0; j < all.length && CONT_RE.test(plain(all[j])); j++, k++) {
+      if (k < MAX_CONT) out.push('    ' + plain(all[j]).trim());
+      else if (k === MAX_CONT) out.push('    | …');
+    }
+  }
+  if (more) out.push(`… and ${more} more FAIL line(s): the whole output is in the "${TITLE}" artifact`);
+  return { lines: out, count: shown + more };
+}
 const MEANING = { 1: 'a check failed', 2: 'could not run (bad arguments, no Chrome, or nothing walked)', 3: "hung: the tool's own watchdog stopped it" };
 
 const logPath = resolve(LOG);
@@ -102,7 +128,10 @@ const finish = (code, signal, spawnError) => {
     : deadlineHit ? `stopped after ${DEADLINE_MIN} min by --deadline (the run was taking too long)`
     : signal ? `killed by ${signal} (cancelled, or the job ran out of time)`
     : `exit ${code}: ${MEANING[code] || 'failed'}`;
-  const verdicts = lines.filter(l => /✗|HUNG|could not run|tool itself failed|no Chrome|refusing/.test(l)).slice(0, 12);
+  const fails = failBlocks(lines);
+  const final = lines.map(plain).filter(l => FINAL_RE.test(l)).pop();
+  const marks = lines.filter(l => /✗|HUNG|could not run|tool itself failed|no Chrome|refusing/.test(l)).slice(0, 12);
+  const verdicts = [...fails.lines, ...marks.map(plain)];
   /* The one known reason the smoke was red on Linux (2026-11-13; browser.yml's header): its only ✗ is the error-event
      list and every event in it is the site's own ResizeObserver note (app/boot.js logs it as a warning). Said so in
      the title, so the red explains itself; the run still fails. */
@@ -110,12 +139,15 @@ const finish = (code, signal, spawnError) => {
   const evHead = lines.findIndex(l => /^smoke: ✗ \d+ error event\(s\)/.test(l));
   const evs = [];
   for (let i = evHead + 1; evHead >= 0 && i < lines.length && /^\s*- \[/.test(lines[i]); i++) evs.push(lines[i]);
-  const roOnly = evHead >= 0 && verdicts.length === 1 && evs.length === Number(lines[evHead].match(/✗ (\d+)/)[1]) && evs.every(l => ro.test(l));
-  const head = roOnly ? `${TITLE} failed ONLY on the site's own ResizeObserver note, ${evs.length} time(s): the known Linux reason in browser.yml's header (${why})` : `${TITLE} failed (${why})`;
-  annotate('error', head, verdicts.length ? verdicts.concat(roOnly ? evs : []) : [`${TITLE}: ${why}; no ✗ line in the output, see the next annotation`]);
+  const roOnly = evHead >= 0 && marks.length === 1 && evs.length === Number(lines[evHead].match(/✗ (\d+)/)[1]) && evs.every(l => ro.test(l));
+  const head = (roOnly ? `${TITLE} failed ONLY on the site's own ResizeObserver note, ${evs.length} time(s): the known Linux reason in browser.yml's header (${why})` : `${TITLE} failed (${why})`)
+    + (final ? `: ${final.trim()}` : fails.count ? `: ${fails.count} FAIL line(s)` : '');
+  const body = verdicts.length ? verdicts : [`${TITLE}: ${why}; no FAIL line in the output, see the next annotation`];
+  const bodyText = fold(roOnly ? body.concat(evs) : body, 'head') + (final ? '\n' + final.trim() : '');
+  console.log(`::error title=${escProp(head)}::${escData(bodyText)}`);
   const tail = lines.slice(-TAIL);
   annotate('error', `${TITLE}: last ${tail.length} lines of output`, tail.length ? tail : ['(no output)']);
-  writeSummary(`### ${TITLE}: FAILED (${why}) after ${mins} min\n\n\`\`\`\n${tail.map(plain).join('\n')}\n\`\`\``);
+  writeSummary(`### ${TITLE}: FAILED (${why}) after ${mins} min\n\n**FAIL lines**\n\`\`\`\n${fails.lines.join('\n')}\n${final || ''}\n\`\`\`\n\n**Last ${tail.length} lines**\n\`\`\`\n${tail.map(plain).join('\n')}\n\`\`\``);
   log.end(done);
 };
 child.on('error', (e) => finish(null, null, e));

@@ -40,6 +40,7 @@ const ctx = {root, opts: o, base: server.base, server, live: liveUrl, library: p
 const CDP = 'needs Chromium DevTools (CDP) to count reloads or throttle the network';
 const WEBKIT_SKIP = [[/^update /, CDP], [/^kill switch/, CDP], [/^offline h:/, CDP]];
 let failed = 0, n = 0;
+const failedNames = [];
 const skippedWebkit = [];
 for(const l of all){
   if(only && !(l.name + ' ' + l.file).toLowerCase().includes(only.toLowerCase())) continue;
@@ -50,9 +51,16 @@ for(const l of all){
   if(missing.length){ console.log(`SKIP: ${l.name} (needs ${missing.join(', ')})`); continue; }
   const t0 = Date.now();
   try{ await l.run(ctx); console.log(`PASS: ${l.name} (${((Date.now() - t0) / 1000).toFixed(1)}s)`); }
-  catch(e){ failed++; console.log(`FAIL: ${l.name}: ${e.message}`); if(process.env.SS_TRACE) console.log(e.stack); }
+  catch(e){
+    failed++; failedNames.push(l.name);
+    const msg = String(e && e.message || e).replace(/\r/g, '').split('\n');
+    console.log(`FAIL: ${l.name}: ${msg[0]}`);
+    for(const more of msg.slice(1)) console.log(`      | ${more}`);
+    if(process.env.SS_TRACE) console.log(e.stack);
+  }
 }
 await browser.close(); server.close();
 if(skippedWebkit.length) console.log(`skipped under WebKit (${skippedWebkit.length}): ${skippedWebkit.join('; ')}`);
+if(failedNames.length) console.log(`failed loops: ${failedNames.join('; ')}`);
 console.log(failed ? `${failed} of ${n} loops FAILED` : `all ${n} loops ran clean`);
 process.exit(failed ? 1 : 0);

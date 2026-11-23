@@ -53,3 +53,7 @@ Builds the file the app's Share / Import -> Import chart updates reads: cleaned-
 - Each PDF is matched to ONE song of the backup by its file name ("Song (version) - Artist.pdf", read like Add PDFs reads it, compared case- and accent-blind). Archived songs are never matched.
 - One line per PDF: `MATCHED`, `LEFT OUT` (no song, several songs, or a second PDF for a song already taken) or, with `--add-new`, `NEW SONG` (it goes in with a target no library has, so the app offers it as a new song, unticked).
 - The PDFs go into the zip byte for byte. Write the output to `Claude outputs/`, never into the repo.
+
+## CI annotations
+
+`tools/ci/run-and-annotate.mjs` wraps the slow tools on GitHub. On a failure its first `::error` annotation holds every `FAIL` line the tool printed (up to 40, each with its `      | ` continuation lines) and ends with the final `N of M loops FAILED` line; the second holds the last lines of output. `tools/loops.mjs` also prints a `failed loops:` recap. Check it with `node tools/ci/annotate-selftest.mjs` (no browser, about 5 seconds; the checks workflow runs it).

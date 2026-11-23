@@ -26,6 +26,8 @@ jobs:
           node-version: 24
       - name: node tools/checks.mjs
         run: node tools/ci/run-and-annotate.mjs --title "checks" --log "$RUNNER_TEMP/ci-out/checks.log" --summary '^(PASS|FAIL|SKIP)' --deadline 8 -- node tools/checks.mjs
+      - name: node tools/ci/annotate-selftest.mjs
+        run: node tools/ci/annotate-selftest.mjs
 
   # The name checker (tools/lint.mjs + eslint.config.mjs): ESLint fetched by npx at pinned versions. REPORT-ONLY:
   # it never fails the run (continue-on-error, and the tool exits 0); findings show as warnings on the run page.
