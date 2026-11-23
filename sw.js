@@ -55,6 +55,7 @@ const PRECACHE = [
   'js/drive.js',
   'js/syncui.js',
   'js/driveops.js',
+  'js/drivebackup.js',
   'js/syncmerge.js',
   'js/sync.js',
   'js/syncplan.js',
