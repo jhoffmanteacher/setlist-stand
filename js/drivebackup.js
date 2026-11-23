@@ -14,21 +14,22 @@
 import {makeBackup, LAST_BACKUP} from './backup.js';
 import {all, get} from './store.js';
 import {putFile, trashFile, ensureBackups, findBackups, listBackups} from './driveops.js';
-import {daysAgo} from './nudge.js';
+import {daysAgo, lastBackup} from './nudge.js';
 
 export const DRIVE_BACKUP = 'ss-drive-backup';        // localStorage: when THIS tablet last sent a backup copy to Drive (ms, when packing began)
 export const EVERY_DAYS = 7, KEEP = 4;
-export const limits = {maxBytes:300e6};                // the PDFs together: over this no copy is made (an object so a test can lower it)
+export const limits = {maxBytes:150e6};                // the PDFs together: over this no copy is made (an object so a test can lower it). The zip is held in memory about three times over (measured for Download all, js/downloadall.js: the same limit), and a tab the tablet kills here would be killed again at the end of every sync
 const mb = n => Math.max(1, Math.round(n / 1e6));
 export const copyName = t => 'setlist-stand-backup-' + new Date(t).toISOString().slice(0, 10) + '.zip';   // the name Back up everything gives, so Restore takes it as it is
 
 function ownTime(){
   try{ const t = Number(localStorage.getItem(DRIVE_BACKUP)); return t > 0 && t <= Date.now() + 864e5 ? t : 0; }catch(e){ return 0; }
 }
+/* This tablet sent a copy less than EVERY_DAYS ago: not due, and Drive need not be asked. */
+const ownFresh = () => { const t = ownTime(); return !!t && daysAgo(t) < EVERY_DAYS; };
 /* `files`: the copies in Drive, newest first. */
 function due(files){
-  const t = ownTime();
-  if(t && daysAgo(t) < EVERY_DAYS) return false;
+  if(ownFresh()) return false;
   if(files.length){ const c = Date.parse(files[0].createdTime); if(Number.isFinite(c) && daysAgo(c) < EVERY_DAYS) return false; }
   return true;
 }
@@ -54,6 +55,7 @@ const whyNot = e => e && e.kind === 'offline' ? 'the connection was lost' : e &&
 export async function driveBackup(ctx, stopped){
   try{
     const signal = ctx.signal;
+    if(ownFresh()) return {state:'notdue'};                         // no request at all at most syncs
     const folder = await findBackups(ctx.layout, {signal});            // null: none yet (made at the first copy)
     const files = folder ? await listBackups(folder, {signal}) : [];
     if(!due(files)) return {state:'notdue'};
@@ -71,7 +73,7 @@ export async function driveBackup(ctx, stopped){
     /* It is in Drive: only now does this tablet remember it, and count it as a backup (the time packing began, so a change made while
        it was being sent still shows the reminder). */
     try{ localStorage.setItem(DRIVE_BACKUP, String(began)); }catch(e){}
-    try{ if(!(Number(localStorage.getItem(LAST_BACKUP)) >= began)) localStorage.setItem(LAST_BACKUP, String(began)); }catch(e){}
+    try{ if(!(lastBackup() >= began)) localStorage.setItem(LAST_BACKUP, String(began)); }catch(e){}      // lastBackup(): a stored time far in the future counts as never, and is replaced
     let removed = 0;
     try{ removed = await prune(dir, sent.id, signal); }catch(e){ removed = -1; }
     return {state:'saved', name:copyName(began), mb:mb(made.blob.size), skipped:made.skipped, removed};

@@ -248,7 +248,7 @@ function nothingPrivate(google, extra = [], inkOk = []){
     const isInk = f.appProperties.k === 'ink';
     /* a backup copy (js/drivebackup.js, the Backups folder) is the whole library as Back up everything saves it: it holds marks and notes by design, never a per-tablet setting */
     const isCopy = f.appProperties.k === 'backup';
-    for(const k of isCopy ? PRIVATE_KEYS : [...PRIVATE_KEYS, ...extra, ...(isInk ? [] : inkOk)]) assert(!hay.includes(k), `"${k}" is in the Drive file "${f.name}" (per-tablet settings stay on the tablet; marks only in the Marks folder)`);
+    for(const k of isCopy ? [...PRIVATE_KEYS, ...extra] : [...PRIVATE_KEYS, ...extra, ...(isInk ? [] : inkOk)]) assert(!hay.includes(k), `"${k}" is in the Drive file "${f.name}" (per-tablet settings stay on the tablet; marks only in the Marks folder)`);
     if(isInk) assert(!f.trashed && marks && f.parents.includes(marks.id) && /^ink-.+-\d+\.json$/.test(f.name), `an ink file outside the Marks folder or misnamed: "${f.name}"`);
     else assert(!/^ink-/.test(f.name), `a file named like an ink page that is not one: "${f.name}"`);
   }

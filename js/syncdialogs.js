@@ -65,6 +65,7 @@ function backupLines(b){
   if(b.state === 'saved'){
     P.push(`Saved a backup copy in your Google Drive (${b.name}, ${b.mb} MB). The last ${KEEP} are kept in the Backups folder.`);
     if(b.skipped) P.push(`${b.skipped} ${b.skipped === 1 ? 'song had' : 'songs had'} no PDF on this tablet and ${b.skipped === 1 ? 'was' : 'were'} left out.`);
+    if(b.removed > 0) P.push(`${b.removed} older ${b.removed === 1 ? 'copy was' : 'copies were'} moved to the bin in your Google Drive.`);
     if(b.removed < 0) P.push('Older backup copies could not be tidied up; they are left in the Backups folder.');
   }
   else if(b.state === 'stopped') P.push('The backup copy was stopped. The sync itself is done; a copy is made at a later sync.');
