@@ -46,6 +46,7 @@ const PRECACHE = [
   'js/sharepack.js',
   'js/share.js',
   'js/shareimport.js',
+  'js/zipread.js',
   'js/setlisttext.js',
   'js/backup.js',
   'js/driveconfig.js',
