@@ -58,6 +58,7 @@ above, goes back, then starts with no network).
 
 ## (d) A tablet lost its data
 - Library → "Back up / Sync" → "Restore from backup", pick the latest backup zip. It is all or nothing: a damaged zip changes nothing.
+- If you use Sync, Google Drive also holds weekly copies: Drive → "Setlist Stand" → "Backups". Download the newest zip to the tablet first (the Drive picker inside Restore has failed before), then Restore from backup and pick it from Downloads.
 - Without a backup nothing can be recovered: the songs lived only on that tablet. That is why the Library
   nags about backups; back up after every change to the library.
 

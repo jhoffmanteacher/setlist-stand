@@ -108,3 +108,5 @@ Running list of what the app must do. Source for the work orders.
 
 ## Open questions
 - None.
+
+- **Improvement round, 2026-11-23** (Jonathan): a refused save says so and changes nothing on screen; names over 200 characters are cut where made; restore reads backups with size caps (1.5 GB at most); a weekly backup copy goes into Drive's Backups folder after a sync (4 kept, counts as a backup); "Last synced N days ago" after 7 days replaces the planned automatic check of the other tablet (the sign-in lasts an hour, so it would rarely run; nothing talks to Google without a tap). Agents run on Opus or Sonnet only.
