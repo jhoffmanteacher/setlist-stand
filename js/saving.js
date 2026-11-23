@@ -1,13 +1,17 @@
 import {toast, hooks} from './util.js';
 import {load} from './store.js';
-import {explainError} from './errors.js';
+import {explainError, logProblem} from './errors.js';
 
 /* Every edit made on a screen saves a COPY of the record (never the one in `state`, which is what the screen is drawn from), then
-   draws the screen again from storage. A refused save (tablet full, private window, a record changed in another tab) says why in
+   draws the screen again from storage. A refused save (tablet full, private window) says why in
    plain words and leaves the screen exactly as storage has it. Resolves true when the write went through. */
 export async function commit(write, fail = 'Could not save that. Nothing was changed.'){
   let ok = false;
-  try{ await write(); ok = true; }catch(err){ toast(explainError(err, fail)); }
+  try{ await write(); ok = true; }
+  catch(err){
+    toast(explainError(err, fail));
+    if(!(err && (err.plain || err.name === 'QuotaExceededError'))) logProblem('save', String(err && err.message || err).slice(0, 200), {quiet:true});      // a slip in the code must still reach the problem log
+  }
   try{ await load(); }catch(e){}
   hooks.render();
   return ok;

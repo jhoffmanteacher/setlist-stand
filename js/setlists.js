@@ -194,10 +194,17 @@ async function endDrag(e){
 }
 /* The one save path for a reorder (drag or keyboard): row `from` goes to place `to`. False when no set is open or the save was refused. */
 async function moveItem(from, to){
-  const st = state.sets.find(s => s.id === openSet); if(!st){ hooks.render(); return false; }
-  const items = [...liveItems(st)], [m] = items.splice(from, 1); items.splice(to, 0, m);
-  return saveItems(st, items);          // a refused save draws the list again from storage: no row keeps a transform, nothing shows an order that was not saved
+  /* Under once(), with a key that never repeats: a Remove or Add break tapped while this save is still running is ignored (it would be
+     built from the list as it was before the move and write over it), and a move is never held back by the 400 ms rule. */
+  const ok = await once('move' + (++moves), () => {
+    const st = state.sets.find(s => s.id === openSet); if(!st) return false;
+    const items = [...liveItems(st)], [m] = items.splice(from, 1); items.splice(to, 0, m);
+    return saveItems(st, items);        // a refused save draws the list again from storage: no row keeps a transform, nothing shows an order that was not saved
+  });
+  if(!ok) hooks.render();               // another save was still running, or no set is open: the rows go back where storage has them
+  return ok;
 }
+let moves = 0;
 
 /* ---------- keyboard: with a handle focused, ArrowUp / ArrowDown move that row one place ----------
    Moves run one after another (a held key repeats), each from wherever the focused handle is by then. */
@@ -208,7 +215,7 @@ async function keyMove(dir){
   const li = h.closest('li.row'), rows = li ? [...li.parentElement.children] : [];
   const from = rows.indexOf(li), to = from + dir;
   if(from < 0 || to < 0 || to >= rows.length) return;
-  if(!await moveItem(from, to)) return;
+  if(!await moveItem(from, to)){ const oh = document.querySelector(`#items > li.row:nth-child(${from + 1}) .handle`); if(oh) oh.focus(); return; }      // the list was drawn again: keep the focus on the row
   const nh = document.querySelector(`#items > li.row:nth-child(${to + 1}) .handle`);
   if(nh) nh.focus();
   toast(`Moved to position ${to + 1} of ${rows.length}`);
