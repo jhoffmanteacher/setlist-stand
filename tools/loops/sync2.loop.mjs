@@ -337,7 +337,7 @@ async function loopWalk(ctx){
     const before = Object.keys((await libraryOf(B)).songs);
     w = await act(B, 'songs', a.id, () => newVersionUi(B, a.id, 'songbook.pdf'));
     const LB = await libraryOf(B), old = live(LB).find(s => !before.includes(s.id));
-    probs.push(...localEdit(m, 'B', 'song', a.id, {pages: await pdfPages('songbook.pdf'), hash: H('songbook.pdf')}, w, LB.songs[a.id]));
+    probs.push(...localEdit(m, 'B', 'song', a.id, {pages: await pdfPages('songbook.pdf'), hash: H('songbook.pdf'), crop: undefined}, w, LB.songs[a.id]));
     assert(old && old.archived === true && old.hash === a.hash && old.song === a.song && /old \d{4}-\d\d-\d\d/.test(old.version), 'New version did not keep the old chart as an archived song: ' + JSON.stringify(old));
     probs.push(...localNew(m, 'B', 'song', old, w, {pdf: a.hash}));
     adopt(m, 'B', 'song', LB.songs[a.id], {pdf: H('songbook.pdf')});
@@ -607,7 +607,7 @@ async function loopChecked(ctx){
     let w = await act(A, 'songs', b.id, () => newVersionUi(A, b.id, 'songbook.pdf'));
     let LA = await libraryOf(A);
     const O = live(LA).find(s => !before.includes(s.id));
-    probs.push(...localEdit(m, 'A', 'song', b.id, {pages: await pdfPages('songbook.pdf'), hash: H('songbook.pdf')}, w, LA.songs[b.id]));
+    probs.push(...localEdit(m, 'A', 'song', b.id, {pages: await pdfPages('songbook.pdf'), hash: H('songbook.pdf'), crop: undefined}, w, LA.songs[b.id]));
     adopt(m, 'A', 'song', LA.songs[b.id], {pdf: H('songbook.pdf')});
     probs.push(...localNew(m, 'A', 'song', O, w, {pdf: b.hash}));
     w = await act(A, 'sets', gig.id, () => renameSetUi(A, gig.id, 'Gig renamed on A'));

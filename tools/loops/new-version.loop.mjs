@@ -92,8 +92,10 @@ function checkNewVersion(before, after, A, file, days, what){
   const fresh = Object.keys(after.songs).filter(k => !(k in before.songs));
   assert(fresh.length === 1, P + `${fresh.length} new song records, expected exactly one (the old copy): ` + fresh.join(', '));
   const O = fresh[0], a0 = before.songs[A], a1 = after.songs[A], o = after.songs[O];
-  /* the song: same id, details, crop and archive flag; the new chart's pages and hash; the PDF is the file's bytes */
-  expectSame({...a0, pages: a1.pages, hash: H[file], updated: a1.updated}, a1, P + 'the song');
+  /* the song: same id, details and archive flag, no crop; the new chart's pages and hash; the PDF is the file's bytes */
+  const {crop: _c, ...a0rest} = a0;            // the crop is cleared: the new chart starts uncropped
+  expectSame({...a0rest, pages: a1.pages, hash: H[file], updated: a1.updated}, a1, P + 'the song');
+  assert(!('crop' in a1), P + 'the song kept a crop: ' + JSON.stringify(a1.crop));
   assert(a1.updated > a0.updated && a1.pages === {'one-page.pdf': 1, 'two-page.pdf': 2, 'three-page.pdf': 3}[file], P + `the song's pages/updated: ${a1.pages}/${a1.updated}`);
   assert(after.files[A] === H[file], P + 'the stored PDF of the song is not the new file (hash ' + after.files[A] + ')');
   /* its marks start fresh: every page that remains holds deletion markers of the same ids; a page past the end is gone */
@@ -209,7 +211,7 @@ export const loops = [
     await page.click('.modal.nvask [data-ok]');
     const msg = await waitToast(page, /^New version in place/);
     days.push(today());
-    assert(msg === 'New version in place. The old one is in Archived. Crop kept. Use Reset in the crop screen if the layout changed.', 'toast: ' + msg);
+    assert(msg === 'New version in place. The old one is in Archived. Its crop was cleared.', 'toast: ' + msg);
     await sleep(300);
     const w = await writes(page);
     assert(w.length === 1 && w[0] === 'files+ink+songs', 'New version wrote in ' + JSON.stringify(w) + ' (expected ONE files+ink+songs transaction)');
@@ -230,7 +232,7 @@ export const loops = [
         await page.click('#tSets');
         await page.click(`#view [data-set="${set}"]`);
         await page.waitForSelector(`#view [data-playat="${at}"]`);
-        await viewerShows(page, `#view [data-playat="${at}"]`, {title: 'War Pigs - Black Sabbath', n: 3, pages: {1: {crop: CROP.all, marks: false}, 2: {crop: CROP.pages['2'], marks: false}}});
+        await viewerShows(page, `#view [data-playat="${at}"]`, {title: 'War Pigs - Black Sabbath', n: 3, pages: {1: {crop: null, marks: false}, 2: {crop: null, marks: false}}});
       }
       await page.click('#tLib');
       await page.locator('#showArch').setChecked(true);
@@ -317,7 +319,7 @@ export const loops = [
     const days = [today()];
     await pickNewVersion(page, A, 'three-page.pdf');
     await page.click('.modal.nvask [data-ok]');
-    await waitToast(page, /^New version in place\. The old one is in Archived\. Crop kept\./);
+    await waitToast(page, /^New version in place\. The old one is in Archived\. Its crop was cleared\./);
     days.push(today());
     const s1 = await snapshot(page);
     const O1 = checkNewVersion(before, s1, A, 'three-page.pdf', days, 'New version of a song with a version');

@@ -134,7 +134,7 @@ function askDuplicates(names){
 
 /* New version (it took the place of Replace PDF, which threw the old chart and its marks away): the file picked becomes the
    song's chart, and the chart it had is kept as an archived song, so nothing is lost.
-   - The song keeps its id, details, crop and setlist places, so every setlist plays the new chart and no setlist is written.
+   - The song keeps its id, details and setlist places (its crop is cleared: the new chart starts uncropped, the old copy keeps the crop), so every setlist plays the new chart and no setlist is written.
      Its PDF, page count and hash become the new file's; its marks start fresh (each becomes a deletion marker through
      reconcile(), as if erased; the ink record of a page the new chart does not have is removed).
    - The old chart becomes a NEW song with a fresh id (unique(), as share import makes them), archived and in no setlist: the
@@ -188,14 +188,15 @@ async function runNewVersion(file, id, s){
       if(p > n) ops.push({store:'ink', key, delete:true});                                       // that page no longer exists
       else if(cur.length) ops.push({store:'ink', key, value:inkRecord(reconcile(cur, []), rec)});     // keep deletion markers for the pages that remain (stamped over the marks and the page)
     }
-    ops.push({store:'songs', key:id, value:{...s, pages:n, hash, title:displayName(s), updated:stamp(s)}});
+    const {crop:_oldCrop, ...rest} = s;             // the crop belonged to the old chart's layout: the new chart starts uncropped (the archived copy keeps it)
+    ops.push({store:'songs', key:id, value:{...rest, pages:n, hash, title:displayName(s), updated:stamp(s)}});
     /* load() makes new records: a different one here means the song was edited or deleted while the dialogs were open
        (do not bring it back). Checked last, with no wait between it and putAll, because the reads above take time. */
     const cur = await get('songs', id);          // the stored record too: another tab's edit or delete never reaches this tab's list
     if(songById(id) !== s || !cur || cur.deleted || cur.updated !== s.updated || cur.hash !== s.hash){ toast('That song changed in the meantime. Nothing was changed.'); return; }
     await putAll(ops);
     await load(); hooks.render();
-    toast((copy ? 'New version in place. The old one is in Archived.' : 'New version in place. Its marks were cleared.') + (s.crop ? ' Crop kept. Use Reset in the crop screen if the layout changed.' : ''));
+    toast((copy ? 'New version in place. The old one is in Archived.' : 'New version in place. Its marks were cleared.') + (s.crop ? ' Its crop was cleared.' : ''));
   }catch(err){ await load(); hooks.render(); toast(explainError(err)); }
 }
 /* The version an old copy gets: "old 2026-11-21", or "in G, old 2026-11-21" (the date here; the whole stays within the

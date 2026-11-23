@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-22: New version clears the crop
+- When you bring in a **New version** of a chart, the song's crop is now cleared, because the old margins rarely fit the new file. The old chart in Archived keeps its crop. The message says when a crop was cleared.
+
 ## 2026-11-22: Import a setlist from a text file
 - On the Setlists list, **Import from a text file** reads a plain text file with one song per line (numbers and bullets at the start are ignored; a line that says Break or `---` becomes a break). A box shows what was found, lets you pick when two songs match, and says which lines have no song in your Library. Tap **Add** and the setlist is made, named after the file. Nothing in your Library changes, and no song is made from a line.
 

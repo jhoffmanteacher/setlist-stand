@@ -722,13 +722,13 @@ A.newVersion = {w: 1.5, plan: (M, r) => { const c = libSongs(M); return c.length
       archived: true, pages: song.pages, hash: song.hash, crop: song.crop === undefined ? undefined : clone(song.crop), ink, colls: [...song.colls], deleted: false};
     M.songs.push(old);
     a.got = `old copy ${old.label}`;
-    /* the song keeps its id, details, crop and setlist places; its marks start fresh: every mark of the pages that remain
+    /* the song keeps its id, details and setlist places, its crop is cleared; its marks start fresh: every mark of the pages that remain
        becomes a deletion marker; pages past the end go */
     for(const [pn, items] of [...song.ink]){
       if(pn > fx.pages) song.ink.delete(pn);
       else song.ink.set(pn, items.map(tomb));
     }
-    song.pages = fx.pages; song.hash = fx.hash;
+    song.pages = fx.pages; song.hash = fx.hash; song.crop = undefined;
   }};
 /* Copy song: a NEW song with the original's details and crop, the version typed, the same PDF bytes (so the same hash) and
    every live mark and note of the original under fresh ids; it is in no setlist and the original is untouched. */

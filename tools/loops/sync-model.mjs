@@ -106,6 +106,7 @@ export function localEdit(m, name, kind, id, change, win, actual){
   const t = m.tablets[name], prev = t[kind].get(id), out = [];
   if(!prev || prev.deleted) return [`${name}: the model has no live ${kind} ${id} to edit`];
   const want = {...clone(prev), ...clone(change)};
+  for(const k of Object.keys(change)) if(change[k] === undefined) delete want[k];     // undefined = the field is gone (New version clears the crop)
   if(kind === 'song' && ['song', 'artist', 'version'].some(k => k in change)) want.title = titleOf(want);
   if(!actual) out.push(`${name}: the ${kind} ${nameOf(kind, prev)} is gone after the edit`);
   else{
