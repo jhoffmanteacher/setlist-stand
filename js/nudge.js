@@ -29,15 +29,27 @@ export function syncDue(){
   const t = lastSync();
   return t > 0 && newestRecordChange() > t;       // songs, setlists, collections and marks (ink pages): what a sync carries
 }
+/* A tablet that has synced before and whose last sync was SYNC_STALE_DAYS or more calendar days ago: the other tablet may have changes
+   (decision 2026-11-23: no request to Google without a tap, ever, so this is worked out from the clock alone). It does not depend on
+   songs here: it is about the other tablet. */
+export const SYNC_STALE_DAYS = 7;
+export function syncStale(){ const t = lastSync(); return t > 0 && daysAgo(t) >= SYNC_STALE_DAYS; }
 export function renderNudge(){
   const el = $('#libNudge'); if(!el) return;
-  const t = lastBackup(), b = backupDue(), s = syncDue(), st = lastSync();
+  const t = lastBackup(), b = backupDue(), s = syncDue(), st = lastSync(), old = !s && syncStale();
   const sync = `your last sync (${agoText(daysAgo(st))})`;
+  const lastLine = `Last synced ${agoText(daysAgo(st))}.`;
+  const back = t == null ? 'You have not backed up yet.' : `Changes since your last backup (${agoText(daysAgo(t))}).`;
   const text = b && s ? (t == null ? `You have not backed up yet. Changes since ${sync}.` : `Changes since your last backup (${agoText(daysAgo(t))}) and ${sync}.`)
-    : b ? (t == null ? 'You have not backed up yet.' : `Changes since your last backup (${agoText(daysAgo(t))}).`)
-    : s ? `Changes since ${sync}.` : '';
-  el.innerHTML = text ? `<div class="nudge" role="status"><span>${text}</span>${b ? '<button data-backupnow>Back up now</button>' : ''}${s ? '<button data-syncnow>Sync</button>' : ''}</div>` : '';
+    : s ? `Changes since ${sync}.`
+    : b ? back + (old ? ' ' + lastLine : '')
+    : old ? lastLine : '';
+  const syncBtn = s || old;
+  el.innerHTML = text ? `<div class="nudge" role="status"><span>${text}</span>${b ? '<button data-backupnow>Back up now</button>' : ''}${syncBtn ? '<button data-syncnow>Sync</button>' : ''}</div>` : '';
   const last = $('#libLastBackup');
   if(last) last.textContent = !backupDue() && t != null ? `Last backup: ${agoText(daysAgo(t))}.` : '';
 }
 addEventListener('ss-changed', renderNudge);
+/* The line depends on the date too: draw it again when the tablet is picked up after a while (no reload needed). Nothing is sent anywhere. */
+document.addEventListener('visibilitychange', () => { if(!document.hidden) renderNudge(); });
+addEventListener('pageshow', e => { if(e.persisted) renderNudge(); });
