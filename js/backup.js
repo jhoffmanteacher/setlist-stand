@@ -154,12 +154,14 @@ export async function restoreFrom(f, render, {drive = false} = {}){
   if(wasStopped()) return;
   /* An empty tablet (nothing live on it: deletion markers do not count) has nothing to lose, so it is not asked. Otherwise the box
      closes while the question is open (nothing has been written; an update reload there loses nothing) and a new one opens after. */
+  let answer = 'keep';
   if(!plan.empty){
     job.close();
-    if(!(await askRestore(plan, data.saved, drive))){ toast('Restore cancelled. Nothing was changed.'); return; }
+    answer = await askRestore(plan, data.saved, drive);
+    if(!answer){ toast('Restore cancelled. Nothing was changed.'); return; }
     job = busy('Restoring a backup', 'Getting ready…');
   }
-  try{ keep = await buildKeeps(plan, job); }
+  try{ keep = await buildKeeps(plan, job, {copies:answer !== 'nokeep'}); }
   catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
   if(wasStopped() || !keep) return;
   try{
@@ -167,7 +169,9 @@ export async function restoreFrom(f, render, {drive = false} = {}){
     /* Every op that writes over or removes a record here carries the `updated` the plan read (null: there was none), so a change
        made while the question was open (another tab) refuses the whole write instead of being lost. A deletion marker only wins
        over a record here that is not newer than it. */
-    const guard = (store, id) => { const r = here[store].get(id); return {ifUpdated:r && r.updated != null ? r.updated : null}; };
+    /* (a record here whose `updated` is not a plain number cannot be compared exactly once read again: it is written over unguarded) */
+    const exact = v => typeof v === 'number' && Number.isFinite(v);
+    const guard = (store, id) => { const r = here[store].get(id); return !r ? {ifUpdated:null} : exact(r.updated) ? {ifUpdated:r.updated} : {}; };
     const newerHere = (store, m) => { const r = here[store].get(m.id); return !!r && !r.deleted && (Number(r.updated) || 0) > (Number(m.updated) || 0); };
     /* the pages of a live song here that the restore writes over or deletes: one guarded delete per page (a stroke drawn meanwhile,
        even on a blank page, makes the write stale), then {deleteInkFor} for any stray page */
@@ -176,7 +180,7 @@ export async function restoreFrom(f, render, {drive = false} = {}){
       if(!t || t.deleted) return out;
       for(let p = 1; p <= (Number(t.pages) || 0); p++){
         const key = id + ':' + p, raw = plan.inkHere.get(key);
-        out.push({store:'ink', key, delete:true, ifUpdated:raw == null || raw.updated == null ? null : raw.updated});
+        out.push({store:'ink', key, delete:true, ...(raw == null ? {ifUpdated:null} : exact(raw.updated) ? {ifUpdated:raw.updated} : {})});
       }
       return out;
     };
@@ -204,8 +208,9 @@ export async function restoreFrom(f, render, {drive = false} = {}){
     job.lock('Saving to this tablet…');                 // the one write: from here Stop is gone, and Escape does nothing
     await putAll([...keep.ops, ...ops]);
     /* A restored library counts as backed up until the next change: the restored records are not "changes since the last backup".
-       The copies it kept are in no backup yet, so a restore that kept any does not count. */
-    if(!keep.charts && !keep.sets) try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}
+       Only when the backup holds everything now here: not when copies were kept, nor when songs, setlists or collections that are
+       not in the backup stay on this tablet (they are in no backup yet). */
+    if(!keep.charts && !keep.sets && !plan.songs.stay && !plan.sets.stay && !plan.colls.stay) try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}
   }catch(err){
     return stop(err && err.name === 'StaleWrite' ? 'Something on this tablet changed while the restore was waiting. Nothing was changed. Try the restore again.'
       : explainError(err, 'Could not restore that backup. Nothing was changed.'));

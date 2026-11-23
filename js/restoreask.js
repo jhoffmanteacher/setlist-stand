@@ -2,7 +2,8 @@
    Archived, what stays as it is) and the words of its result. Every name comes from the backup or this tablet and is escaped. */
 import {esc, modal, toast} from './util.js';
 import {oldVersion} from './newversion.js';
-import {KEEP_WORD, copyName} from './restoreplan.js';
+import {KEEP_WORD, keepLimits} from './restoreplan.js';
+import {mb} from './zipread.js';
 
 const plural = (n, one) => `${n} ${one}${n == 1 ? '' : 's'}`;
 const joinParts = parts => parts.length <= 1 ? parts.join('') : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
@@ -18,8 +19,9 @@ function madeOn(saved){
   return isNaN(d.getTime()) ? '' : new Intl.DateTimeFormat(undefined, DATE).format(d);
 }
 
-/* The question. Resolves to true for Restore, false for Cancel (or Escape). plan: planRestore() in js/restoreplan.js; saved: the
-   backup's own `saved` time; drive: Google Drive is set up on this tablet (driveSetUp() in js/syncui.js). */
+/* The question. Resolves to 'keep' for Restore (with the copies), 'nokeep' for "Restore without keeping copies" (offered, instead of
+   Restore, only when the charts to keep are more than keepLimits.maxBytes; never the default), false for Cancel (or Escape).
+   plan: planRestore() in js/restoreplan.js; saved: the backup's own `saved` time; drive: Google Drive is set up on this tablet. */
 export function askRestore(plan, saved, drive){
   const S = plan.songs, T = plan.sets, C = plan.colls, items = [], after = [];
   const add = counts(S.add, T.add, C.add); if(add) items.push(`It adds ${add}.`);
@@ -37,16 +39,18 @@ export function askRestore(plan, saved, drive){
   const removed = [...S.removed.map(x => ({name:x.title})), ...T.removed.map(x => ({name:x.name}))];
   const del = counts(S.removed.length, T.removed.length, C.removed);
   if(del) items.push(`It deletes ${del}, because ${removed.length + C.removed == 1 ? 'it is' : 'they are'} deleted in the backup${removed.length ? ':' : '.'}` + names(removed));
-  const kc = plan.keep.length, ks = plan.keepSets.length;
+  const kc = plan.keep.length, ks = plan.keepSets.length, tooBig = kc > 0 && plan.keepBytes > keepLimits.maxBytes;
   if(!put && !del && !kc && !ks) after.push('Nothing on this tablet is replaced.');
-  if(kc || ks){
+  if(tooBig) after.push(`<b>The ${kc == 1 ? 'chart' : kc + ' charts'} this restore replaces (about ${mb(plan.keepBytes)}) ${kc == 1 ? 'is' : 'are'} too big to keep as ${kc == 1 ? 'a copy' : 'copies'} on this tablet.</b> If you restore, ${kc == 1 ? 'it and its marks are' : 'they and their marks are'} gone${ks ? ', and no setlist copy is kept' : ''}. To keep ${kc == 1 ? 'it' : 'them'}, Cancel and back up first.`);
+  else if(kc || ks){
     const parts = [];
     if(kc) parts.push(`${kc == 1 ? '1 chart' : kc + ' charts'} from this tablet, with ${kc == 1 ? 'its' : 'their'} marks, ${kc == 1 ? 'goes' : 'go'} to Archived as "(${esc(oldVersion('', KEEP_WORD))})".`);
-    if(ks == 1) parts.push(`A copy of 1 setlist is kept as "${esc(cut(copyName(plan.keepSets[0].name)))}".`);
+    if(ks == 1) parts.push(`A copy of 1 setlist is kept as "${esc(cut(plan.keepSets[0].name))}".`);
     else if(ks) parts.push(`Copies of ${ks} setlists are kept, each named "… (before restore)".`);
     if(plan.keepBytes > 50e6) parts.push(`Keeping them takes about ${Math.round(plan.keepBytes / 1e6)} MB on this tablet.`);
-    after.push((S.noPdf ? '' : 'Nothing is lost: ') + parts.join(' '));
+    after.push('Charts and marks are kept: ' + parts.join(' '));
   }
+  if(S.unreadable) after.push(`${S.unreadable == 1 ? '1 chart on this tablet could not be read, so it cannot be kept' : S.unreadable + ' charts on this tablet could not be read, so they cannot be kept'}.`);
   if(S.noPdf) after.push(`${S.noPdf == 1 ? '1 song on this tablet has' : S.noPdf + ' songs on this tablet have'} no chart stored here, so ${S.noPdf == 1 ? 'its' : 'their'} marks cannot be kept.`);
   const stay = counts(S.stay, T.stay, C.stay), one = S.stay + T.stay + C.stay == 1;
   if(stay) after.push(`${stay} on this tablet ${one ? 'is' : 'are'} not in the backup. ${one ? 'It stays as it is' : 'They stay as they are'}.`);
@@ -55,12 +59,16 @@ export function askRestore(plan, saved, drive){
   return new Promise(res => {
     const m = modal(`<h2>Restore this backup?</h2><div class="restorebody">${when ? `<p>This backup was made on ${esc(when)}.</p>` : ''}` +
       (items.length ? '<ul class="restorelist">' + items.map(t => `<li>${t}</li>`).join('') + '</ul>' : '') +
-      after.map(t => `<p>${t}</p>`).join('') + '</div><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Restore</button></div>');
+      after.map(t => `<p>${t}</p>`).join('') + '</div><div class="btns"><button data-x>Cancel</button>' +
+      (tooBig ? '<button data-nokeep>Restore without keeping copies</button>' : '<button class="pri" data-ok>Restore</button>') + '</div>');
     m.classList.add('restoreask');
     let done = false;
     const answer = v => { if(done) return; done = true; m.remove(); res(v); };
     m.querySelector('[data-x]').onclick = () => answer(false);
-    m.querySelector('[data-ok]').onclick = () => answer(true);
+    const ok = m.querySelector('[data-ok]'), nokeep = m.querySelector('[data-nokeep]');
+    if(ok) ok.onclick = () => answer('keep');
+    /* never the default: focus stays on the box (Enter there does nothing), and a quick tap that opened the box cannot land on it */
+    if(nokeep){ nokeep.disabled = true; setTimeout(() => { nokeep.disabled = false; }, 400); nokeep.onclick = () => answer('nokeep'); }
   });
 }
 
@@ -70,6 +78,7 @@ export function restoredText(n, sets, badGig, keep){
   const first = `Restored ${n} song${n == 1 ? '' : 's'} and ${sets} setlist${sets == 1 ? '' : 's'}` + (badGig ? `. ${badGig} gig date${badGig == 1 ? ' that was not a real date was' : 's that were not real dates were'} left out.` : '');
   const more = [];
   if(keep && keep.charts) more.push(`${keep.charts == 1 ? '1 chart' : keep.charts + ' charts'} from this tablet ${keep.charts == 1 ? 'is' : 'are'} in Archived, with ${keep.charts == 1 ? 'its' : 'their'} marks.`);
+  if(keep && keep.unreadable) more.push(`${keep.unreadable == 1 ? '1 chart on this tablet could not be read, so it was not kept' : keep.unreadable + ' charts on this tablet could not be read, so they were not kept'}.`);
   if(keep && keep.sets) more.push(keep.sets == 1 ? `A copy of 1 setlist was kept: ${keep.setNames[0]}.` : `Copies of ${keep.sets} setlists were kept: ${keep.setNames.join(', ')}.`);
   return {first, more};
 }

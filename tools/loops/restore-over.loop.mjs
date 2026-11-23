@@ -47,8 +47,10 @@ async function makePdf(label, pages){
 const pen = (id, x, u = 1000) => ({id, t: 'pen', c: '#1a1a1a', w: .003, p: [[x, .2], [x + .1, .3], [x + .2, .25]], updated: u});
 const note = (id, text, u = 1000) => ({id, t: 'text', x: .5, y: .6, text, size: .018, c: '#1f5fd6', updated: u});
 
-/* A session whose puts can be made to fail (window.__fail = {store, key}: that record's put throws "disk full"), and which notes
-   whether the restore question ever appeared (window.__asked). */
+/* A session whose puts can be made to fail (window.__fail = {store, key}: that record's put throws "disk full"), whose stored PDFs
+   can be made unreadable (window.__failGet = [song ids]: reading that PDF from the files store throws, as a lost blob or Chrome's
+   "Failed to read large IndexedDB value" does; window.__failRead = n: the next n reads of a stored PDF's bytes reject, as Safari's
+   NotReadableError does), and which notes whether the restore question ever appeared (window.__asked). */
 async function session(ctx){
   const s = await ctx.session();
   await s.context.addInitScript(() => {
@@ -57,6 +59,16 @@ async function session(ctx){
       const f = window.__fail;
       if(f && this.name === f.store && String(a[1]) === f.key) throw new DOMException('The disk is full (test)', 'QuotaExceededError');
       return put.apply(this, a);
+    };
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function(k){
+      if(this.name === 'files' && (window.__failGet || []).includes(String(k))) throw new DOMException('Failed to read large IndexedDB value (test)', 'UnknownError');
+      return get.call(this, k);
+    };
+    const ab = Blob.prototype.arrayBuffer;
+    Blob.prototype.arrayBuffer = function(){
+      if(window.__failRead > 0 && !(this instanceof File)){ window.__failRead--; return Promise.reject(new DOMException('The file could not be read (test)', 'NotReadableError')); }
+      return ab.call(this);
     };
     window.__asked = 0;
     new MutationObserver(() => { if(document.querySelector('.modal.restoreask')) window.__asked++; }).observe(document, {childList: true, subtree: true});
@@ -212,7 +224,7 @@ async function loopModel(ctx){
       /It brings back 1 song you deleted on this tablet\./,
       /It puts back the backup's version of 3 songs and 1 setlist\. 4 of them were changed on this tablet after the backup was made:/,
       /Over Alpha \(changed here later\)/, /Over Bravo \(changed here later\)/, /Over Charlie - Someone Else \(changed here later\)/, /Over Set \(changed here later\)/,
-      new RegExp(`Nothing is lost: 2 charts from this tablet, with their marks, go to Archived as "\\(before restore ${today()}\\)"\\. A copy of 1 setlist is kept as "Over Set \\(before restore\\)"\\.`),
+      new RegExp(`Charts and marks are kept: 2 charts from this tablet, with their marks, go to Archived as "\\(before restore ${today()}\\)"\\. A copy of 1 setlist is kept as "Over Set \\(before restore\\)"\\.`),
       /2 songs on this tablet are not in the backup\. They stay as they are\./];
     for(const re of expectQ) assert(re.test(q), `the question does not say ${re}:\n${q}`);
     for(const re of [/It adds/, /It deletes/, /Google Drive/, /no chart stored here/, /Nothing on this tablet is replaced/]) assert(!re.test(q), `the question says ${re} when it should not:\n${q}`);
@@ -246,7 +258,7 @@ async function loopModel(ctx){
     await pick(page, F1file);
     const q2 = await answerRestore(page, 'ok');
     assert(/Nothing on this tablet is replaced\./.test(q2 || '') && /4 songs and 1 setlist on this tablet are not in the backup\. They stay as they are\./.test(q2), 'the second question:\n' + q2);
-    for(const re of [/puts back/, /Nothing is lost/, /Archived/, /deletes/, /brings back/]) assert(!re.test(q2), `the second question says ${re}:\n${q2}`);
+    for(const re of [/puts back/, /are kept/, /Archived/, /deletes/, /brings back/]) assert(!re.test(q2), `the second question says ${re}:\n${q2}`);
     assert(await waitToast(page, /^Restored|Nothing was changed/, 60000) === 'Restored 4 songs and 1 setlist', 'second restore toast');
     assert(await closeRestored(page) === null, 'the second restore of the same backup says it kept something');
     expectSame(after, await snapshot(page), 'after restoring the same backup again (right) vs after the first (left)');
@@ -319,7 +331,7 @@ async function loopEmpty(ctx){
 
 /* ---------- loop 4 ---------- */
 async function loopAllOrNothing(ctx){
-  const {s, file} = await seeded(ctx), page = s.page;
+  const {s, file, data} = await seeded(ctx), page = s.page;
   try{
     const b0 = await snapshot(page);
     /* (a) the tablet is full at the write (the setlist's put fails, after the copies' puts were queued): nothing, not even a copy */
@@ -350,19 +362,24 @@ async function loopAllOrNothing(ctx){
     }
     await p2.close();
     const b1 = await snapshot(page);
-    /* (d) more charts to keep than the cap: refused in plain words */
+    /* (d) more charts to keep than the cap: no dead end. The question says so and offers "Restore without keeping copies" beside
+       Cancel instead of Restore; it is never the default (Enter does nothing); chosen, the backup is restored and nothing is copied */
     await page.evaluate(async () => { (await import(new URL('js/restoreplan.js', location.href).href)).keepLimits.maxBytes = 1000; });
     await pick(page, file);
-    assert(await answerRestore(page, 'ok'), '(d) no question');
-    const m = await waitToast(page, /\S/, 60000);
-    assert(/^This restore would replace more charts than the tablet can keep in one go \(more than 1 KB\)\. Nothing was changed\.$/.test(m), '(d) the cap: ' + m);
+    const box = page.locator('.modal.restoreask');
+    await box.waitFor({timeout: 60000});
+    const q = (await box.locator('.box').innerText()).replace(/\s+/g, ' ');
+    assert(/The 2 charts this restore replaces \(about \d+ KB\) are too big to keep as copies on this tablet\. If you restore, they and their marks are gone, and no setlist copy is kept\. To keep them, Cancel and back up first\./.test(q), '(d) the question: ' + q);
+    assert(!/are kept:/.test(q), '(d) the question still says the charts are kept: ' + q);
+    assert(!(await box.locator('[data-ok]').count()) && await box.locator('[data-nokeep]').textContent() === 'Restore without keeping copies' && !(await box.locator('[data-nokeep]').evaluate(b => b.classList.contains('pri'))), '(d) the buttons: ' + await box.locator('.btns').innerText());
+    await sleep(600); await page.keyboard.press('Enter'); await sleep(600);
+    assert(await box.count() === 1, '(d) Enter chose "Restore without keeping copies"');
+    await box.locator('[data-nokeep]').click();
+    assert(/^Restored 3 songs and 1 setlist$/.test(await waitToast(page, /^Restored|Nothing was changed/, 60000)), '(d): ' + await page.locator('#toast').textContent());
+    assert(await closeRestored(page) === null, '(d) a restore without copies says it kept something');
     await page.evaluate(async () => { (await import(new URL('js/restoreplan.js', location.href).href)).keepLimits.maxBytes = 300e6; });
-    await noModal(page, '(d)');
-    expectSame(b1, await snapshot(page), '(d) the cap: the library before (left) and after (right)');
-    /* control: the same restore now goes through */
-    await pick(page, file);
-    assert(await answerRestore(page, 'ok'), 'control: no question');
-    assert(/^Restored 3 songs and 1 setlist$/.test(await waitToast(page, /^Restored|Nothing was changed/, 60000)), 'control: ' + await page.locator('#toast').textContent());
+    const dd = model(b1, data, await snapshot(page));
+    assert(!dd.length, '(d) restore without keeping copies: the library is not the backup with nothing kept:\n    ' + dd.slice(0, 12).join('\n    '));
     assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 }
@@ -402,10 +419,105 @@ async function loopReload(ctx){
   if(ctx.opts.verbose) console.log('  reloads after Restore: ' + outcomes.join('; '));
 }
 
+/* ---------- loop 6 ---------- */
+const songsOf = snap => Object.values(snap.songs).filter(x => !x.deleted);
+const copiesOf = snap => songsOf(snap).filter(x => x.archived && /before restore \d{4}-\d\d-\d\d$/.test(x.version || ''));
+const setCopiesOf = snap => Object.values(snap.sets).filter(x => !x.deleted && /\(before restore\)( \(\d+\))?$/.test(x.name));
+async function restoreOver(page, file, what){
+  await pick(page, file);
+  const q = await answerRestore(page, 'ok');
+  assert(q, what + ': no question');
+  const msg = await waitToast(page, /^Restored|Nothing was changed/, 60000);
+  assert(/^Restored/.test(msg), what + ': ' + msg);
+  return {q, kept: await closeRestored(page)};
+}
+async function loopTablet(ctx){
+  /* (a) a chart this tablet cannot read never blocks a restore: counted and said, the rest kept, the backup restored */
+  for(const how of ['get', 'read']){
+    const {s, file, data} = await seeded(ctx), page = s.page;
+    try{
+      const b0 = await snapshot(page);
+      await page.evaluate(() => localStorage.removeItem('ss-last-backup'));
+      await pick(page, file);
+      if(how === 'get') await page.evaluate(() => { window.__failGet = ['rb']; });
+      const box = page.locator('.modal.restoreask');
+      await box.waitFor({timeout: 60000});
+      const q = (await box.locator('.box').innerText()).replace(/\s+/g, ' ');
+      if(how === 'get') assert(/1 chart on this tablet could not be read, so it cannot be kept\./.test(q) && /Charts and marks are kept: 1 chart from this tablet/.test(q), `(a ${how}) the question: ` + q);
+      else{ assert(/Charts and marks are kept: 2 charts from this tablet/.test(q), `(a ${how}) the question: ` + q); await page.evaluate(() => { window.__failRead = 1; }); }
+      await box.locator('[data-ok]').click();
+      const msg = await waitToast(page, /^Restored|Nothing was changed/, 60000);
+      assert(msg === 'Restored 3 songs and 1 setlist', `(a ${how}) a chart that cannot be read blocked the restore: ` + msg);
+      const kept = await closeRestored(page);
+      if(how === 'read') assert(/1 chart on this tablet could not be read, so it was not kept\./.test(kept || ''), `(a ${how}) the result box: ` + kept);
+      await page.evaluate(() => { window.__failGet = null; window.__failRead = 0; });
+      /* copies were kept (in no backup yet), though nothing else here stays: this restore does not count as a backup */
+      assert(await page.evaluate(() => localStorage.getItem('ss-last-backup')) === null, `(a ${how}) a restore that kept copies counted as a backup`);
+      const after = await snapshot(page);
+      /* which chart was not kept: get -> rb (named); read -> the first one read, rb or rc */
+      const kept1 = copiesOf(after).map(x => x.hash), lost = how === 'get' ? 'rb' : ['rb', 'rc'].find(id => !kept1.includes(b0.songs[id].hash));
+      const d = model(b0, data, after, {keep: ['rb', 'rc'].filter(id => id !== lost), keepSets: ['rs']});
+      assert(!d.length, `(a ${how}) the library differs from the backup plus the readable copy:\n    ` + d.slice(0, 12).join('\n    '));
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); }
+  }
+
+  const {s, file, data} = await seeded(ctx), page = s.page;
+  try{
+    /* (b) restoring A, then B, then A again: what an earlier copy already holds is not copied twice; a setlist copy with the same
+       songs is not made twice, and a second, different one is named "(2)" */
+    const FB = (await backupNow(page)).file;                 // B: this tablet as changed (rb and rc marked, the setlist renamed)
+    await restoreOver(page, file, '(b) A');
+    const s1 = await snapshot(page);
+    assert(copiesOf(s1).length === 2 && setCopiesOf(s1).length === 1, `(b) the first restore of A kept ${copiesOf(s1).length} charts and ${setCopiesOf(s1).length} setlists`);
+    await restoreOver(page, FB, '(b) B');
+    const {q: q3} = await restoreOver(page, file, '(b) A again');
+    assert(!/are kept|Archived/.test(q3), '(b) restoring A again offers to keep what the earlier copies hold:\n' + q3);
+    const s3 = await snapshot(page);
+    assert(copiesOf(s3).length === 2 && setCopiesOf(s3).length === 1, `(b) after A, B, A: ${copiesOf(s3).length} archived charts and ${setCopiesOf(s3).length} setlist copies, expected 2 and 1 (copies multiplied)`);
+    expectSame(s1, s3, '(b) after A (left) vs after A, B, A (right)');
+    await inStore(page, async S => { const st = await S.get('sets', 'rs'); st.name = 'Gig changed here'; st.items = st.items.slice().reverse(); await S.saveSet(st); });
+    const {q: q4} = await restoreOver(page, file, '(b) A after another change');
+    assert(/A copy of 1 setlist is kept as "Gig changed here \(before restore\) \(2\)"\./.test(q4), '(b) the second setlist copy\'s name:\n' + q4);
+    assert(setCopiesOf(await snapshot(page)).map(x => x.name).sort().join('|') === 'Gig changed here (before restore)|Gig changed here (before restore) (2)', '(b) the setlist copies: ' + setCopiesOf(await snapshot(page)).map(x => x.name).join(' | '));
+
+    /* (c) a crop made here after the backup, on a chart and marks the backup holds: kept with an archived copy that has the crop */
+    const CROP = {all: {x: .1, y: .1, w: .7, h: .6}, pages: {}};
+    await inStore(page, async (S, CROP) => { const a = await S.get('songs', 'ra'); a.crop = CROP; await S.saveSong(a); }, CROP);
+    const c0 = await snapshot(page);
+    const {q: q5} = await restoreOver(page, file, '(c) crop');
+    assert(/Charts and marks are kept: 1 chart from this tablet/.test(q5), '(c) the question does not keep the cropped chart:\n' + q5);
+    const c1 = await snapshot(page), d = model(c0, data, c1, {keep: ['ra']});
+    assert(!d.length, '(c) the library differs from the backup plus a copy of ra with its crop:\n    ' + d.slice(0, 12).join('\n    '));
+
+    /* (d) a record or page here whose `updated` is not a plain number never blocks a restore (it is written over, as before) */
+    await inStore(page, async S => {
+      const a = await S.get('songs', 'ra'), p = await S.get('ink', 'rb:1');
+      await S.putAll([{store: 'songs', key: 'ra', value: {...a, artist: 'Odd time', updated: {when: 5}}}, {store: 'ink', key: 'rb:1', value: {...p, updated: {when: 6}}},
+        {store: 'sets', key: 'rs', value: {...(await S.get('sets', 'rs')), updated: 'soon'}}]);
+    });
+    const e0 = await snapshot(page);
+    await pick(page, file);
+    assert(await answerRestore(page, 'ok'), '(d) no question');
+    const m = await waitToast(page, /\S/, 60000);
+    assert(/^Restored 3 songs and 1 setlist$/.test(m), '(d) a record with an odd `updated` blocked the restore: ' + m);
+    await closeRestored(page);
+    for(const id of ['ra', 'rb', 'rc']) expectSame(data.songs.find(x => x.id === id), (await snapshot(page)).songs[id], `(d) ${id} after the restore`);
+    assert(diff(e0, await snapshot(page)).length, '(d) nothing changed (test setup)');
+
+    /* (e) "last backup" is set only when the backup holds everything here: a setlist not in it, or a copy, keeps the reminder */
+    await page.evaluate(() => localStorage.removeItem('ss-last-backup'));
+    await restoreOver(page, file, '(e) with setlists that stay');
+    assert(await page.evaluate(() => localStorage.getItem('ss-last-backup')) === null, '(e) a restore that left setlists the backup does not have counted as a backup');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'roundtrip over 1: a backup restored over a library changed since it was made asks first, then gives back the backup plus exactly the copies a hand-written model expects (reload, backup, the same backup again)', run: loopModel},
   {name: 'roundtrip over 2: Cancel, Escape and Stop (while comparing, while keeping a chart) change nothing', run: loopNothing},
   {name: 'roundtrip over 3: an empty tablet (or one holding only deletion markers) restores without a question', run: loopEmpty},
   {name: 'roundtrip over 4: all or nothing with copies: a full tablet, a stroke or an edit in a second tab while asked, the size cap', run: loopAllOrNothing},
+  {name: 'roundtrip over 6: the tablet\'s own state never blocks or multiplies: an unreadable chart, copies already held, a second setlist copy, a crop made here, an odd `updated`, "last backup" with records that stay', run: loopTablet},
   {name: 'roundtrip over 5: a reload at any moment after Restore leaves the library as it was or whole, copies included', run: loopReload},
 ];

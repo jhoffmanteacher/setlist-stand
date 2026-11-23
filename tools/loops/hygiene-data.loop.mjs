@@ -85,13 +85,22 @@ export const loops = [
     await page.click('.modal [data-ok]');
     await page.waitForSelector('#view [data-addto]');
     await shown('open setlist after a new setlist', /^Changes since your last backup/);
-    /* a restore of the backup counts as backed up until the next change */
+    /* a restore of that backup: the setlist made after it is not in it and stays, so that work is in no backup and the reminder stays */
     await page.click('#view [data-allsets]'); await tab('lib');
     await clearToast(page);
     await page.setInputFiles('#restoreFile', dl2.file);
-    /* the setlist made after the backup is not in it: it stays, and nothing is replaced, so nothing is kept */
     const asked = await answerRestore(page);
     assert(/Nothing on this tablet is replaced\./.test(asked || '') && /1 setlist on this tablet is not in the backup\./.test(asked), 'the question: ' + JSON.stringify(asked));
+    await waitToast(page, /^Restored/, 30000);
+    assert(!(await closeRestored(page)), 'a restore that replaced nothing said it kept something');
+    await shown('after a restore that left a setlist the backup does not have', /^Changes since your last backup \(today\)\./);
+    /* a restore of a backup that holds everything here counts as backed up until the next change */
+    const dl3 = await download(page, () => page.click('#libNudge [data-backupnow]'));
+    await gone('after "Back up now"');
+    await clearToast(page);
+    await page.setInputFiles('#restoreFile', dl3.file);
+    const asked3 = await answerRestore(page);
+    assert(/Nothing on this tablet is replaced\./.test(asked3 || '') && !/not in the backup/.test(asked3), 'the question for a backup that holds everything: ' + JSON.stringify(asked3));
     await waitToast(page, /^Restored/, 30000);
     assert(!(await closeRestored(page)), 'a restore that replaced nothing said it kept something');
     await gone('after a restore');
