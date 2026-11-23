@@ -12,7 +12,7 @@ import vm from 'node:vm';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {parseFileName} from '../js/importname.js';
-import {compareSongs, displayName} from '../js/names.js';
+import {compareSongs, displayName, cutName} from '../js/names.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function requireUmd(f){                         // vendor/*.js are UMD and package.json says "type":"module"
@@ -45,7 +45,7 @@ if(!libFile){ console.error('That is not a Setlist Stand backup (no library.json
 const lib = JSON.parse(await libFile.async('string'));
 if(!lib || lib.app !== 'setlist-stand' || !Array.isArray(lib.songs)){ console.error('That is not a Setlist Stand backup.'); process.exit(2); }
 const songs = lib.songs.filter(s => s && !s.deleted && !s.archived && typeof s.id === 'string');   // archived charts are never updated
-const trim = s => ({song:String(s.song || '').trim(), artist:String(s.artist || '').trim(), version:String(s.version || '').trim()});
+const trim = s => ({song:cutName(String(s.song || '').trim()), artist:cutName(String(s.artist || '').trim()), version:cutName(String(s.version || '').trim())});      // cut as the app cuts a name it makes, so a long file name still matches its own song
 const same = (a, b) => compareSongs({...a, id:''}, {...b, id:''}) === 0;
 
 const zip = new JSZip(), charts = [], taken = new Map();           // taken: song id -> the PDF that took it
