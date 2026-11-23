@@ -21,6 +21,13 @@ import {onClick as collClick, initShown} from './collections.js';
 const signIn = takeReturn();
 initErrors();      // first: the private problem log (Library → Problem log) catches anything that goes wrong after this
 
+/* Updates (service worker, "Updated. Tap to reload", update checks, the kill switch's reload) are js/boot.js, a separate
+   classic script that runs even when a module here fails to load. This file only leaves the "back to the song" note
+   before such a reload. If boot.js itself failed, keep the offline copy installed and updating: no banner then, the
+   update takes over when the app is closed and opened again (BREAK-GLASS.md (a)). */
+if(window.ssBoot) window.ssBoot.beforeReload(saveResume);
+else if('serviceWorker' in navigator) addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+
 /* The database is upgraded the first time this version opens it. A tab still running the OLDER app keeps it open and cannot be
    told to let go, so the upgrade waits: say so in plain words (the message goes by itself when that tab is closed). A tab on this
    version lets go at once when a newer one asks (js/store.js). */
@@ -66,45 +73,6 @@ $('#view').addEventListener('click', async e => {
   if(await libraryClick(b, d)) return;
   await setlistClick(b, d);
 });
-
-/* ---------- offline: the service worker keeps the app on the device ----------
-   A new version waits until Jonathan taps "Updated. Tap to reload" (never in the middle of a song). Only the tab whose
-   banner was tapped reloads; another open tab keeps running and shows its own banner. The first install also fires
-   controllerchange (clients.claim) and must not reload anything. If a song was open, the reload puts it back. */
-let reloaded = false;
-const reloadNow = () => { if(reloaded) return; reloaded = true; saveResume(); location.reload(); };
-function watchUpdates(reg){
-  const note = $('#update');
-  let asked = false;
-  const show = w => {
-    note.hidden = false;
-    note.onclick = () => {
-      if(w.state === 'redundant'){ note.hidden = true; return; }   // that version was replaced: wait for the next banner
-      asked = true;
-      if(w.state === 'activated') reloadNow();       // another tab already switched to it: just load it
-      else w.postMessage('skip-waiting');            // the new worker takes over, controllerchange follows
-    };
-  };
-  /* A new worker that finishes installing gets the banner. It may already be installing when register() resolves
-     (its updatefound fired before this ran), so that one is followed too. */
-  const track = w => {
-    if(!w) return;
-    const check = () => { if(w.state === 'installed' && navigator.serviceWorker.controller) show(w); };
-    w.addEventListener('statechange', check); check();
-  };
-  if(reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
-  track(reg.installing);
-  reg.addEventListener('updatefound', () => track(reg.installing));
-  /* Never mid-song (or mid-split): a controllerchange while a song or the songbook splitter is open (another tab's tap)
-     waits; this tab's own tap only happens on the home screen, where the banner shows. */
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if(asked && !document.body.classList.contains('playing') && !document.body.classList.contains('splitting') && !document.body.classList.contains('busy')) reloadNow(); });
-}
-if('serviceWorker' in navigator){
-  /* The kill switch (tools/kill-switch/kill-sw.js, BREAK-GLASS.md) emptied the cache and took over: reload this tab once
-     so it runs from the network. Listened for from the start, so the message is not missed before load. */
-  navigator.serviceWorker.addEventListener('message', e => { if(e.data && e.data.type === 'ss-sw-killed') reloadNow(); });
-  addEventListener('load', () => { navigator.serviceWorker.register('sw.js').then(watchUpdates).catch(() => {}); });
-}
 
 /* ---------- back to the song after an update reload ---------- */
 const RESUME = 'ss-resume';

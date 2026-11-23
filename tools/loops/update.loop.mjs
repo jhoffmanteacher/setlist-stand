@@ -12,8 +12,12 @@
  * navigations, document requests (also those the worker answers from its cache), load events, and navigations the
  * page asked for (CDP), so a double location.reload() cannot pass as one.
  *
- * A "returning visit" = the page is reloaded once after the first install, so it was controlled when it loaded
- * (js/main.js hadController is true), as a musician's tab normally is.
+ * A "returning visit" = the page is reloaded once after the first install, so it was controlled when it loaded,
+ * as a musician's tab normally is.
+ *
+ * The registration, the banner, the controllerchange rule and the update checks of an app left open are js/boot.js
+ * (2026-11-23), a classic script of its own, so a deploy that breaks a module of the app still shows the banner for
+ * the next good one (update g, g2). A "version 3" is makeSiteCopy(..., {bumps: 2}): a VERSION different from version 2.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -84,6 +88,52 @@ async function updateUntil(page, pred, what){
 /* After a reload starts, waits until the new document is up and ready (the library or the viewer drawn). */
 async function waitNewDoc(page, nav, ms = 15000){
   await until(async () => nav.get().loads >= 1 && await page.evaluate(() => !!document.querySelector('#libList, #view .list, #view h2, #viewer.on')), 'the page did not reload', ms);
+}
+
+/* update g / g2: version 2 breaks the app's modules (the page stays blank); version 3 is the fix. The banner for version 3
+   must still appear on the blank page (js/boot.js runs on its own), and one tap must bring version 3 in. */
+async function brokenModuleThenFix(ctx, {file, plant, mk, needError}){
+  const v2 = makeSiteCopy(ctx.root, {marker: mk, mutate: dir => { const f = path.join(dir, file); fs.writeFileSync(f, plant(fs.readFileSync(f, 'utf8'))); }});
+  const v3 = makeSiteCopy(ctx.root, {marker: 'v3', bumps: 2});
+  const {s, nav} = await firstVisit(ctx);
+  const {page} = s;
+  try{
+    const c = checker();
+    await returning(s, nav);
+    await addSong(page);
+    const before = await snapshot(page);
+    /* the broken version 2 goes in the usual way (version 1's banner, a tap) */
+    ctx.server.root = v2;
+    await updateUntil(page, () => bannerShown(page), '#update did not appear for version 2');
+    nav.reset();
+    await page.click('#update');
+    await until(async () => nav.get().loads >= 1 && await marker(page) === mk, `the tap did not reload into version 2 (${nav.text()})`, 15000);
+    await sleep(1500);
+    assert(await page.locator('#libList').count() === 0, `test setup: version 2 drew the library: the planted ${file} fault did not break the app`);
+    if(needError) assert(s.errors.some(e => e.includes(needError)), `test setup: no page error "${needError}" (errors: ${s.errors.join(' | ') || 'none'})`);
+    const k = s.errors.length;
+    /* the fix is deployed while the blank page is open */
+    ctx.server.root = v3;
+    await updateUntil(page, () => bannerShown(page), `#update did not appear on the page broken by ${file}: the banner depends on the app's modules`);
+    nav.reset();
+    await page.click('#update');
+    await waitNewDoc(page, nav).catch(e => c.check(false, `after the tap on the broken page: ${e.message} (${nav.text()})`));
+    await sleep(2000);                       // a second reload would show up here
+    const n = nav.get();
+    c.check(n.committed === 1 && n.docs === 1 && n.loads === 1 && n.asked === 1, `tap on #update on the broken page: want exactly one reload, got ${nav.text()}`);
+    c.check(await marker(page) === 'v3', `version 3 marker not in the DOM after the tap (${await marker(page)})`);
+    c.check(await page.locator('#libList [data-open]', {hasText: 'Three-page'}).count() === 1, 'version 3 does not show the song in the library');
+    const v3Name = cacheName(v3);
+    const st = await swState(page);
+    c.check(st.caches.length === 1 && st.caches[0] === v3Name, `caches after the fix ${JSON.stringify(st.caches)}, want only ["${v3Name}"]`);
+    const keys = new Set(await cacheKeys(page, v3Name) || []);
+    const missing = precachePaths(v3).filter(p => !keys.has(p));
+    c.check(!missing.length, `version 3 cache lacks: ${missing.join(', ')}`);
+    const d = diff(before, await snapshot(page));
+    c.check(!d.length, 'library changed across the broken version and the fix: ' + d.join('; '));
+    c.check(s.errors.length === k, 'page errors once version 3 loaded: ' + s.errors.slice(k).join(' | '));
+    c.done();
+  } finally { ctx.server.root = ctx.root; nav.close(); await s.close(); removeCopy(v2); removeCopy(v3); }
 }
 
 export const loops = [
@@ -348,6 +398,193 @@ export const loops = [
       c.check(s.errors.length === 0 && errB.length === 0, 'page errors: ' + [...s.errors, ...errB].join(' | '));
       c.done();
     } finally { ctx.server.root = ctx.root; nav.close(); navB && navB.close(); await s.close(); removeCopy(v2); }
+  }
+},
+{
+  name: 'update g: a deploy whose js/library.js throws still shows the banner, and one tap brings the fix',
+  run: ctx => brokenModuleThenFix(ctx, {file: 'js/library.js', mk: 'v2-broken-module',
+    plant: src => "throw new Error('planted: js/library.js is broken');\n" + src, needError: 'planted: js/library.js is broken'}),
+},
+{
+  name: 'update g2: a deploy whose js/main.js does not parse still shows the banner, and one tap brings the fix',
+  run: ctx => brokenModuleThenFix(ctx, {file: 'js/main.js', mk: 'v2-broken-main', plant: src => src + '\n)(\n'}),
+},
+{
+  name: 'update h: an app left open finds a new version by itself, at most once an hour, never while a song is open',
+  async run(ctx){
+    /* Playwright's clock: Date and the page's timers are fake from the first script on, and keep flowing at real speed
+       until moved. The test itself never calls registration.update(): every /sw.js request below is the app's own check. */
+    const v2 = makeSiteCopy(ctx.root, {marker: 'v2'});
+    const s = await ctx.session();
+    const {page, context} = s;
+    const nav = await navCounter(page, ctx.server);
+    let online = null;
+    const swHits = () => ctx.server.hits.filter(p => p === '/sw.js').length;
+    /* who asked for sw.js, for the failure messages: the browser's update check sends "Service-Worker: script" */
+    const t0 = Date.now(), swLog = [];
+    const onReq = req => { if(/\/sw\.js(\?|$)/.test(req.url)) swLog.push(`${((Date.now() - t0) / 1000).toFixed(1)}s ${req.headers['service-worker'] || 'no Service-Worker header'} ${req.headers['sec-fetch-dest'] || ''}`); };
+    ctx.server.on('request', onReq);
+    const who = (n = 3) => ` [sw.js requests: ${swLog.slice(-n).join('; ')}]`;
+    /* Chrome also asks for sw.js by itself: its own check for a navigation runs about a second after the page's last
+       request (opening the first song fetches the PDF reader), and one update() can be followed by a second request
+       (measured here: pairs 0.1 to 0.6 s apart, with js/boot.js's refill request switched off too). Before each window
+       that must stay quiet, wait until no sw.js request came for 3 s, so every request counted is a new one. */
+    const settle = async () => { const end = Date.now() + 20000; let n = -1, since = Date.now();
+      while(Date.now() < end){ if(swLog.length !== n){ n = swLog.length; since = Date.now(); } else if(Date.now() - since >= 3000) return; await sleep(200); } };
+    const setVisible = state => page.evaluate(st => { Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => st}); document.dispatchEvent(new Event('visibilitychange')); }, state);
+    const jump = async ms => { const now = await page.evaluate(() => Date.now()); await page.clock.setSystemTime(now + ms); };
+    try{
+      const c = checker();
+      await page.clock.install();
+      await s.goto();
+      await waitInstalled(page, cacheName(ctx.root), precachePaths(ctx.root));
+      /* a returning visit (returning() reads performance, which the fake clock replaces: the controller says the same) */
+      ctx.server.hits.length = 0;
+      await page.reload();
+      await page.waitForSelector('#libList');
+      assert(await page.evaluate(() => !!navigator.serviceWorker.controller), 'the returning visit was not served by the service worker');
+      nav.reset();
+      /* The browser's own check of sw.js for that navigation may come a moment after the page loaded (Chrome defers it):
+         let it happen while the server still has version 1, so the only checks after the switch are the app's. */
+      await addSong(page);
+      /* a song is open: two hours pass, no check */
+      await openAt(page, 'Three-page', 1);
+      await settle();
+      ctx.server.root = v2;
+      ctx.server.hits.length = 0;
+      await page.clock.fastForward('02:00:00');
+      await sleep(3000);
+      c.check(!swHits(), `the app checked for an update while a song was open (${swHits()} sw.js request(s))` + who());
+      let st = await swState(page);
+      c.check(!st.installing && !st.waiting, 'a new worker appeared while a song was open: ' + JSON.stringify(st));
+      c.check(!(await bannerOffered(page)), 'the update banner was offered while a song was open');
+      const n0 = nav.get();
+      c.check(!n0.docs && !n0.loads && !n0.asked, 'the page reloaded while a song was open: ' + nav.text());
+      /* Back: the next tick finds the new version */
+      await page.click('#vBack');
+      await page.waitForSelector('#libList');
+      await page.waitForFunction(() => !history.state); await sleep(300);
+      nav.reset();
+      await page.clock.fastForward('00:05:01');
+      await until(() => bannerShown(page), 'the open app never found the new version by itself', 15000)
+        .catch(e => c.check(false, `${e.message} (${swHits()} sw.js request(s) since the song was opened)`));
+      c.check(swHits() > 0, 'the banner showed but no sw.js request reached the server');
+      /* not again within the hour */
+      await settle();
+      ctx.server.hits.length = 0;
+      await page.clock.fastForward('00:50:00');
+      await sleep(2000);
+      c.check(!swHits(), `the app checked again 50 minutes after its last check (${swHits()} sw.js request(s))` + who());
+      await page.clock.fastForward('00:15:00');
+      await until(async () => swHits() > 0, 'no update check 65 minutes after the last one', 10000).catch(e => c.check(false, e.message));
+      /* coming back on screen checks too (no tick): the clock is moved without firing any timer */
+      ctx.server.hits.length = 0;
+      await jump(61 * 60e3);
+      await setVisible('visible');
+      await until(async () => swHits() > 0, 'coming back on screen an hour after the last check did not check', 5000).catch(e => c.check(false, e.message));
+      /* hidden does not */
+      await settle();
+      ctx.server.hits.length = 0;
+      await jump(61 * 60e3);
+      await setVisible('hidden');
+      await sleep(2000);
+      c.check(!swHits(), `the app checked for an update while it was hidden (${swHits()} sw.js request(s))` + who());
+      /* offline is quiet */
+      await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); });
+      await settle();
+      online = await goOffline(context, ctx.server);
+      assert(await page.evaluate(() => navigator.onLine) === false, 'test setup: navigator.onLine is still true with the context offline');
+      ctx.server.hits.length = 0;
+      await jump(2 * 60 * 60e3);
+      await setVisible('visible');
+      await sleep(2000);
+      c.check(!swHits(), `the app tried to check for an update while offline (${swHits()} sw.js request(s))` + who());
+      /* back online: the 'online' event checks (two hours since the last one) */
+      await online(); online = null;
+      await until(async () => swHits() > 0, 'coming back online two hours after the last check did not check', 5000).catch(e => c.check(false, e.message));
+      /* nothing reloaded by itself */
+      const n = nav.get();
+      c.check(!n.committed && !n.docs && !n.loads && !n.asked, 'the page reloaded by itself: ' + nav.text());
+      st = await swState(page);
+      c.check(!!st.waiting && st.caches.includes(cacheName(v2)), 'version 2 is not waiting for the tap: ' + JSON.stringify(st));
+      c.check(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
+      c.done();
+    } finally { ctx.server.off('request', onReq); if(online) await online(); ctx.server.root = ctx.root; nav.close(); await s.close(); removeCopy(v2); }
+  }
+},
+{
+  name: 'update i: a deploy whose js/boot.js throws: the app still opens and installs, and takes the fix after a close and reopen',
+  async run(ctx){
+    const v2 = makeSiteCopy(ctx.root, {marker: 'v2-broken-boot', mutate: dir => {
+      const f = path.join(dir, 'js', 'boot.js'); fs.writeFileSync(f, "throw new Error('planted: js/boot.js is broken');\n" + fs.readFileSync(f, 'utf8'));
+    }});
+    const v3 = makeSiteCopy(ctx.root, {marker: 'v3', bumps: 2});
+    let fresh = null, s = null, nav = null;
+    const pages = [];
+    try{
+      const c = checker();
+      /* a first visit to that version still installs the offline copy (js/main.js's fallback register) */
+      ctx.server.root = v2;
+      fresh = await ctx.session();
+      await fresh.goto();
+      await fresh.page.waitForSelector('#libList', {timeout: 15000}).catch(() => c.check(false, 'first visit to a version whose js/boot.js throws: the library is not drawn'));
+      await waitInstalled(fresh.page, cacheName(v2), precachePaths(v2), 30000)
+        .catch(e => c.check(false, `first visit to a version whose js/boot.js throws: ${e.message} (js/main.js must register sw.js when window.ssBoot is missing)`));
+      await fresh.close(); fresh = null;
+      ctx.server.root = ctx.root;
+
+      ({s, nav} = await firstVisit(ctx));
+      const {page} = s;
+      await returning(s, nav);
+      await addSong(page);
+      const before = await snapshot(page);
+      /* version 2 goes in through version 1's banner */
+      ctx.server.root = v2;
+      await updateUntil(page, () => bannerShown(page), '#update did not appear for version 2');
+      nav.reset();
+      await page.click('#update');
+      await until(async () => nav.get().loads >= 1 && await marker(page) === 'v2-broken-boot', `the tap did not reload into version 2 (${nav.text()})`, 15000);
+      await page.waitForSelector('#libList [data-open]', {timeout: 10000}).catch(() => c.check(false, 'the app does not open when js/boot.js throws'));
+      assert(await page.evaluate(() => window.ssBoot === undefined), 'test setup: window.ssBoot is set although js/boot.js throws');
+      assert(s.errors.some(e => e.includes('planted: js/boot.js is broken')), 'test setup: no page error from the planted js/boot.js');
+      /* the fix is deployed: it installs and waits, with no banner (the documented degraded path) */
+      ctx.server.root = v3;
+      nav.reset();
+      await updateUntil(page, async () => !!(await swState(page)).waiting, 'version 3 did not install while the page with the broken js/boot.js was open');
+      await sleep(2000);
+      c.check(!(await bannerOffered(page)), 'a banner was offered although js/boot.js is broken (the test does not test what it says)');
+      const n = nav.get();
+      c.check(!n.committed && !n.docs && !n.loads && !n.asked, 'the page reloaded by itself: ' + nav.text());
+      /* close the app and open it again: version 3 takes over once no page uses version 2 */
+      nav.close(); nav = null;
+      await page.close();
+      let p2 = null, mk = null;
+      for(let k = 0; k < 5 && mk !== 'v3'; k++){
+        if(p2) await p2.close();
+        await sleep(1000);
+        p2 = await s.context.newPage();
+        const errs = []; pages.push(errs);
+        p2.on('pageerror', e => errs.push('pageerror: ' + e.message));
+        p2.on('console', m => { if(m.type() === 'error') errs.push('console: ' + m.text()); });
+        await p2.goto(ctx.base + 'index.html');
+        await p2.waitForSelector('#libList, #view', {timeout: 15000}).catch(() => {});
+        mk = await marker(p2);
+      }
+      c.check(mk === 'v3', `after closing and opening the app again the page is ${mk}, want v3`);
+      await p2.waitForSelector('#libList [data-open]', {timeout: 10000}).catch(() => c.check(false, 'version 3 does not show the library'));
+      c.check(await p2.evaluate(() => !!window.ssBoot), 'version 3 has no window.ssBoot');
+      const v3Name = cacheName(v3);
+      await until(async () => { const st = await swState(p2); return st.caches.length === 1 && st.caches[0] === v3Name && st.controller; },
+        async () => `caches after the reopen ${JSON.stringify((await swState(p2)).caches)}, want only ["${v3Name}"] and a controller`, 10000).catch(e => c.check(false, e.message));
+      const keys = new Set(await cacheKeys(p2, v3Name) || []);
+      const missing = precachePaths(v3).filter(p => !keys.has(p));
+      c.check(!missing.length, `version 3 cache lacks: ${missing.join(', ')}`);
+      const d = diff(before, await snapshot(p2));
+      c.check(!d.length, 'library changed across the broken version and the fix: ' + d.join('; '));
+      const last = pages[pages.length - 1];
+      c.check(!last.length, 'page errors in version 3: ' + last.join(' | '));
+      c.done();
+    } finally { ctx.server.root = ctx.root; if(nav) nav.close(); if(fresh) await fresh.close(); if(s) await s.close(); removeCopy(v2); removeCopy(v3); }
   }
 },
 ];

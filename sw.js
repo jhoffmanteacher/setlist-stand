@@ -5,8 +5,10 @@
  *   any precached file changes: `node tools/checks.mjs --bump`).
  * - A new worker waits until the page posts 'skip-waiting' (no auto-update
  *   mid-gig); activate then removes old setlist-stand-* caches.
- * - Fetch: same-origin GET only, cache-first, network fallback; navigations
- *   fall back to the cached index.html so the app opens offline.
+ * - Fetch: same-origin GET only, cache-first, network fallback (not stored);
+ *   navigations fall back to the cached index.html so the app opens offline.
+ * - 'ss-heal' (from js/boot.js): refetch missing precached files when the
+ *   server still has this same VERSION (another site may have wiped them).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
 const VERSION = '2026-11-23-7';
@@ -65,6 +67,7 @@ const PRECACHE = [
   'js/syncdialogs.js',
   'js/deleteops.js',
   'js/errors.js',
+  'js/boot.js',
   'js/main.js',
   'vendor/pdf.min.js',
   'vendor/pdf.worker.min.js',
@@ -89,8 +92,41 @@ self.addEventListener('install', (event) => {
     cache.addAll(PRECACHE.map((url) => new Request(url, { cache: 'reload' })))));
 });
 
+/* The offline copy refills itself (2026-11-23). Another site on the same github.io address can delete this app's cache
+   (guitar-class's worker did: Cache Storage belongs to the whole address, not to a folder). js/boot.js asks for a check
+   ('ss-heal') once per page load and after each update check, only when online. Missing files are fetched again ONLY
+   when the server still has THIS version (its sw.js holds the same VERSION): otherwise a newer version is out, its own
+   install fills its own cache, and this cache is left alone (no files of another version under this version's name).
+   The cache is only (re)created once the version matched, so an old worker that is being replaced never brings back
+   a cache the new one just deleted. */
+async function heal() {
+  const want = PRECACHE.map((u) => new URL(u, self.location.href).href);
+  let have = new Set();
+  if (await caches.has(CACHE)) have = new Set((await (await caches.open(CACHE)).keys()).map((r) => r.url));
+  const missing = PRECACHE.filter((u, i) => !have.has(want[i]));
+  if (!missing.length) return 'whole';
+  let live;
+  try {
+    const res = await fetch('sw.js', { cache: 'no-store' });
+    if (!res.ok) return 'offline';
+    live = await res.text();
+  } catch {
+    return 'offline';
+  }
+  const m = /const\s+VERSION\s*=\s*'([^']+)'/.exec(live);
+  if (!m || m[1] !== VERSION) return 'newer';
+  const cache = await caches.open(CACHE);
+  await cache.addAll(missing.map((u) => new Request(u, { cache: 'reload' })));
+  return 'healed';
+}
+
 self.addEventListener('message', (event) => {
   if (event.data === 'skip-waiting') self.skipWaiting();
+  else if (event.data === 'ss-heal') {
+    event.waitUntil(heal().then(
+      (r) => { if (event.source) event.source.postMessage({ type: 'ss-heal', result: r }); },
+      () => {}));
+  }
 });
 
 self.addEventListener('activate', (event) => {
@@ -112,12 +148,10 @@ self.addEventListener('fetch', (event) => {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(req, { ignoreSearch: true });
     if (hit) return hit;
+    /* A miss is answered from the network and NOT stored: after another site wiped this cache, the server may already
+       hold a newer version, and its files must not land under this version's name. heal() is the one refill. */
     try {
-      const res = await fetch(req);
-      if (res.status === 200 && !req.headers.has('range')) {
-        cache.put(req, res.clone());
-      }
-      return res;
+      return await fetch(req);
     } catch (err) {
       if (req.mode === 'navigate') {
         const shell = await cache.match('index.html');

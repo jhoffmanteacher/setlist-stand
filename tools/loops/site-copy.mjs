@@ -2,9 +2,11 @@
  * Shared pieces for the service-worker loops (update.loop.mjs, offline.loop.mjs, live.loop.mjs).
  *
  *  - parsePrecache / parseVersion / toRepoPath: read sw.js the way tools/checks.mjs does.
- *  - makeSiteCopy(from, {marker, mutate}): "version 2" of the site = a copy of the served folder (no node_modules,
+ *  - makeSiteCopy(from, {marker, mutate, bumps}): "version 2" of the site = a copy of the served folder (no node_modules,
  *    no .git) with <meta name="ss-marker" content="..."> in index.html and `node tools/checks.mjs --bump` run IN THE
- *    COPY (only --bump: the full checks compare with origin/main). `mutate(dir)` can then plant a fault.
+ *    COPY (only --bump: the full checks compare with origin/main). `mutate(dir)` can then plant a fault. `bumps: 2`
+ *    makes a "version 3": two copies of one folder bumped once each would have the SAME VERSION and the same sw.js
+ *    bytes, so the browser would see no update from one to the other.
  *  - navCounter(page): reloads counted by the browser, several ways (see the comment there).
  *  - waitInstalled(page): the worker is active, controls the page, and its cache holds every PRECACHE entry.
  *  - throttleProxy(target, {kbps, latency}): a local HTTP proxy that slows EVERYTHING down, service worker included.
@@ -48,7 +50,7 @@ export const precachePaths = root => parsePrecache(swOf(root)).map(u => (u === '
 
 /* ---------- version 2 ---------- */
 let copies = 0;
-export function makeSiteCopy(from, {marker = 'v2', mutate} = {}){
+export function makeSiteCopy(from, {marker = 'v2', mutate, bumps = 1} = {}){
   const dir = path.join(TMP, `site-${marker}-${process.pid}-${++copies}`);
   const skip = new Set(['node_modules', '.git', 'Claude outputs']);
   fs.cpSync(from, dir, {recursive: true, filter: src => !skip.has(path.basename(src))});
@@ -57,7 +59,7 @@ export function makeSiteCopy(from, {marker = 'v2', mutate} = {}){
   assert(html.includes('</head>'), 'index.html has no </head>');
   fs.writeFileSync(idx, html.replace('</head>', `<meta name="ss-marker" content="${marker}">\n</head>`));
   const before = parseVersion(swOf(dir));
-  execFileSync(process.execPath, [path.join(dir, 'tools', 'checks.mjs'), '--bump'], {cwd: dir, stdio: 'ignore'});
+  for(let i = 0; i < bumps; i++) execFileSync(process.execPath, [path.join(dir, 'tools', 'checks.mjs'), '--bump'], {cwd: dir, stdio: 'ignore'});
   const after = parseVersion(swOf(dir));
   assert(after !== before, `checks.mjs --bump did not change VERSION in the copy (${before})`);
   if(mutate) mutate(dir);

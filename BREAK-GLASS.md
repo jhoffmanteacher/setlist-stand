@@ -18,7 +18,12 @@ Most problems. The fix is to undo the push; every tablet then updates as usual (
 5. `git push origin HEAD:main`.
 6. Confirm the deploy (Pages takes a few minutes):
    `node tools/loops.mjs --only live --live https://jhoffmanteacher.github.io/setlist-stand/ --wait 600`
-7. On the tablet: open the app, tap "Updated. Tap to reload" when it appears.
+7. On the tablet: open the app, tap "Updated. Tap to reload" when it appears. The banner comes from a small separate
+   file (js/boot.js), so it appears even when the broken push left the app blank. An app left open finds the fix by
+   itself within about an hour (while no song is open); opening it again finds it at once.
+8. No banner at all (the broken push was js/boot.js or index.html itself): close the app completely (iPad: swipe it
+   away in the app switcher; Android: close it from Recent apps; and close any browser tab with it), then open it again
+   with internet. The fix takes over once no copy of the app is open. If even that does not help: situation (b).
 
 ## (b) Tablets are stuck on a broken copy that a normal update does not clear
 Only when (a) did not help: the banner never comes, or tapping it still shows the broken app.
@@ -53,7 +58,9 @@ above, goes back, then starts with no network).
 - The installed app keeps working offline on every tablet. Do not clear the browser's data or uninstall it.
 - Make a backup now on each tablet: Library → "Back up / Sync" → "Back up everything" (save the zip somewhere safe, e.g. Drive).
 - The app is plain files with relative paths: any static web host can serve a copy of the repo files
-  (`index.html`, `sw.js`, `manifest.webmanifest`, `css/`, `js/`, `vendor/`, `icons/`) from any folder.
+  (`index.html`, `sw.js`, `manifest.webmanifest`, `css/`, `js/`, `vendor/`, `icons/`) from any folder on a DIFFERENT
+  host. Not a second folder on jhoffmanteacher.github.io: every site on that address shares the browser's storage, so
+  two copies there would share one library and one offline copy.
   A new address is a new app on the tablet: install it there and use Library → "Back up / Sync" → "Restore from backup".
 
 ## (d) A tablet lost its data
@@ -76,3 +83,9 @@ Sync copies a change on one tablet to the other, so a mistake can be copied too 
 3. To start clean: in Google Drive on a computer, delete the folder "Setlist Stand" (this loses nothing on the tablets: every tablet keeps its own copy). On BOTH tablets restore the same good backup (Library → "Back up / Sync" → "Restore from backup"), then on one tablet connect and tap Sync, then on the other.
 4. Restoring an OLDER backup while Sync is still connected does not hold: the next Sync brings back whatever the other tablet changed since, because the newer change wins. Disconnect first (step 2).
 5. Keep the clock of both tablets on "automatic": the newer change wins, and the tablet's clock says which is newer.
+
+## (g) The app does not open without internet although it did before
+Another website on the same address (jhoffmanteacher.github.io, for example the guitar-class site) can delete Setlist
+Stand's offline copy on a tablet. Open Setlist Stand once WITH internet: it refills its offline copy by itself (no
+message, nothing to tap). Then try again without internet. If a new version is waiting ("Updated. Tap to reload"),
+tap it first: the new version brings its own complete offline copy.

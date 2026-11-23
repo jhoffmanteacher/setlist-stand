@@ -10,8 +10,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {FIX, TMP, assert, sleep, idbAll, PDFDocument, JSZip, restoreZip, openBackupMenu, openSetMenu} from './harness.mjs';
-import {cacheName, precachePaths, waitInstalled, navCounter, goOffline, throttleProxy, until} from './site-copy.mjs';
+import crypto from 'node:crypto';
+import {FIX, TMP, assert, sleep, idbAll, PDFDocument, JSZip, restoreZip, openBackupMenu, openSetMenu, snapshot, diff} from './harness.mjs';
+import {cacheName, precachePaths, waitInstalled, navCounter, goOffline, throttleProxy, until, makeSiteCopy, removeCopy, cacheKeys, swState, toRepoPath} from './site-copy.mjs';
 
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 const liveOf = v => (v && Array.isArray(v.strokes) ? v.strokes : []).filter(s => !s.deleted);
@@ -76,6 +77,26 @@ function noNetwork(hits){
   const other = hits.filter(p => p !== '/sw.js');
   assert(!other.length, 'requests reached the network while offline (not answered by the service worker): ' + [...new Set(other)].join(', '));
 }
+
+/* What another site on the same address does (guitar-class's worker, 2026-11-23): delete every cache it does not own. */
+const wipeCaches = page => page.evaluate(async () => { for(const k of await caches.keys()) await caches.delete(k); return (await caches.keys()).length; });
+/* The page hears the worker's answer to js/boot.js's 'ss-heal' (window.__ssHeal), from the first script on. */
+const listenHeal = context => context.addInitScript(() => {
+  if(navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', e => { if(e.data && e.data.type === 'ss-heal') window.__ssHeal = e.data.result; });
+});
+/* A fresh session with the app installed (returning visit) and one song in the library. */
+async function installedWithSong(ctx){
+  const s = await ctx.session();
+  await listenHeal(s.context);
+  await s.goto();
+  await waitInstalled(s.page, cacheName(ctx.root), precachePaths(ctx.root));
+  await s.page.reload(); await s.page.waitForSelector('#libList');
+  assert(await s.page.evaluate(() => !!navigator.serviceWorker.controller), 'test setup: the returning visit is not controlled');
+  await s.page.setInputFiles('#file', path.join(FIX, 'three-page.pdf'));
+  await s.page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 1, null, {timeout: 15000});
+  return s;
+}
+const sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
 
 export const loops = [
 {
@@ -292,6 +313,80 @@ export const loops = [
       assert(errors.length === 0, 'page errors offline: ' + errors.join(' | '));
       noNetwork(ctx.server.hits);
     } finally { if(online) await online(); await s.close(); }
+  }
+},
+{
+  name: 'offline j: another site wipes the offline copy: one online visit refills every file, then the app opens offline',
+  async run(ctx){
+    const s = await installedWithSong(ctx);
+    let online = null;
+    try{
+      const {page} = s;
+      const name = cacheName(ctx.root), want = precachePaths(ctx.root);
+      assert(await wipeCaches(page) === 0, 'test setup: the caches could not be deleted');
+      /* one ordinary online visit, no song opened: the worker refills its own cache from the server (same version) */
+      await page.reload(); await page.waitForSelector('#libList [data-open]');
+      await waitInstalled(page, name, want, 20000)
+        .catch(async e => { throw new Error(`the offline copy was not refilled after another site wiped it: ${e.message} (the worker answered ${await page.evaluate(() => window.__ssHeal)})`); });
+      const said = await page.evaluate(() => window.__ssHeal);
+      assert(said === 'healed', `the worker answered "${said}" to the refill, want "healed"`);
+      /* every refilled entry holds the server's bytes */
+      const got = await page.evaluate(async ([name, want]) => {
+        const c = await caches.open(name), out = {};
+        for(const p of want){ const r = await c.match(p || './'); out[p] = r ? [...new Uint8Array(await crypto.subtle.digest('SHA-256', await r.arrayBuffer()))].map(b => b.toString(16).padStart(2, '0')).join('') : null; }
+        return out;
+      }, [name, want]);
+      const wrong = want.filter(p => got[p] !== sha(fs.readFileSync(path.join(ctx.root, toRepoPath(p)))));
+      assert(!wrong.length, 'refilled entries that differ from the files on the server: ' + wrong.map(p => p || './').join(', '));
+      assert(s.errors.length === 0, 'page errors while online: ' + s.errors.join(' | '));
+      await page.close();
+      /* offline cold start */
+      online = await goOffline(s.context, ctx.server);
+      ctx.server.hits.length = 0;
+      const {page: p2, errors} = await newPage(s.context);
+      await p2.goto(ctx.base + 'index.html');
+      await p2.waitForSelector('#libList [data-open]', {timeout: 15000}).catch(() => { throw new Error('the app did not open offline after the refill'); });
+      await openSong(p2, 'Three-page');
+      assert(await pageNotBlank(p2), 'the song does not render offline after the refill');
+      assert(errors.length === 0, 'page errors offline: ' + errors.join(' | '));
+      noNetwork(ctx.server.hits);
+    } finally { if(online) await online(); await s.close(); }
+  }
+},
+{
+  name: 'offline k: a wiped offline copy is not refilled with a NEWER version from the server; that version waits for its tap',
+  async run(ctx){
+    const v2 = makeSiteCopy(ctx.root, {marker: 'v2'});
+    const s = await installedWithSong(ctx);
+    try{
+      const {page} = s;
+      const before = await snapshot(page);
+      const v1Name = cacheName(ctx.root), v2Name = cacheName(v2);
+      ctx.server.root = v2;
+      assert(await wipeCaches(page) === 0, 'test setup: the caches could not be deleted');
+      await page.reload(); await page.waitForSelector('#libList [data-open]');
+      /* the browser's own check on that visit finds version 2; it installs into ITS cache and waits for the tap */
+      await until(async () => { const b = await page.evaluate(() => { const u = document.querySelector('#update'); return !!u && !u.hidden; }); return b; },
+        async () => 'version 2 was not offered after the wiped copy was opened: ' + JSON.stringify(await swState(page)), 20000);
+      await until(() => page.evaluate(() => window.__ssHeal), 'the worker never answered the refill request', 10000);
+      const said = await page.evaluate(() => window.__ssHeal);
+      assert(said === 'newer', `the worker answered "${said}" to the refill while the server holds a newer version, want "newer"`);
+      await sleep(1000);
+      const old = await cacheKeys(page, v1Name);
+      assert(!old || !old.length, `version 1's cache ${v1Name} was refilled with ${old.length} file(s) while the server holds version 2 (files of another version under this version's name): ${old.slice(0, 5).map(p => p || './').join(', ')}`);
+      /* the tap brings version 2 in, whole, and the library is untouched */
+      await page.click('#update');
+      await until(async () => await page.evaluate(() => document.querySelector('meta[name=ss-marker]')?.content || null) === 'v2' && await page.locator('#libList [data-open]').count() === 1,
+        'the tap did not bring version 2 in', 15000);
+      await until(async () => { const st = await swState(page); return st.caches.length === 1 && st.caches[0] === v2Name; },
+        async () => `caches after the tap ${JSON.stringify((await swState(page)).caches)}, want only ["${v2Name}"]`, 10000);
+      const keys = new Set(await cacheKeys(page, v2Name) || []);
+      const missing = precachePaths(v2).filter(p => !keys.has(p));
+      assert(!missing.length, `version 2 cache lacks: ${missing.join(', ')}`);
+      const d = diff(before, await snapshot(page));
+      assert(!d.length, 'library changed: ' + d.join('; '));
+      assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
+    } finally { ctx.server.root = ctx.root; await s.close(); removeCopy(v2); }
   }
 },
 ];

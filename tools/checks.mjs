@@ -333,6 +333,37 @@ const precache = parsePrecache(swSrc);
   }
 }
 
+// ---------------------------------------------------------------- (g) boot script
+/* js/boot.js registers the service worker and shows "Updated. Tap to reload" even when a module of the app does not load,
+   so: it exists, it is a CLASSIC script (no import/export, no import()), index.html loads it FIRST of all scripts with
+   defer (no type=module, no async), no app file imports it, and no other file registers sw.js except js/main.js's one
+   fallback (guarded by window.ssBoot). */
+{
+  const name = 'boot script first';
+  const bad = [];
+  if (!exists('js/boot.js')) bad.push('js/boot.js is missing');
+  else {
+    const [code, why] = tryStrip(stripJsComments, read('js/boot.js'));
+    if (why) bad.push(`cannot parse js/boot.js (${why})`);
+    else if (/^\s*(import|export)\b/m.test(code) || /\bimport\s*\(/.test(code)) bad.push('js/boot.js has import/export: it must stay a classic script');
+  }
+  const [html, hwhy] = exists('index.html') ? tryStrip(stripHtml, read('index.html')) : ['', 'index.html is missing'];
+  const first = hwhy ? '' : ((/<script\b[^>]*>/i.exec(html) || [''])[0]);
+  if (hwhy) bad.push(`cannot parse index.html (${hwhy})`);
+  else if (!/\bsrc\s*=\s*["']?js\/boot\.js\b/i.test(first)) bad.push(`the first <script> in index.html is not js/boot.js (${first || 'none'})`);
+  else if (/\btype\s*=\s*["']?module/i.test(first) || /\basync\b/i.test(first) || !/\bdefer\b/i.test(first)) bad.push('js/boot.js must load as a classic script with defer');
+  const stripped = jsFiles().map((f) => [f, tryStrip(stripJsComments, read(f))[0] || '']);
+  const importers = stripped.filter(([f, t]) => f !== 'js/boot.js' && /\bboot\.js\b/.test(t)).map(([f]) => f);
+  if (importers.length) bad.push(`js/boot.js is named in ${importers.join(', ')}: no module may import it (a broken boot.js would take the app down)`);
+  const regs = stripped.flatMap(([f, t]) => (t.match(/serviceWorker\s*\.\s*register\s*\(|\bsw\s*\.\s*register\s*\(/g) || []).map(() => f));
+  const others = regs.filter((f) => f !== 'js/boot.js' && f !== 'js/main.js');
+  if (regs.filter((f) => f === 'js/boot.js').length !== 1) bad.push('js/boot.js must call register exactly once');
+  if (regs.filter((f) => f === 'js/main.js').length > 1) bad.push('js/main.js may hold only the one fallback register');
+  if (others.length) bad.push(`serviceWorker.register outside js/boot.js: ${others.join(', ')}`);
+  if (regs.includes('js/main.js') && !/if\s*\(\s*window\.ssBoot\s*\)/.test(read('js/main.js'))) bad.push('js/main.js registers sw.js without the window.ssBoot guard');
+  bad.length ? fail(name, bad.join('; ')) : pass(name);
+}
+
 // ---------------------------------------------------------------- (c3) no Google client secret
 {
   const name = 'no Google client secret in the repo';
