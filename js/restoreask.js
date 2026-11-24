@@ -26,19 +26,19 @@ export function askRestore(plan, saved, drive){
   const S = plan.songs, T = plan.sets, C = plan.colls, items = [], after = [];
   const add = counts(S.add, T.add, C.add); if(add) items.push(`It adds ${add}.`);
   const back = counts(S.back, T.back, C.back); if(back) items.push(`It brings back ${back} you deleted on this tablet.`);
-  const changed = [...S.changed.map(x => ({name:x.title, newer:x.newer})), ...T.changed.map(x => ({name:x.name, newer:x.newer}))]
+  const changed = [...S.changed.map(x => ({name:x.title, newer:x.newer})), ...T.changed.map(x => ({name:x.name, newer:x.newer})), ...C.changed.map(x => ({name:x.name, newer:x.newer}))]
     .sort((a, b) => (b.newer ? 1 : 0) - (a.newer ? 1 : 0));
-  const put = counts(S.changed.length, T.changed.length, C.changed);
+  const put = counts(S.changed.length, T.changed.length, C.changed.length);
   if(put){
-    const total = S.changed.length + T.changed.length + C.changed, newer = changed.filter(x => x.newer).length;
+    const total = changed.length, newer = changed.filter(x => x.newer).length;
     const said = !newer ? (changed.length ? ':' : '.')
       : total == 1 ? '. It was changed on this tablet after the backup was made:'
       : `. ${newer == 1 ? '1 of them was' : newer + ' of them were'} changed on this tablet after the backup was made:`;
     items.push(`It puts back the backup's version of ${put}${said}` + names(changed));
   }
-  const removed = [...S.removed.map(x => ({name:x.title})), ...T.removed.map(x => ({name:x.name}))];
-  const del = counts(S.removed.length, T.removed.length, C.removed);
-  if(del) items.push(`It deletes ${del}, because ${removed.length + C.removed == 1 ? 'it is' : 'they are'} deleted in the backup${removed.length ? ':' : '.'}` + names(removed));
+  const removed = [...S.removed.map(x => ({name:x.title})), ...T.removed.map(x => ({name:x.name})), ...C.removed.map(x => ({name:x.name}))];
+  const del = counts(S.removed.length, T.removed.length, C.removed.length);
+  if(del) items.push(`It deletes ${del}, because ${removed.length == 1 ? 'it is' : 'they are'} deleted in the backup:` + names(removed));
   const kc = plan.keep.length, ks = plan.keepSets.length, tooBig = kc > 0 && plan.keepBytes > keepLimits.maxBytes;
   if(!put && !del && !kc && !ks) after.push('Nothing on this tablet is replaced.');
   if(tooBig) after.push(`<b>The ${kc == 1 ? 'chart' : kc + ' charts'} this restore replaces (about ${mb(plan.keepBytes)}) ${kc == 1 ? 'is' : 'are'} too big to keep as ${kc == 1 ? 'a copy' : 'copies'} on this tablet.</b> If you restore, ${kc == 1 ? 'it and its marks are' : 'they and their marks are'} gone${ks ? ', and no setlist copy is kept' : ''}. To keep ${kc == 1 ? 'it' : 'them'}, Cancel and back up first.`);
@@ -56,9 +56,17 @@ export function askRestore(plan, saved, drive){
   unr(S.unreadable.filter(x => !x.marksOnly), 'it cannot be kept', 'they cannot be kept');
   unr(S.unreadable.filter(x => x.marksOnly), 'the marks drawn on it here cannot be kept', 'the marks drawn on them here cannot be kept');
   if(S.noPdf) after.push(`${S.noPdf == 1 ? '1 song on this tablet has' : S.noPdf + ' songs on this tablet have'} no chart stored here, so ${S.noPdf == 1 ? 'its' : 'their'} marks cannot be kept.`);
+  /* setlists this restore does not write over, but that play a song it replaces or deletes: never "stays as it is" */
+  const P = plan.staying, few = list => list.slice(0, 5).map(x => esc(cut(x.name))).join(', ') + (list.length > 5 ? ` and ${list.length - 5} more` : '');
+  const sl = (n, rest) => `${n == 1 ? '1 setlist that stays' : n + ' setlists that stay'} ${rest}`;
+  if(P.play.length) after.push(sl(P.play.length, `will play the backup's version of songs it puts back: ${few(P.play)}.`) + (kc && !tooBig ? ' The versions from this tablet are in Archived.' : ''));
+  if(P.drop.length) after.push(sl(P.drop.length, `will lose the songs the backup deletes, as deleting a song here does: ${few(P.drop.map(x => x.set))}.`));
+  if(P.keptFix.length) after.push(`${P.keptFix.length == 1 ? '1 earlier "(before restore)" setlist is' : P.keptFix.length + ' earlier "(before restore)" setlists are'} pointed at the kept charts, so ${P.keptFix.length == 1 ? 'it plays' : 'they play'} what ${P.keptFix.length == 1 ? 'it' : 'they'} played before.`);
   const stay = counts(S.stay, T.stay, C.stay), one = S.stay + T.stay + C.stay == 1;
   if(stay) after.push(`${stay} on this tablet ${one ? 'is' : 'are'} not in the backup. ${one ? 'It stays as it is' : 'They stay as they are'}.`);
-  if(drive) after.push('Google Drive: your next Sync brings back anything your other tablet changed after this backup was made.');
+  const kn = counts(S.newerKept, T.newerKept, C.newerKept), one2 = S.newerKept + T.newerKept + C.newerKept == 1;
+  if(kn) after.push(`${kn} on this tablet ${one2 ? 'is' : 'are'} kept, because you changed ${one2 ? 'it' : 'them'} after the backup deleted ${one2 ? 'it' : 'them'}.`);
+  if(drive) after.push('Google Drive: your next Sync brings back anything changed after this backup was made, on either tablet.');
   const when = madeOn(saved);
   return new Promise(res => {
     const m = modal(`<h2>Restore this backup?</h2><div class="restorebody">${when ? `<p>This backup was made on ${esc(when)}.</p>` : ''}` +

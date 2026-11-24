@@ -126,9 +126,21 @@ function model(before, F, after, {keep = [], keepSets = [], heldBy = {}} = {}){
     const st = before.sets[from], name = st.name + ' (before restore)', id = newSets.find(k => after.sets[k].name === name);
     if(!id){ errs.push(`no setlist "${name}"`); continue; }
     const g = after.sets[id], oldIds = new Set(st.items.filter(it => it.type === 'break').map(it => it.id));
-    want.sets[id] = {...st, id, name, created: g.created, updated: g.updated, items: st.items.map((it, i) => it.type === 'break' ? {...it, id: (g.items[i] || {}).id} : it.type === 'song' && copyOf[it.id] ? {...it, id: copyOf[it.id]} : it.type === 'song' && heldBy[it.id] ? {...it, id: heldBy[it.id]} : it)};
+    want.sets[id] = {...st, id, name, created: g.created, updated: g.updated, kept: 'restore', items: st.items.map((it, i) => it.type === 'break' ? {...it, id: (g.items[i] || {}).id} : it.type === 'song' && copyOf[it.id] ? {...it, id: copyOf[it.id]} : it.type === 'song' && heldBy[it.id] ? {...it, id: heldBy[it.id]} : it)};
     if(!(g.created > 0 && g.updated === g.created)) errs.push(`"${name}": created/updated ${g.created}/${g.updated}`);
     for(const it of g.items) if(it.type === 'break' && (oldIds.has(it.id) || it.id in after.songs || it.id in after.sets)) errs.push(`"${name}": the break keeps an id in use: ${it.id}`);
+  }
+  /* an earlier kept copy ("(before restore)", kept:'restore') that stays is pointed in place at the new copies (or holders) */
+  const inF = new Map(F.sets.map(x => [x.id, x]));
+  for(const st of Object.values(before.sets)){
+    if(st.deleted || st.kept !== 'restore') continue;
+    const b = inF.get(st.id);
+    if(b && !(b.deleted && st.updated > (Number(b.updated) || 0))) continue;
+    const items = st.items.map(it => it.type === 'song' && (copyOf[it.id] || heldBy[it.id]) ? {...it, id: copyOf[it.id] || heldBy[it.id]} : it);
+    if(JSON.stringify(items) === JSON.stringify(st.items)) continue;
+    const g = after.sets[st.id];
+    if(!(g && g.updated > st.updated)) errs.push(`the kept setlist "${st.name}" was not stamped when it was pointed at the new copies`);
+    want.sets[st.id] = {...st, items, updated: g && g.updated};
   }
   return [...errs, ...diff(want, after, '', [], 30)];
 }
@@ -290,7 +302,7 @@ async function loopNothing(ctx){
     await page.evaluate(() => localStorage.setItem('ss-last-sync', String(Date.now() - 60000)));
     await pick(page, file);
     const q = await answerRestore(page, 'x');
-    assert(/Google Drive: your next Sync brings back anything your other tablet changed after this backup was made\./.test(q || ''), 'the question on a tablet that syncs:\n' + q);
+    assert(/Google Drive: your next Sync brings back anything changed after this backup was made, on either tablet\./.test(q || ''), 'the question on a tablet that syncs:\n' + q);
     assert(await waitToast(page, /\S/) === 'Restore cancelled. Nothing was changed.', 'Cancel: ' + await page.locator('#toast').textContent());
     await unchanged('Cancel');
     await page.evaluate(() => localStorage.removeItem('ss-last-sync'));
@@ -656,6 +668,97 @@ async function loopKeptSetlist(ctx){
     } finally { await s.close(); } }
 }
 
+/* ---------- loop 8 ---------- */
+const setItems = st => st.items.map(it => it.type === 'break' ? 'break:' + it.name : it.id);
+async function loopStaying(ctx){
+  /* (s1) a setlist made here after the backup plays a song the restore replaces: it is left as it is (it plays the backup's version),
+     and the question names it instead of saying it stays as it is */
+  { const {s, file, data} = await seeded(ctx), page = s.page;
+    try{
+      await inStore(page, S => S.saveSet({id: 'rn', name: 'New Gig', items: [{type: 'song', id: 'rb'}, {type: 'song', id: 'ra'}], colls: [], created: Date.now()}));
+      await s.goto();
+      const b0 = await snapshot(page);
+      const {q} = await restoreOver(page, file, '(s1)');
+      assert(/1 setlist that stays will play the backup's version of songs it puts back: New Gig\. The versions from this tablet are in Archived\./.test(q), '(s1) the question does not name the setlist that will play the backup\'s version:\n' + q);
+      assert(!/setlists? on this tablet (is|are) not in the backup/.test(q), '(s1) the question says that setlist stays as it is:\n' + q);
+      const d = model(b0, data, await snapshot(page), KEEP2);
+      assert(!d.length, '(s1) the library differs from the model (New Gig untouched):\n    ' + d.slice(0, 12).join('\n    '));
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); } }
+
+  /* (s1b) the backup deletes the song: it leaves that setlist as a deletion here does (items filtered, stamped); a song changed here
+     after the backup deleted it is kept, said in plain words; a collection changed here is named */
+  { const {s, data, pdfs} = await seeded(ctx), page = s.page;
+    try{
+      await inStore(page, async S => {
+        await S.saveSet({id: 'rn', name: 'New Gig', items: [{type: 'song', id: 'rb'}, {type: 'song', id: 'ra'}], colls: [], created: Date.now()});
+        await S.putAll([{store: 'colls', key: 'rcoll', value: {id: 'rcoll', name: 'Band here', created: 1, updated: Date.now()}}]);
+        const c = await S.get('songs', 'rc'); c.artist = 'Edited after'; await S.saveSong(c);
+      });
+      await s.goto();
+      const F = {...data, songs: data.songs.map(x => x.id === 'rb' ? {id: 'rb', deleted: true, updated: Date.now() + 864e5} : x.id === 'rc' ? {id: 'rc', deleted: true, updated: 1700000000005} : x),
+        ink: {'ra:1': data.ink['ra:1']}, colls: [{id: 'rcoll', name: 'Band then', created: 1, updated: 2}]};
+      const f = await zipOf(F, pdfs, `over-s1b-${Date.now()}.zip`);
+      const b0 = await snapshot(page);
+      const {q} = await restoreOver(page, f, '(s1b)');
+      assert(/1 setlist that stays will lose the songs the backup deletes, as deleting a song here does: New Gig\./.test(q), '(s1b) the question:\n' + q);
+      assert(/1 song on this tablet is kept, because you changed it after the backup deleted it\./.test(q) && !/song on this tablet is not in the backup/.test(q), '(s1b) a song kept because it changed after the backup deleted it:\n' + q);
+      assert(/It puts back the backup's version of [^:]*1 collection[^:]*:/.test(q) && /Band here \(changed here later\)/.test(q), '(s1b) the collection put back is not named:\n' + q);
+      const a = await snapshot(page), rn = a.sets.rn;
+      assert(JSON.stringify(setItems(rn)) === '["ra"]' && rn.updated > b0.sets.rn.updated && rn.name === 'New Gig', '(s1b) the staying setlist after the backup deleted rb: ' + JSON.stringify(rn));
+      expectSame(b0.songs.rc, a.songs.rc, '(s1b) the song changed here after the backup deleted it');
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); } }
+
+  /* (s2) restore A keeps "Gig changed here (before restore)"; restore B then replaces ra, which that copy plays: the copy is pointed in
+     place at ra's new archived copy, so it still plays chart A, item by item; the ordinary setlist that plays ra is named */
+  { const {s, file, data, pdfs} = await seeded(ctx), page = s.page;
+    try{
+      await restoreOver(page, file, '(s2) A');
+      const s1 = await snapshot(page), [K] = setCopiesOf(s1);
+      assert(K && K.kept === 'restore', '(s2) the kept setlist copy is not marked kept:\'restore\': ' + JSON.stringify(K));
+      const playsOf = (snap, st) => st.items.map(it => it.type === 'break' ? 'break:' + it.name : JSON.stringify([snap.songs[it.id] && snap.songs[it.id].hash, ...[1, 2].map(p => ((snap.ink[it.id + ':' + p] || {}).strokes || []).filter(x => !x.deleted).map(x => x.id).sort().join())]));
+      const want = playsOf(s1, K);
+      const A2 = await makePdf('Ra newer chart', 1);
+      const FB = {...data, songs: data.songs.map(x => x.id === 'ra' ? {...x, hash: sha256(A2), updated: x.updated + 1} : x), ink: {'rb:1': data.ink['rb:1']}};
+      const fb = await zipOf(FB, {...pdfs, ra: A2}, `over-s2b-${Date.now()}.zip`);
+      const {q} = await restoreOver(page, fb, '(s2) B');
+      assert(/1 earlier "\(before restore\)" setlist is pointed at the kept charts, so it plays what it played before\./.test(q), '(s2) the question:\n' + q);
+      assert(/1 setlist that stays will play the backup's version of songs it puts back: Gig\./.test(q), '(s2) the ordinary setlist that plays ra is not named:\n' + q);
+      const s2 = await snapshot(page), K2 = s2.sets[K.id];
+      assert(JSON.stringify(playsOf(s2, K2)) === JSON.stringify(want), '(s2) the kept setlist no longer plays what it played:\n    before ' + JSON.stringify(want) + '\n    after  ' + JSON.stringify(playsOf(s2, K2)));
+      assert(K2.kept === 'restore' && K2.updated > K.updated && K2.name === K.name, '(s2) the kept setlist record: ' + JSON.stringify(K2));
+      /* the mark survives a backup round trip */
+      const bk = (await backupNow(page)).file;
+      await wipe(page); await s.goto();
+      await restoreZip(page, bk);
+      expectSame(s2, await snapshot(page), '(s2) after Back up -> wipe -> Restore (right) vs before (left)');
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); } }
+
+  /* (s3) a song here that would hold rb's chart, but whose PDF reads only in part, holds nothing: rb is kept as a copy */
+  { const s = await session(ctx), page = s.page;
+    try{
+      const {file, data} = await seedLibrary(page);
+      const X = await makePdf('Rb newer twin', 1), HX = sha256(X);
+      await putFile(page, 'rb', X); await putFile(page, 'rt', X);
+      await inStore(page, async (S, HX) => {
+        const b = await S.get('songs', 'rb');
+        await S.putAll([{store: 'songs', key: 'rb', value: {...b, pages: 1, hash: HX, updated: Date.now()}}, {store: 'ink', key: 'rb:1', delete: true},
+          {store: 'songs', key: 'rt', value: {...b, id: 'rt', song: 'Over twin', title: 'Over twin', pages: 1, hash: HX, updated: Date.now()}}]);
+      }, HX);
+      await s.goto();
+      const b0 = await snapshot(page);
+      await page.evaluate(() => { window.__failFull = ['rt']; });
+      const {q} = await restoreOver(page, file, '(s3)');
+      await page.evaluate(() => { window.__failFull = null; });
+      assert(/Charts and marks are kept: 1 chart from this tablet/.test(q), '(s3) a twin that reads only in part was trusted to hold rb:\n' + q);
+      const d = model(b0, data, await snapshot(page), {keep: ['rb']});
+      assert(!d.length, '(s3) the library differs from the model:\n    ' + d.slice(0, 12).join('\n    '));
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); } }
+}
+
 export const loops = [
   {name: 'roundtrip over 1: a backup restored over a library changed since it was made asks first, then gives back the backup plus exactly the copies a hand-written model expects (reload, backup, the same backup again)', run: loopModel},
   {name: 'roundtrip over 2: Cancel, Escape and Stop (while comparing, while keeping a chart) change nothing', run: loopNothing},
@@ -663,5 +766,6 @@ export const loops = [
   {name: 'roundtrip over 4: all or nothing with copies: a full tablet, a stroke or an edit in a second tab while asked, the size cap', run: loopAllOrNothing},
   {name: 'roundtrip over 6: the tablet\'s own state never blocks or multiplies: an unreadable chart, copies already held, a second setlist copy, a crop made here, an odd `updated`, "last backup" with records that stay', run: loopTablet},
   {name: 'roundtrip over 7: the kept setlist plays what it played (a twin holds the chart), a version 1 backup counts as older, a backup page for a song it does not list, a long setlist name', run: loopKeptSetlist},
+  {name: 'roundtrip over 8: setlists the restore does not write over: named when they will play the backup\'s version, a deleted song leaves them, an earlier kept copy is repointed and still plays what it played; a holder must read whole', run: loopStaying},
   {name: 'roundtrip over 5: a reload at any moment after Restore leaves the library as it was or whole, copies included', run: loopReload},
 ];

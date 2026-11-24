@@ -7,7 +7,7 @@
    some of its marks, or has it deleted and the deletion is not older than the song here) and no live song in the backup HOLDS it: has
    the same chart (PDF hash) and every live mark of every page, exactly. Restoring the same backup twice, or a backup newer than this
    tablet, therefore makes no copies. A setlist changed here after the backup was made is kept as "<name> (before restore)". */
-import {all, get, inkEntries, ensureHashes, upgradeInk, sha256} from './store.js';
+import {all, get, inkEntries, ensureHashes, upgradeInk, sha256, stamp} from './store.js';
 import {canon} from './syncmerge.js';
 import {unique} from './util.js';
 import {archivedCopyOps, oldVersion} from './newversion.js';
@@ -28,6 +28,10 @@ const sameRecord = (a, b, drop = ['updated']) => { const x = key(strip(a, drop))
 /* the live strokes of a page as one text, in no particular order (null: one cannot be compared) */
 const sig = list => { const k = list.map(key); return k.includes(null) ? null : k.sort().join('\n'); };
 const plain = msg => Object.assign(new Error(msg), {plain:msg});
+/* The putAll() check for a record or page as read: none, or no `updated` (an old bare-list page): it must still have none; a number or
+   text: exactly that; anything else (an object, NaN) cannot be compared once read again, so it is written over unguarded, as before. */
+export const ifUpdatedOf = u => u == null ? {ifUpdated:null} : (typeof u === 'string' || Number.isFinite(u)) ? {ifUpdated:u} : {};
+export const KEPT = 'restore';                       // a kept setlist copy carries kept:'restore', so a later restore keeps it true
 
 /* The name a kept setlist gets: its own, cut so the whole stays within 200 characters (never half a character), plus the tag, and
    " (n)" for the n-th copy of the same name (n > 1). */
@@ -66,17 +70,23 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
      here that stay (marks from this tablet) */
   const holders = new Map(), addHolder = (hash, h) => { const k = String(hash || '').toLowerCase(); if(!k) return; if(!holders.has(k)) holders.set(k, []); holders.get(k).push(h); };
   for(const [id, {hash}] of incoming) addHolder(hash, {id, crop:(bSongs.get(id) || {}).crop, page:p => pageThere(id + ':' + p)});
-  for(const r of here.songs.values()) if(stays(r, bSongs.get(r.id)) && await readable(r.id)) addHolder(r.hash, {id:r.id, crop:r.crop, page:p => pageHere(r.id + ':' + p)});
+  for(const r of here.songs.values()) if(stays(r, bSongs.get(r.id)) && await readable(r.id)) addHolder(r.hash, {id:r.id, tablet:true, crop:r.crop, page:p => pageHere(r.id + ':' + p)});
+  /* a song here is trusted as a holder only once its whole PDF has been read (once per song): a chart that reads only in part holds nothing */
+  const fullOk = new Map(), wholeFile = id => { if(!fullOk.has(id)) fullOk.set(id, (async () => { try{ const f = await get('files', id); if(!f) return false; await f.arrayBuffer(); return true; }catch(err){ return false; } })()); return fullOk.get(id); };
   /* held: the id of a song that stays after the restore with the same chart and every live mark (by full content; withCrop: and the
      same crop), the song itself first; null when none does */
   const holds = (h, t, marks, withCrop) => (!withCrop || key(h.crop === undefined ? null : h.crop) === key(t.crop === undefined ? null : t.crop)) &&
     [...marks].every(([p, list]) => { const there = new Set(h.page(p).map(key)); return list.every(s => { const k = key(s); return k !== null && there.has(k); }); });
-  const held = (t, marks, withCrop) => { if(!t.hash) return null; const hs = holders.get(String(t.hash).toLowerCase()) || [];
-    const h = hs.find(h => h.id === t.id && holds(h, t, marks, withCrop)) || hs.find(h => holds(h, t, marks, withCrop)); return h ? h.id : null; };
+  const held = async (t, marks, withCrop) => {
+    if(!t.hash) return null;
+    const hs = holders.get(String(t.hash).toLowerCase()) || [];
+    for(const h of [...hs.filter(h => h.id === t.id), ...hs.filter(h => h.id !== t.id)]) if(holds(h, t, marks, withCrop) && (!h.tablet || await wholeFile(h.id))) return h.id;
+    return null;
+  };
   const marksDiffer = (t, b, marks) => { for(let p = 1; p <= Math.max(num(t.pages), num(b.pages)); p++){ const a = sig(marks.get(p) || []); if(a === null || a !== sig(pageThere(b.id + ':' + p))) return true; } return false; };
   const inkNewer = t => { for(let p = 1; p <= num(t.pages); p++){ const k = t.id + ':' + p, raw = inkHere.get(k); if(raw && num(raw.updated) > num(ink[k] && ink[k].updated)) return true; } return false; };
 
-  const songs = {add:0, back:0, changed:[], removed:[], stay:0, noPdf:0, unreadable:[]}, keep = [], heldBy = new Map();
+  const songs = {add:0, back:0, changed:[], removed:[], stay:0, newerKept:0, noPdf:0, unreadable:[]}, keep = [], heldBy = new Map();
   let keepBytes = 0;
   /* The song here is lost unless a song that stays holds it (a crop changed here after the backup counts too: withCrop). A copy needs
      its stored PDF: none here, or one this tablet cannot read, means it cannot be kept (counted and said). Reading the tablet's own
@@ -84,7 +94,7 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
   /* heldBy: a song held by ANOTHER song (a Copy-song twin, an earlier copy): a kept setlist plays that one instead. chartSafe: the
      backup puts the same chart back under this id (only the marks are at risk). `unreadable`: ids whose full read failed at the keep step. */
   const lose = async (t, marks, withCrop = false, chartSafe = false) => {
-    const by = held(t, marks, withCrop);
+    const by = await held(t, marks, withCrop);
     if(by){ if(by !== t.id) heldBy.set(t.id, by); return false; }
     const cannot = () => { songs.unreadable.push({id:t.id, title:t.title, marksOnly:chartSafe}); return false; };
     if(unreadable.has(t.id)) return cannot();
@@ -98,7 +108,7 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
     const t = liveHere('songs', b.id);
     if(b.deleted){
       if(!t) continue;                                                // nothing here to delete
-      if(num(t.updated) > bU('songs', b)){ songs.stay++; continue; }   // newer here than the deletion: kept as it is
+      if(num(t.updated) > bU('songs', b)){ songs.newerKept++; continue; }   // changed here after the backup deleted it: kept as it is
       songs.removed.push({id:t.id, title:t.title, keep:await lose(t, marksHere(t))});
       continue;
     }
@@ -118,12 +128,12 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
   const plays = id => { const r = liveHere('songs', id); if(!r) return 'missing:' + id; const m = []; for(let p = 1; p <= num(r.pages); p++) m.push(sig(pageHere(id + ':' + p))); return key({h:String(r.hash || '').toLowerCase(), m}); };
   const itemsKey = st => key((Array.isArray(st.items) ? st.items : []).map(it => !it ? null : it.type === 'break' ? {type:'break', name:it.name} : it.type === 'song' ? {type:'song', plays:plays(it.id)} : it));
   const setNames = new Set([...here.sets.values()].filter(r => !r.deleted).map(r => r.name).concat(data.sets.filter(r => !r.deleted).map(r => r.name)));
-  const sets = {add:0, back:0, changed:[], removed:[], stay:0}, keepSets = [];
+  const sets = {add:0, back:0, changed:[], removed:[], stay:0, newerKept:0}, keepSets = [];
   for(const b of data.sets){
     const t = liveHere('sets', b.id);
     if(b.deleted){
       if(!t) continue;
-      if(num(t.updated) > bU('sets', b)){ sets.stay++; continue; }
+      if(num(t.updated) > bU('sets', b)){ sets.newerKept++; continue; }
       sets.removed.push({id:t.id, name:t.name});      // no copy: the deletion only wins over a setlist here that is not newer
       continue;
     }
@@ -143,19 +153,41 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
   }
   for(const t of here.sets.values()) if(!t.deleted && !bSets.has(t.id)) sets.stay++;
 
-  const colls = {add:0, back:0, changed:0, removed:0, stay:0};
+  /* Setlists the restore does not write over (not in the backup, changed here after the backup deleted them, or the same in the
+     backup) that play a song this restore replaces or deletes. An ordinary one is left as it is (it plays the backup's version) except
+     that a song the backup deletes leaves it, as deleting a song here does (js/deleteops.js); it is named in the question. An earlier
+     "(before restore)" copy (kept:'restore') is repointed in place to the new archived copy or the song holding the chart, so it still
+     plays exactly what it played. */
+  const removedIds = new Set(songs.removed.map(x => x.id)), touched = new Set([...keep.map(k => k.song.id), ...heldBy.keys()]);
+  const staying = {play:[], drop:[], keptFix:[]}, affected = new Set();
+  for(const r of here.sets.values()){
+    if(r.deleted) continue;
+    const b = bSets.get(r.id), untouched = stays(r, b), same = !!b && !b.deleted && sameRecord(r, b);
+    if(!untouched && !same) continue;
+    const ids = (Array.isArray(r.items) ? r.items : []).filter(it => it && it.type === 'song').map(it => it.id);
+    if(untouched && r.kept === KEPT){ if(ids.some(id => touched.has(id))){ staying.keptFix.push(r); affected.add(r.id); } continue; }
+    const drop = untouched ? ids.filter(id => removedIds.has(id)) : [];
+    if(drop.length){ staying.drop.push({set:r, ids:drop}); affected.add(r.id); }
+    if(ids.some(id => touched.has(id) && !removedIds.has(id))){ staying.play.push({id:r.id, name:r.name}); affected.add(r.id); }
+  }
+  /* "stays as it is" is never said of a setlist this restore changes or that will play another version */
+  const anyStays = songs.stay + sets.stay + songs.newerKept + sets.newerKept > 0;
+  sets.stay = [...here.sets.values()].filter(t => !t.deleted && !bSets.has(t.id) && !affected.has(t.id)).length;
+  sets.newerKept = [...here.sets.values()].filter(t => !t.deleted && bSets.has(t.id) && bSets.get(t.id).deleted && stays(t, bSets.get(t.id)) && !affected.has(t.id)).length;
+
+  const colls = {add:0, back:0, changed:[], removed:[], stay:0, newerKept:0};
   for(const b of data.colls || []){
     const t = liveHere('colls', b.id);
-    if(b.deleted){ if(t){ if(num(t.updated) > bU('colls', b)) colls.stay++; else colls.removed++; } continue; }
+    if(b.deleted){ if(t){ if(num(t.updated) > bU('colls', b)) colls.newerKept++; else colls.removed.push({id:t.id, name:t.name}); } continue; }
     if(!t){ if(here.colls.has(b.id)) colls.back++; else colls.add++; continue; }
-    if(!sameRecord(t, b)) colls.changed++;
+    if(!sameRecord(t, b)) colls.changed.push({id:t.id, name:t.name, newer:num(t.updated) > bU('colls', b)});
   }
   for(const t of here.colls.values()) if(!t.deleted && !bColls.has(t.id)) colls.stay++;
 
   const empty = ![...here.songs.values(), ...here.sets.values(), ...here.colls.values()].some(r => !r.deleted);
   /* the copies' fresh ids must not collide with a record here NOR with one the same write is about to put */
   const taken = new Set([...here.songs.keys(), ...here.sets.keys(), ...here.colls.keys(), ...data.songs.map(r => r.id), ...data.sets.map(r => r.id), ...(data.colls || []).map(r => r.id)]);
-  return {empty, songs, sets, colls, keep, keepBytes, keepSets, heldBy, here, inkHere, incoming, taken};
+  return {empty, songs, sets, colls, keep, keepBytes, keepSets, heldBy, staying, anyStays:anyStays || colls.stay + colls.newerKept > 0, here, inkHere, incoming, taken};
 }
 
 /* The copies' ops, after the person said Restore: each lost chart's stored bytes (read now, one at a time) as a new archived song with
@@ -185,13 +217,24 @@ export async function buildKeeps(plan, job, {copies = true} = {}){
   const t0 = Date.now(), setNames = [];
   for(const {set:st, name} of copies ? plan.keepSets : []){
     const c = json(st);
-    Object.assign(c, {id:unique(plan.taken), name, created:t0, updated:t0});
+    Object.assign(c, {id:unique(plan.taken), name, created:t0, updated:t0, kept:KEPT});
     c.items = (Array.isArray(c.items) ? c.items : []).map(it => !it ? it
       : it.type === 'break' ? {...it, id:unique(plan.taken)}                                    // fresh break ids, as Duplicate does
       : it.type === 'song' && copyOf.has(it.id) ? {...it, id:copyOf.get(it.id)}                 // the chart it played, now in Archived
       : it.type === 'song' && plan.heldBy.has(it.id) ? {...it, id:plan.heldBy.get(it.id)} : it); // or held by another song that stays
     ops.push({store:'sets', key:c.id, value:c, ifUpdated:null});
     setNames.push(c.name);
+  }
+  /* setlists that stay: a song the backup deletes leaves an ordinary one (as a deletion does); an earlier kept copy points at the new
+     archived copy or the holder. Stamped over the record as read and guarded: a change made meanwhile refuses the whole write. */
+  const playsNow = id => copyOf.get(id) || plan.heldBy.get(id) || id;
+  for(const {set:st, ids} of plan.staying.drop){
+    const gone = new Set(ids);
+    ops.push({store:'sets', key:st.id, value:{...st, items:st.items.filter(it => !(it && it.type === 'song' && gone.has(it.id))), updated:stamp(st)}, ...ifUpdatedOf(st.updated)});
+  }
+  for(const st of plan.staying.keptFix){
+    const items = st.items.map(it => it && it.type === 'song' && playsNow(it.id) !== it.id ? {...it, id:playsNow(it.id)} : it);
+    if(items.some((it, i) => it !== st.items[i])) ops.push({store:'sets', key:st.id, value:{...st, items, updated:stamp(st)}, ...ifUpdatedOf(st.updated)});
   }
   return {ops, charts, sets:setNames.length, setNames};
 }

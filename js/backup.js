@@ -3,7 +3,7 @@ import {explainError} from './errors.js';
 import {gigOf} from './gigdate.js';
 import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, ensureHashes, putAll, sha256, ID_RE} from './store.js';
 import {crc32, readCapped, directoryProblem, NOT_PACKAGE, TOO_MANY, mb} from './zipread.js';
-import {planRestore, buildKeeps} from './restoreplan.js';
+import {planRestore, buildKeeps, ifUpdatedOf} from './restoreplan.js';
 import {askRestore, restoredText, showRestored} from './restoreask.js';
 
 /* Backup version 3: library.json has songs, sets, colls (collections) and ink (with their deletion markers); files/<id>.pdf holds
@@ -186,7 +186,7 @@ export async function restoreFrom(f, render, {drive = false} = {}){
        over a record here that is not newer than it. */
     /* The check for a record or page as read: none, or no `updated` (an old bare-list page): it must still have none; a number or text:
        exactly that; anything else (an object, NaN) cannot be compared once read again, so it is written over unguarded, as before. */
-    const check = u => u == null ? {ifUpdated:null} : (typeof u === 'string' || Number.isFinite(u)) ? {ifUpdated:u} : {};
+    const check = ifUpdatedOf;
     const guard = (store, id) => { const r = here[store].get(id); return r ? check(r.updated) : {ifUpdated:null}; };
     const newerHere = (store, m) => { const r = here[store].get(m.id); return !!r && !r.deleted && (Number(r.updated) || 0) > (Number(m.updated) || 0); };
     /* the pages of a live song here that the restore writes over or deletes: one guarded delete per page (a stroke drawn meanwhile,
@@ -227,7 +227,7 @@ export async function restoreFrom(f, render, {drive = false} = {}){
     /* A restored library counts as backed up until the next change: the restored records are not "changes since the last backup".
        Only when the backup holds everything now here: not when copies were kept, nor when songs, setlists or collections that are
        not in the backup stay on this tablet (they are in no backup yet). */
-    if(!keep.charts && !keep.sets && !plan.songs.stay && !plan.sets.stay && !plan.colls.stay) try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}
+    if(!keep.charts && !keep.sets && !plan.anyStays) try{ localStorage.setItem(LAST_BACKUP, String(Date.now())); }catch(e){}
   }catch(err){
     return stop(err && err.name === 'StaleWrite' ? 'Something on this tablet changed while the restore was waiting. Nothing was changed. Try the restore again.'
       : explainError(err, 'Could not restore that backup. Nothing was changed.'));
