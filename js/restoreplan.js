@@ -61,8 +61,6 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
   const liveHere = (store, id) => { const r = here[store].get(id); return r && !r.deleted ? r : null; };
   /* What STAYS here as it is (the restore does not write over it): a live record whose id is not in the backup, or whose deletion in
      the backup is older than it. A chart and marks such a song holds are not lost either (an earlier "(before restore)" copy, say). */
-  /* a song here holds a chart only if its stored PDF is there and can be read (a record's hash alone is not the chart) */
-  const readable = async id => { try{ const f = await get('files', id); if(!f) return false; await f.slice(0, 1).arrayBuffer(); return true; }catch(err){ return false; } };
   const inBackup = list => new Map((list || []).map(r => [r.id, r]));
   const bSongs = inBackup(data.songs), bSets = inBackup(data.sets), bColls = inBackup(data.colls);
   const stays = (r, b) => !r.deleted && (!b || (b.deleted && num(r.updated) > num(b.updated)));
@@ -70,8 +68,9 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
      here that stay (marks from this tablet) */
   const holders = new Map(), addHolder = (hash, h) => { const k = String(hash || '').toLowerCase(); if(!k) return; if(!holders.has(k)) holders.set(k, []); holders.get(k).push(h); };
   for(const [id, {hash}] of incoming) addHolder(hash, {id, crop:(bSongs.get(id) || {}).crop, page:p => pageThere(id + ':' + p)});
-  for(const r of here.songs.values()) if(stays(r, bSongs.get(r.id)) && await readable(r.id)) addHolder(r.hash, {id:r.id, tablet:true, crop:r.crop, page:p => pageHere(r.id + ':' + p)});
-  /* a song here is trusted as a holder only once its whole PDF has been read (once per song): a chart that reads only in part holds nothing */
+  for(const r of here.songs.values()) if(stays(r, bSongs.get(r.id))) addHolder(r.hash, {id:r.id, tablet:true, crop:r.crop, page:p => pageHere(r.id + ':' + p)});
+  /* a song here is trusted as a holder only once its whole PDF has been read (once per song): a record's hash alone is not the chart,
+     and a PDF that is missing or reads only in part holds nothing */
   const fullOk = new Map(), wholeFile = id => { if(!fullOk.has(id)) fullOk.set(id, (async () => { try{ const f = await get('files', id); if(!f) return false; await f.arrayBuffer(); return true; }catch(err){ return false; } })()); return fullOk.get(id); };
   /* held: the id of a song that stays after the restore with the same chart and every live mark (by full content; withCrop: and the
      same crop), the song itself first; null when none does */
