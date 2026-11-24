@@ -377,6 +377,37 @@ print(json.dumps(out))`;
   } finally { await s.close(); }
 }},
 
+{name: 'hardening: a restore keeps the id of every mark of an old bare-list page when one is left out, keeps the good points of a line with one bad point, and drops (and counts) a note with text but no place', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    /* the id an old mark without one gets, worked out HERE from its position in the ORIGINAL list and its content (FNV-1a of its JSON) */
+    const oldId = (m, i) => { let h = 0x811c9dc5; for(const ch of JSON.stringify(m)){ h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return 'l' + i + '-' + h.toString(16).padStart(8, '0'); };
+    const bad = {t: 'pen', c: '#000000', w: .003, p: []};                                   // no points: cannot be drawn
+    const a = {t: 'pen', c: '#112233', w: .003, p: [[.1, .1], [.2, .2]]}, b = {t: 'hl', c: '#445566', w: .01, p: [[.3, .3], [.4, .4]]};
+    const oneBad = {id: 'pb', t: 'pen', c: '#112233', w: .003, p: [[.1, .1], ['x', .2], [.3, .3]], updated: 5};          // one bad point among good ones
+    const goodPen = {id: 'pg', t: 'pen', c: '#112233', w: .003, p: [[.5, .5], [.6, .6]], updated: 5};
+    const noPlace = {id: 'np', t: 'text', c: '#112233', text: 'note with no place', updated: 5};                           // text, but no x, y or size
+    const okNote = {id: 'nk', t: 'text', c: '#112233', x: .2, y: .2, size: .02, text: 'fine', updated: 5};
+    const file = await zipFile({version: 1, songs: [liveSong('v1a', 'v1a'), liveSong('v1b', 'v1b')],
+      ink: {'v1a:1': [bad, a, b], 'v1b:1': {updated: 5, strokes: [oneBad, goodPen, noPlace, okNote]}}}, {v1a: ONE, v1b: ONE});
+    const msg = await restore(page, file, /^Restored/);
+    assert(msg === 'Restored 2 songs and 0 setlists', 'restore toast: ' + JSON.stringify(msg));
+    assert(/2 marks that could not be read were left out\./.test(lastKept || ''), 'the count should be 2 (the line with no points, the note with no place), not the line with one bad point: ' + JSON.stringify(lastKept));
+    const ink = await idbAll(page, 'ink');
+    /* (1) the two good marks of the bare list have the ids they get at their ORIGINAL places (1 and 2), as on every other tablet */
+    const ids = ink['v1a:1'].strokes.map(x => x.id);
+    assert(JSON.stringify(ids) === JSON.stringify([oldId(a, 1), oldId(b, 2)]), `the bare-list ids are ${JSON.stringify(ids)}, want ${JSON.stringify([oldId(a, 1), oldId(b, 2)])} (a mark left out must not move the others' ids)`);
+    /* (2) the line keeps its good points and is not counted */
+    const kept = Object.fromEntries(ink['v1b:1'].strokes.map(x => [x.id, x]));
+    assert(kept.pb && JSON.stringify(kept.pb.p) === JSON.stringify([[.1, .1], [.3, .3]]), 'the line with one bad point holds ' + JSON.stringify(kept.pb && kept.pb.p) + ', want its two good points');
+    /* (4) the note with text but no place is gone; the good ones stay */
+    assert(!kept.np, 'a note with text but no x, y or size was kept');
+    assert(kept.pg && kept.nk && Object.keys(kept).sort().join() === 'nk,pb,pg', 'page v1b:1 holds ' + Object.keys(kept).sort().join() + ', want nk,pb,pg');
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
 {name: 'hardening: a backup always restores (hash from the stored PDF; a song without a PDF is left out and reported)', async run(ctx){
   const s = await ctx.session(), page = s.page;
   try{

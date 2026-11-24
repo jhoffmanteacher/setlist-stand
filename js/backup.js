@@ -1,7 +1,7 @@
 import {toast, saveBlob, hooks, busy} from './util.js';
 import {explainError} from './errors.js';
 import {gigOf} from './gigdate.js';
-import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, ensureHashes, putAll, sha256, ID_RE} from './store.js';
+import {get, all, load, state, upgradeSong, upgradeSet, upgradeInk, cleanMark, oldId, ensureHashes, putAll, sha256, ID_RE} from './store.js';
 import {crc32, readCapped, directoryProblem, NOT_PACKAGE, TOO_MANY, mb} from './zipread.js';
 import {planRestore, buildKeeps, ifUpdatedOf} from './restoreplan.js';
 import {askRestore, restoredText, showRestored} from './restoreask.js';
@@ -360,26 +360,22 @@ export function inkProblem(k, v){
    string; a pen or highlighter line needs a list of points that are each two numbers; an erase marker is kept as it is. A colour
    that is not "#rrggbb" is replaced by black (the mark stays). Works on the page's own list in place, in either form (a bare list or
    {updated, strokes}). Sync checks the same things its own way (inkShapeProblem in js/syncink.js) and refuses a page instead. */
-const fin = v => typeof v === 'number' && Number.isFinite(v);
-function drawable(s){
-  if(!isObj(s)) return false;
-  if(s.deleted) return true;
-  if(s.t === 'text') return typeof s.text === 'string';
-  return Array.isArray(s.p) && s.p.length > 0 && s.p.every(pt => Array.isArray(pt) && pt.length >= 2 && fin(pt[0]) && fin(pt[1]));
-}
 export function cleanInk(data){
   const live = new Set(data.songs.filter(s => !s.deleted).map(s => s.id));
   let dropped = 0;
   for(const [k, v] of Object.entries(data.ink || {})){
     if(!live.has(k.split(':')[0])) continue;
-    const list = Array.isArray(v) ? v : isObj(v) && Array.isArray(v.strokes) ? v.strokes : null;
+    const bare = Array.isArray(v);
+    const list = bare ? v : isObj(v) && Array.isArray(v.strokes) ? v.strokes : null;
     if(!list) continue;
     const kept = [];
-    for(const s of list){
-      if(!isObj(s)){ kept.push(s); continue; }            // not a record: upgradeInk() drops it later, as it always did
-      if(!drawable(s)){ dropped++; continue; }
-      kept.push(!s.deleted && !/^#[0-9a-fA-F]{6}$/.test(String(s.c)) ? {...s, c:'#000000'} : s);
-    }
+    list.forEach((s, i) => {
+      if(!isObj(s)){ kept.push(s); return; }               // not a record: upgradeInk() drops it later, as it always did
+      /* an old bare list gets its ids from each mark's place and content (oldId): fix them now, before a mark is taken out or its
+         colour changed, so every mark keeps the id every other tablet gives it */
+      const m = cleanMark(bare && !s.id ? {...s, id:oldId(s, i)} : s);
+      if(!m) dropped++; else kept.push(m);
+    });
     list.splice(0, list.length, ...kept);
   }
   return dropped;

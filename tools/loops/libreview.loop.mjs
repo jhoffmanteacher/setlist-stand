@@ -130,18 +130,48 @@ async function loopUndo(ctx){
     assert((await setItems(page, 'us')).join() === 'brk:ubrk:Set break,ub,uc', 'Undo after two Removes: ' + (await setItems(page, 'us')).join());
     await sleep(450);
 
+    /* a dialog opened while Undo shows takes the Undo away (the dialog saves the setlist it opened with): a tap where Undo was does
+       nothing; adding Bravo back through Add songs leaves it there once, and nothing else changes */
+    await clearToast(page);
+    await rows(page).nth(1).locator('[data-rm]').click();
+    await waitToast(page, /^Removed Bravo - Two\.\s*Undo$/);
+    const undoAt = await page.locator('#toast .toastact').boundingBox();
+    await page.click('#view [data-addto]');
+    await page.locator('.modal .pick').waitFor();
+    assert(!(await page.locator('#toast .toastact').count()), 'the Undo button is still there while Add songs is open');
+    await page.mouse.click(undoAt.x + undoAt.width / 2, undoAt.y + undoAt.height / 2);
+    await sleep(400);
+    assert(await page.locator('.modal .pick').count() === 1, 'a tap where Undo was closed Add songs');
+    assert((await setItems(page, 'us')).join() === 'brk:ubrk:Set break,uc', 'a tap where Undo was (Add songs open) changed the setlist: ' + (await setItems(page, 'us')).join());
+    await page.locator('.modal .pick label', {hasText: 'Bravo'}).locator('input').check();
+    await page.click('.modal [data-ok]');
+    await noModal(page);
+    await page.waitForFunction(() => document.querySelectorAll('#items > li').length === 3, null, {timeout: 5000});
+    await sleep(300);
+    assert((await setItems(page, 'us')).join() === 'brk:ubrk:Set break,uc,ub', 'Add songs after a Remove: ' + (await setItems(page, 'us')).join());
+    assert(!(await page.locator('#toast .toastact').count()), 'the Undo button came back after Add songs');
+    await sleep(450);
+
+    /* with no dialog open, Undo still works */
+    await rows(page).nth(2).locator('[data-rm]').click();
+    await waitToast(page, /^Removed Bravo/);
+    await tapUndo(page, 'Undo with no dialog');
+    await page.waitForFunction(() => document.querySelectorAll('#items > li').length === 3, null, {timeout: 5000});
+    assert((await setItems(page, 'us')).join() === 'brk:ubrk:Set break,uc,ub', 'Undo with no dialog open: ' + (await setItems(page, 'us')).join());
+    await sleep(450);
+
     /* after 6 seconds the Undo is gone and the Remove stands */
     await rows(page).nth(1).locator('[data-rm]').click();
-    await waitToast(page, /^Removed Bravo/);
+    await waitToast(page, /^Removed Charlie/);
     await sleep(5000);
     assert(await page.locator('#toast .toastact').count() === 1, 'the Undo button went before 6 seconds');
     await sleep(1500);
     assert(!(await page.locator('#toast .toastact').count()) && !(await page.locator('#toast.on').count()), 'the Undo button is still there after 6 seconds');
-    assert((await setItems(page, 'us')).join() === 'brk:ubrk:Set break,uc', 'the Remove did not stand: ' + (await setItems(page, 'us')).join());
+    assert((await setItems(page, 'us')).join() === 'brk:ubrk:Set break,ub', 'the Remove did not stand: ' + (await setItems(page, 'us')).join());
 
     /* a refused Undo save (tablet full): says so, and the setlist stays as the Remove left it */
     await rows(page).nth(1).locator('[data-rm]').click();
-    await waitToast(page, /^Removed Charlie/);
+    await waitToast(page, /^Removed Bravo/);
     const before = (await setItems(page, 'us')).join();
     await page.evaluate(() => { window.__fail = 'sets'; });
     await tapUndo(page, 'a refused Undo');
@@ -166,6 +196,7 @@ async function loopDoubleAdd(ctx){
     const tick = async title => { await page.locator('.modal .pick label', {hasText: title}).locator('input').check(); };
     const centre = sel => page.evaluate(sel => { const b = document.querySelector(sel).getBoundingClientRect(); return {x: b.left + b.width / 2, y: b.top + b.height / 2}; }, sel);
 
+    let lastAdd = null;
     for(const how of ['mouse', 'touch']){
       const n0 = (await setItems(page, 'ds')).length;
       /* where the picker's Add button sits; then the page is scrolled so a row's Remove is under that very point */
@@ -181,7 +212,7 @@ async function loopDoubleAdd(ctx){
       }, add);
       assert(!under, 'test setup: ' + under);
       await pickOpen(); await tick('Delta');
-      const add2 = await centre('.modal [data-ok]');
+      const add2 = await centre('.modal [data-ok]'); lastAdd = add;
       assert(Math.abs(add2.x - add.x) < 2 && Math.abs(add2.y - add.y) < 2, 'the picker moved between openings');
 
       const t0 = Date.now();
@@ -202,6 +233,24 @@ async function loopDoubleAdd(ctx){
         const S = await import(new URL('js/store.js', location.href).href), U = await import(new URL('js/util.js', location.href).href);
         const st = (await S.get('sets', 'ds')); await S.saveSet({...st, items: st.items.slice(0, -1)}); await S.load(); U.hooks.render();
       });
+      await sleep(450);
+    }
+
+    /* a third tap is meant: Add closes the picker, a tap elsewhere ends the guard, and a tap back on the same spot then removes that row */
+    {
+      const add = lastAdd, n2 = (await setItems(page, 'ds')).length;
+      const other = await page.evaluate(({y}) => { const b = [...document.querySelectorAll('#items .num')].map(n => n.getBoundingClientRect()).find(b => Math.abs(b.top + b.height / 2 - y) > 80 && b.top > 0 && b.bottom < innerHeight); return b && {x: b.left + b.width / 2, y: b.top + b.height / 2}; }, add);
+      assert(other && await page.evaluate(({x, y}) => !!document.elementFromPoint(x, y)?.closest('[data-rm]'), add), 'test setup: no row number away from the Add button, or no Remove under it');
+      await pickOpen(); await tick('Delta');
+      const t0 = Date.now();
+      await page.mouse.click(add.x, add.y);
+      await page.waitForFunction(n => document.querySelectorAll('#items > li').length === n, n2 + 1, {timeout: 3000, polling: 'raf'});
+      await page.mouse.click(other.x, other.y);
+      await page.mouse.click(add.x, add.y);
+      const gap = Date.now() - t0;
+      assert(gap < 380, `the third tap came ${gap} ms after the first (a slow machine; run it again)`);
+      await page.waitForFunction(n => document.querySelectorAll('#items > li').length === n, n2, {timeout: 3000})
+        .catch(async () => { throw new Error(`a tap back on the Add button's spot after a tap elsewhere was swallowed (${(await setItems(page, 'ds')).length} items, expected ${n2})`); });
       await sleep(450);
     }
 
@@ -423,9 +472,42 @@ async function loopTonight(ctx){
   } finally { await s.close(); }
 }
 
+/* ---------- libreview 5: a double tap on the song menu's "Add to setlist…" adds the song to no setlist ---------- */
+async function loopDoubleAddToSet(ctx){
+  const songs = [{id: 'qa', song: 'Alpha', artist: 'One'}, {id: 'qb', song: 'Bravo', artist: 'Two'}];
+  const sets = Array.from({length: 6}, (_, i) => ({id: 'q' + i, name: 'Setlist ' + (i + 1), items: [{type: 'song', id: 'qb'}], created: T + i}));
+  const f = await backup('doubleset', {songs, sets});
+  const s = await session(ctx, {viewport: {width: 412, height: 915}, hasTouch: true});
+  try{
+    const {page} = s;
+    await restoreZip(page, f);
+    await page.click('#tLib');
+    const sets0 = JSON.stringify(await idbAll(page, 'sets'));
+    for(const how of ['mouse', 'touch']){
+      const box = await openSongMenu(page, 'qa');
+      const b = await box.locator('[data-item="addset"]').boundingBox(), x = b.x + b.width / 2, y = b.y + b.height / 2;
+      const t0 = Date.now();
+      if(how === 'mouse') await page.mouse.click(x, y); else await page.touchscreen.tap(x, y);
+      await page.locator('.modal.addtoset').waitFor({timeout: 3000});
+      const under = await page.evaluate(({x, y}) => { const e = document.elementFromPoint(x, y)?.closest('[data-addset]'); return e ? e.dataset.addset : ''; }, {x, y});
+      if(how === 'mouse') await page.mouse.click(x, y); else await page.touchscreen.tap(x, y);
+      const gap = Date.now() - t0;
+      assert(under, 'test setup: no setlist button under the menu\'s Add to setlist item');
+      assert(gap < 380, `the second tap came ${gap} ms after the first (a slow machine; run it again)`);
+      await sleep(900);
+      assert(JSON.stringify(await idbAll(page, 'sets')) === sets0, `${how}: a double tap on Add to setlist… added the song to a setlist (${under} was under the second tap)`);
+      assert(await page.locator('.modal.addtoset').count() === 1, `${how}: the setlist list closed by itself`);
+      assert(!(await page.locator('.modal.addtoset [data-addset]:disabled').count()), `${how}: the setlist buttons stay greyed`);
+      await page.keyboard.press('Escape'); await noModal(page); await sleep(450);
+    }
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'libreview 1: setlist Remove offers Undo for 6 s (Tab + Enter and tap), it puts the song or break back at its place, a second Remove is the one undone, a refused Undo says so', run: loopUndo},
   {name: 'libreview 2: a double tap on the picker\'s Add N (412 px, mouse and touch) adds once and removes nothing behind it; a tap elsewhere right after a dialog closes works', run: loopDoubleAdd},
   {name: 'libreview 3: Delete names the setlists and offers Archive instead; Add to setlist; archived-only search; Edit with no title; Copy version clash; collection delete read fails; all archived', run: loopSongFixes},
+  {name: 'libreview 5: a double tap on a song menu\'s Add to setlist… (412 px, 6 setlists, mouse and touch) adds the song to no setlist', run: loopDoubleAddToSet},
   {name: 'libreview 4: the Tonight line on the Library and the Setlists list: first by name, Play, and N more, empty, none', run: loopTonight},
 ];

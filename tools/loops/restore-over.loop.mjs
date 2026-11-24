@@ -11,7 +11,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {TMP, JSZip, PDFLib, PDFDocument, assert, sleep, sha256, idbAll, snapshot, normalise, diff, backupNow, wipe, restoreZip, answerRestore, closeRestored} from './harness.mjs';
+import {FIX, TMP, JSZip, PDFLib, PDFDocument, assert, sleep, sha256, idbAll, snapshot, normalise, diff, backupNow, wipe, restoreZip, answerRestore, closeRestored} from './harness.mjs';
 import {songDelete} from './songrow.mjs';
 
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -801,6 +801,47 @@ async function loopStaying(ctx){
     } finally { await s.close(); } }
 }
 
+/* ---------- loop 9: a tablet that already holds an undrawable mark ---------- */
+async function loopBadMarkHere(ctx){
+  const s = await session(ctx), page = s.page;
+  try{
+    await page.click('#tLib');
+    await page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 1, null, {timeout: 15000});
+    const id = Object.keys(await idbAll(page, 'songs'))[0];
+    /* marks that can never be drawn, as a damaged backup or an older version left them: a line with no points, a note with no place, and a
+       colour print cannot read (drawn black) beside one good line */
+    const good = pen('g1', .1, 5);
+    const marks = [good, {id: 'bp', t: 'pen', c: '#1a1a1a', w: .003, p: [], updated: 5}, {id: 'bn', t: 'text', c: '#1a1a1a', text: 'no place', updated: 5}, {...pen('bc', .3, 5), c: 'red'}];
+    await inStore(page, (S, a) => S.putAll([{store: 'ink', key: a.id + ':1', value: {updated: 5, strokes: a.marks}}]), {id, marks});
+    const before = await snapshot(page);
+    /* its own backup, restored over it: the tablet and the backup hold the same marks, so nothing is lost and nothing is kept as a copy */
+    const file = (await backupNow(page)).file;
+    await pick(page, file);
+    const q = await answerRestore(page, 'ok');
+    assert(q, 'a restore over a library that is not empty asks');
+    assert(!/Charts and marks are kept|Archived|are kept/.test(q), 'the question offers to keep a copy because this tablet holds a mark that cannot be drawn:\n' + q);
+    const msg = await waitToast(page, /^Restored|Nothing was changed/, 60000);
+    assert(/^Restored/.test(msg), msg);
+    const kept = await closeRestored(page);
+    assert(!/Archived|kept/.test(kept || ''), 'the result says something was kept: ' + JSON.stringify(kept));
+    assert(/2 marks that could not be read were left out\./.test(kept || ''), 'the result does not count the two marks left out: ' + JSON.stringify(kept));
+    const after = await snapshot(page);
+    assert(copiesOf(after).length === 0 && setCopiesOf(after).length === 0, 'a copy was kept: ' + JSON.stringify(copiesOf(after).map(x => x.version)));
+    assert(Object.keys(after.songs).length === Object.keys(before.songs).length, 'the number of songs changed');
+    const page1 = (await idbAll(page, 'ink'))[id + ':1'].strokes;
+    assert(page1.map(x => x.id).sort().join() === 'bc,g1', 'the page holds ' + page1.map(x => x.id).sort().join() + ', want bc,g1 (the two that cannot be drawn left out)');
+    assert(page1.find(x => x.id === 'bc').c === '#000000' && JSON.stringify(page1.find(x => x.id === 'g1')) === JSON.stringify(good), 'the colour that print cannot read is not black, or the good line changed');
+    /* restoring the same backup again: still no copy */
+    await pick(page, file);
+    assert(await answerRestore(page, 'ok'), 'the second restore asks');
+    await waitToast(page, /^Restored|Nothing was changed/, 60000);
+    await closeRestored(page);
+    assert(copiesOf(await snapshot(page)).length === 0, 'a copy appeared at the second restore');
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'roundtrip over 1: a backup restored over a library changed since it was made asks first, then gives back the backup plus exactly the copies a hand-written model expects (reload, backup, the same backup again)', run: loopModel},
   {name: 'roundtrip over 2: Cancel, Escape and Stop (while comparing, while keeping a chart) change nothing', run: loopNothing},
@@ -809,5 +850,6 @@ export const loops = [
   {name: 'roundtrip over 6: the tablet\'s own state never blocks or multiplies: an unreadable chart, copies already held, a second setlist copy, a crop made here, an odd `updated`, "last backup" with records that stay', run: loopTablet},
   {name: 'roundtrip over 7: the kept setlist plays what it played (a twin holds the chart), a version 1 backup counts as older, a backup page for a song it does not list, a long setlist name', run: loopKeptSetlist},
   {name: 'roundtrip over 8: setlists the restore does not write over: named when they will play the backup\'s version, a deleted song leaves them, an earlier kept copy is repointed and still plays what it played; a holder must read whole', run: loopStaying},
+  {name: 'roundtrip over 9: a tablet that already holds a mark that cannot be drawn gets no question about a copy and keeps none when it restores its own backup', run: loopBadMarkHere},
   {name: 'roundtrip over 5: a reload at any moment after Restore leaves the library as it was or whole, copies included', run: loopReload},
 ];

@@ -57,7 +57,8 @@ export function toast(m, {action = '', run = null, ms = 0} = {}){
 /* The second tap of a double tap must not land on the page behind a dialog the first tap closed (at 412 px the song picker's Add
    button sits over a setlist row's Remove). When a dialog is closed by a real tap (modal()'s remove, inside that tap's event), a real
    pointer, mouse or touch event within QUIET ms and NEAR px of that tap, and outside any dialog, is swallowed with the rest of its gesture.
-   A tap anywhere else, a key, and a click made by code (a file chooser opened from a menu) are never held back. menuBox's item runs in
+   A tap anywhere else (which also ends the guard: a third tap is meant), a key, and a click made by code (a file chooser opened from a
+   menu) are never held back. menuBox's item runs in
    the tap that chose it, while that tap is still being handled, so this never touches it. */
 const QUIET = 400, NEAR = 40;
 let guard = null, eatUntil = 0, eatAt = null, eatenAt = 0;
@@ -73,7 +74,11 @@ function armGuard(){
 }
 const pt = e => e.changedTouches && e.changedTouches[0] ? e.changedTouches[0] : e;
 const eating = () => { if(eaten.size && performance.now() - eatenAt > 3000) eaten.clear(); return eaten.size > 0; };
-addEventListener('pointerdown', e => { if(e.isTrusted && guarded(e.clientX, e.clientY, e.target)){ eating(); eaten.add(e.pointerId); eatenAt = performance.now(); eat(e); } }, true);
+addEventListener('pointerdown', e => {
+  if(!e.isTrusted) return;
+  if(guarded(e.clientX, e.clientY, e.target)){ eating(); eaten.add(e.pointerId); eatenAt = performance.now(); eat(e); }
+  else guard = null;                     // any other tap first: the next one is not the second half of a double tap
+}, true);
 for(const type of ['pointermove', 'pointerup', 'pointercancel']) addEventListener(type, e => {
   if(!eating() || !eaten.has(e.pointerId)) return;
   if(type !== 'pointermove'){ eaten.delete(e.pointerId); eatUntil = performance.now() + 800; eatAt = {x: e.clientX, y: e.clientY}; }
@@ -112,6 +117,7 @@ export function modal(html){
   if(h){ h.id = h.id || hid; box.setAttribute('aria-labelledby', h.id); }
   document.body.append(m);
   setBehind(true);
+  if(document.querySelector('#toast .toastact')) hideToast();   // Undo sits above dialogs and a dialog's save writes the setlist it opened with: take the button away
   const first = box.querySelector('input:not([type=hidden]), textarea, select');
   (first || box).focus();
   m.addEventListener('keydown', e => {

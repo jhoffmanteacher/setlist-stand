@@ -49,6 +49,9 @@ export function addToSetlist(id){
       `<button class="menuitem" data-addset="${esc(st.id)}"><b>${esc(st.name)}</b><span>${gigOf(st) ? esc(gigShort(gigOf(st))) + ' &middot; ' : ''}${count(st)}${liveItems(st).some(it => it.id === id) ? ' &middot; already in it' : ''}</span></button>`).join('')}</div>
       <div class="btns"><button data-x>Cancel</button></div>`);
     m.classList.add('addtoset');
+    const picks = [...m.querySelectorAll('[data-addset]')];     // a quick double tap on the menu item must not land on a setlist here
+    for(const b of picks) b.disabled = true;
+    setTimeout(() => { for(const b of picks) b.disabled = false; }, 400);
     m.querySelector('[data-x]').onclick = () => { m.remove(); res(false); };
     for(const b of m.querySelectorAll('[data-addset]')) b.onclick = async () => {
       m.remove();

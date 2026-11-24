@@ -7,7 +7,7 @@
    some of its marks, or has it deleted and the deletion is not older than the song here) and no live song in the backup HOLDS it: has
    the same chart (PDF hash) and every live mark of every page, exactly. Restoring the same backup twice, or a backup newer than this
    tablet, therefore makes no copies. A setlist changed here after the backup was made is kept as "<name> (before restore)". */
-import {all, get, inkEntries, ensureHashes, upgradeInk, sha256, stamp} from './store.js';
+import {all, get, inkEntries, ensureHashes, upgradeInk, cleanMark, sha256, stamp} from './store.js';
 import {canon} from './syncmerge.js';
 import {unique} from './util.js';
 import {archivedCopyOps, oldVersion} from './newversion.js';
@@ -55,9 +55,11 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
   const byId = list => new Map(list.map(r => [r.id, r]));
   const here = {songs:byId(await all('songs')), sets:byId(await all('sets')), colls:byId(await all('colls'))};
   const inkHere = new Map(await inkEntries()), ink = data.ink || {};
-  const pageHere = k => live(upgradeInk(inkHere.get(k)).record.strokes);
+  const rawHere = k => live(upgradeInk(inkHere.get(k)).record.strokes);
+  const pageHere = k => rawHere(k).map(cleanMark).filter(Boolean);     // the same clean-up as the backup's pages (js/store.js cleanMark), so the two sides compare alike (a copy that is KEPT holds the marks as they are: marksRaw)
   const pageThere = k => live(upgradeInk(ink[k]).record.strokes);
   const marksHere = t => { const m = new Map(); for(let p = 1; p <= num(t.pages); p++){ const l = pageHere(t.id + ':' + p); if(l.length) m.set(p, l); } return m; };
+  const marksRaw = t => { const m = new Map(); for(let p = 1; p <= num(t.pages); p++){ const l = rawHere(t.id + ':' + p); if(l.length) m.set(p, l); } return m; };
   const liveHere = (store, id) => { const r = here[store].get(id); return r && !r.deleted ? r : null; };
   /* What STAYS here as it is (the restore does not write over it): a live record whose id is not in the backup, or whose deletion in
      the backup is older than it. A chart and marks such a song holds are not lost either (an earlier "(before restore)" copy, say). */
@@ -101,7 +103,7 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
     let f;
     try{ f = await get('files', t.id); if(f) await f.slice(0, 1).arrayBuffer(); }catch(err){ return cannot(); }
     if(!f){ if(marks.size) songs.noPdf++; return false; }
-    keep.push({song:t, marks}); keepBytes += num(f.size);
+    keep.push({song:t, marks:marksRaw(t)}); keepBytes += num(f.size);
     return true;
   };
   for(const b of data.songs){

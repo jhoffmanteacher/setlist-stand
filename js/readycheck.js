@@ -104,7 +104,8 @@ function summary(total, res, stopped){
   }else{
     if(missing.length) parts.push(`No PDF on this tablet for ${names(missing)}.`);
     if(bad.length) parts.push(`${bad.length === 1 ? 'This chart' : 'These charts'} will not open: ${names(bad)}.`);
-    parts.push('Give each one its PDF again with New version (the song’s ⋯ menu in the Library), or restore a backup.');
+    if(res.length > 1 && bad.length === res.length) parts.push('Every chart failed, so the app\u2019s own copy may be incomplete: open Setlist Stand with internet for a minute and check again.');
+    else parts.push('Give each one its PDF again with New version (the song’s ⋯ menu in the Library), or restore a backup.');
   }
   return parts.join(' ');
 }

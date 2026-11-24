@@ -277,7 +277,7 @@ export const inkRecord = (strokes, prev) => ({...(isObj(prev) ? prev : {}), upda
 const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 /* The id an old stroke without one gets: from its place in the list and its content (FNV-1a of its JSON), so every tablet and every
    restore of the same old page gives it the SAME id (a random one would make the page double when two tablets sync it). */
-const oldId = (s, i) => { let h = 0x811c9dc5; for(const ch of JSON.stringify(s)){ h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return 'l' + i + '-' + h.toString(16).padStart(8, '0'); };
+export const oldId = (s, i) => { let h = 0x811c9dc5; for(const ch of JSON.stringify(s)){ h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return 'l' + i + '-' + h.toString(16).padStart(8, '0'); };
 export function upgradeInk(v){
   if(!v) return {record:{updated:0, strokes:[]}, changed:false};
   if(Array.isArray(v)){
@@ -288,6 +288,27 @@ export function upgradeInk(v){
   const strokes = v.strokes.filter(isObj), updated = Number(v.updated) || 0;
   if(strokes.length === v.strokes.length && updated === v.updated) return {record:v, changed:false};
   return {record:{...v, updated, strokes}, changed:true};
+}
+/* A mark that cannot be DRAWN is taken out and one whose colour is not "#rrggbb" is drawn black (the mark stays). cleanMark(s) returns
+   the mark as it should be kept, or null when nothing of it can be drawn: a note needs a text string and numbers for x, y and size; a pen
+   or highlighter line keeps its good points (a point is two numbers) and goes only when none is left; an erase marker is kept as it is.
+   Used by restore (js/backup.js) on the backup's pages and by the restore question (js/restoreplan.js) on this tablet's, so both sides of
+   the comparison are the same. */
+const finite = v => typeof v === 'number' && Number.isFinite(v);
+export function cleanMark(s){
+  if(!isObj(s)) return null;
+  if(s.deleted) return s;
+  let out = s;
+  if(s.t === 'text'){
+    if(typeof s.text !== 'string' || !finite(s.x) || !finite(s.y) || !finite(s.size)) return null;
+  }else{
+    if(!Array.isArray(s.p)) return null;
+    const pts = s.p.filter(pt => Array.isArray(pt) && pt.length >= 2 && finite(pt[0]) && finite(pt[1]));
+    if(!pts.length) return null;
+    if(pts.length !== s.p.length) out = {...out, p:pts};
+  }
+  if(!/^#[0-9a-fA-F]{6}$/.test(String(s.c))) out = {...out, c:'#000000'};
+  return out;
 }
 export async function getInk(songId, pn){
   const key = songId + ':' + pn, v = await get('ink', key);

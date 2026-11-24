@@ -325,13 +325,13 @@ export const TAP_MS = 500;
 stage.addEventListener('pointerdown', e => {
   if(inkPointerDown(e)) return;
   if(gest && !e.isPrimary && Date.now() - gest.t < 2000) return;
-  gest = {id:e.pointerId, x:e.clientX, y:e.clientY, t:Date.now()};
+  gest = {id:e.pointerId, x:e.clientX, y:e.clientY, t:Date.now(), ts:e.timeStamp};
 });
 stage.addEventListener('pointermove', inkPointerMove);
 stage.addEventListener('pointerup', e => {
   if(inkPointerUp(e)) return;
   if(!gest || e.pointerId !== gest.id) return;
-  const dx = e.clientX - gest.x, dy = e.clientY - gest.y, held = Date.now() - gest.t; gest = null;
+  const dx = e.clientX - gest.x, dy = e.clientY - gest.y, held = e.timeStamp - gest.ts; gest = null;      // the browser's own times of the two events: a long task between the two handlers must not turn a quick tap into a hold
   if(Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.3){ dx < 0 ? next() : prev(); return; }
   if(Math.hypot(dx, dy) < 12 && held < TAP_MS){
     const f = e.clientX / innerWidth;
@@ -370,8 +370,11 @@ export function initViewer(){
   t.addEventListener('keydown', e => { if((e.key === 'Enter' || e.key === ' ') && t.classList.contains('canjump')){ e.preventDefault(); if(!e.repeat) openJump(); } });
   viewer.addEventListener('click', e => { const b = e.target.closest('button'); if(b) b.blur(); });
   addEventListener('keydown', e => {
-    if(e.defaultPrevented || !viewer.classList.contains('on') || document.querySelector('.modal') || !$('#cropper').hidden) return;   // a dialog already took this key
-    const k = e.key;
+    if(e.defaultPrevented || !viewer.classList.contains('on') || !$('#cropper').hidden) return;
+    const k = e.key, jm = document.querySelector('.modal.jumplist');
+    /* a dialog already took this key, except that a pedal's page-turn key closes the "Go to a song" list (a stray tap on the title opened it) and turns */
+    if(document.querySelector('.modal') && !(jm && ['ArrowRight', 'ArrowDown', 'PageDown', 'ArrowLeft', 'ArrowUp', 'PageUp'].includes(k))) return;
+    if(jm) jm.remove();
     /* a key held down (a pedal held, a key repeating) turns ONE page, not one per repeat */
     if(['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)){ e.preventDefault(); if(!e.repeat) next(); }
     else if(['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)){ e.preventDefault(); if(!e.repeat) prev(); }

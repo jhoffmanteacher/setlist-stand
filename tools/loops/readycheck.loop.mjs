@@ -17,7 +17,7 @@
  *   and hides the box. main.js served late (10 s): the box shows, then goes away by itself when the app starts.
  *
  * js/readycheck.js is imported by the test (the lead wires it into the setlist's More menu and the Library). Until then
- * it is not in sw.js PRECACHE, so it is imported BEFORE the network is cut.
+ * it is in sw.js PRECACHE, so it is imported BEFORE the network is cut.
  */
 import fs from 'node:fs';
 import path from 'node:path';

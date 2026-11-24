@@ -16,6 +16,7 @@ export function jumpList(queue, cur, go, closed){
     return `<li><button data-qi="${qi}"${now ? ' aria-current="true"' : ''}><span class="jn">${k}</span><span class="jt">${esc(songById(e.id)?.title || 'Untitled song')}</span>${now ? '<span class="jnow">Now</span>' : ''}</button></li>`;
   }).join('');
   const m = modal(`<h2>Go to a song</h2><ul class="jump">${rows}</ul><div class="btns"><button data-x>Close</button></div>`);
+  m.classList.add('jumplist');
   const rm = m.remove;
   m.remove = () => { const was = m.isConnected; rm.call(m);if(was && closed) closed(); };
   m.querySelector('[data-x]').onclick = () => m.remove();

@@ -43,7 +43,13 @@
   setTimeout(() => {
     if(started || !document.body) return;
     const b = noStart(); b.hidden = false;
-    const r = b.querySelector('button'); if(r) r.onclick = () => location.reload();
+    /* A plain reload keeps the broken version running when a fixed one is waiting (a worker only takes over when told to): the
+       box does what the banner does then. `reg` and `asked` are declared further down (never reached with no service worker). */
+    const r = b.querySelector('button');
+    if(r) r.onclick = () => {
+      try{ if(reg && reg.waiting && sw.controller){ asked = true; reg.waiting.postMessage('skip-waiting'); return; } }catch(e){ /* just reload */ }
+      location.reload();
+    };
   }, STARTED_MS);
 
   if(!('serviceWorker' in navigator)){ window.ssBoot = Object.freeze({beforeReload(){}, offline: () => null, started: didStart}); return; }
@@ -132,7 +138,9 @@
 
   /* On load, as before: the first install downloads every precached file and must not compete with the first draw. The
      window load event fires even when the app's modules failed. */
-  const start = () => { sw.register('sw.js').then(watch).catch(() => {}); };
+  /* No worker serving the page 15 s after it registered (the first install failed, or it was reloaded past the worker): there is no
+     offline copy to count on, so the "Works offline" line says so. A worker that takes over later gives its own answer. */
+  const start = () => { sw.register('sw.js').then(r => { watch(r); setTimeout(() => { if(!sw.controller && !offline) setOffline('offline'); }, 15000); }).catch(() => {}); };
   if(document.readyState === 'complete') start(); else addEventListener('load', start);
 
   window.ssBoot = Object.freeze({beforeReload(fn){ beforeReload = fn; }, offline: () => offline, started: didStart});

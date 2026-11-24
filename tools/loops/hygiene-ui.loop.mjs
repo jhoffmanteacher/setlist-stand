@@ -714,6 +714,7 @@ async function chartUpdateDialogLoop(ctx){
 /* ---------- (e2) the open setlist's More box (Jonathan, 2026-11-22: the setlist bar was crowded) ---------- */
 const SETMENU_ITEMS = (gigHint, colls = true) => [
   ['gig', 'Gig date', gigHint],
+  ['ready', 'Ready check', 'Open every chart now to be sure each one is here'],
   ['print', 'Download PDF', 'Save the songs as one PDF'],
   ['share', 'Share', 'Send this setlist and its songs as one file'],
   ['dup', 'Duplicate', 'Make a copy of this setlist'],
@@ -747,7 +748,7 @@ async function setMenuLoop(ctx){
       await checkMenuBox(page, more, 'More', 'Empty menu', SETMENU_ITEMS('Set or change the date of this gig'), at);
       await page.focus(more); await page.keyboard.press('Enter'); await page.locator('.modal.menubox').waitFor();
       const off = await page.locator('.modal.menubox [data-item]').evaluateAll(bs => bs.map(b => [b.dataset.item, b.disabled]));
-      assert(JSON.stringify(off) === JSON.stringify([['gig', false], ['print', true], ['share', true], ['dup', false], ['rename', false], ['colls', false]]), `${at}: disabled items of an empty setlist ${JSON.stringify(off)}`);
+      assert(JSON.stringify(off) === JSON.stringify([['gig', false], ['ready', true], ['print', true], ['share', true], ['dup', false], ['rename', false], ['colls', false]]), `${at}: disabled items of an empty setlist ${JSON.stringify(off)}`);
       await page.keyboard.press('Escape'); await noModal(page);
 
       /* songs and a date: Download PDF and Share on, the date in the Gig date hint in the screen's own words */
@@ -772,6 +773,10 @@ async function setMenuLoop(ctx){
       await page.locator('.modal input[type=date]').waitFor();
       assert(await page.locator('.modal input[type=date]').inputValue() === '2026-12-05', `${at}: Gig date opened with another date`);
       await escapeBack(page, more, `${at} Gig date from the box`);
+      await viaKeys(page, more, 'ready');
+      await page.locator('.modal h2', {hasText: 'Ready check'}).waitFor({timeout: 5000});
+      await page.locator('.modal [data-x]', {hasText: 'Close'}).waitFor({timeout: 15000});      // while it runs Escape means Stop; once it is done Escape closes
+      await escapeBack(page, more, `${at} Ready check from the box`);
       await viaKeys(page, more, 'print');
       await page.locator('.modal h2', {hasText: 'Download Empty menu'}).waitFor({timeout: 5000});
       await escapeBack(page, more, `${at} Download PDF from the box`);
