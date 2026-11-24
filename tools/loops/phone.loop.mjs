@@ -180,6 +180,8 @@ const SCREENS = [
     last: '[data-item="drive"]', lastOk: async p => !!(await p.locator('.modal.drivebox').count()), lastWhy: 'Google Drive settings did not open'},
   {name: 'Google Drive box', open: async p => { await toLib(p); await menuItem(p, '[data-backupmenu]', 'drive', '.modal.drivebox'); },
     last: '#driveCtl button, #driveCtl p', lastAct: 'none', lastOk: async () => true},
+  {name: 'Restore this backup? question', open: async p => { await toLib(p); await p.setInputFiles('#restoreFile', await backupFile()); await p.locator('.modal.restoreask').waitFor({timeout: 120000}); },
+    last: null},
   {name: 'Setlists row menu', open: async p => { await toSets(p); await p.locator('[data-setrowmenu="phs1"]').tap(); await p.locator('.modal.menubox').waitFor(); },
     last: '[data-item="del"]', lastOk: async p => !!(await p.locator('.modal.delask').count()), lastWhy: 'Delete did not open its question'},
   {name: 'Setlist Delete question', open: async p => { await toSets(p); await p.locator('[data-setrowmenu="phs1"]').tap(); await p.locator('[data-item="del"]').tap(); await p.locator('.modal.delask').waitFor(); },
