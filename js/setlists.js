@@ -1,11 +1,11 @@
-import {$, esc, uid, ask, pick, armed, hooks, toast, form} from './util.js';
+import {$, esc, uid, ask, pick, hooks, toast, form, modal} from './util.js';
 import {state, songById, saveSet, markDeleted, liveItems} from './store.js';
 import {openViewer} from './viewer.js';
 import {printDialog} from './print.js';
 import {downloadAll} from './downloadall.js';
 import {shareSet} from './share.js';
 import {renderNudge} from './nudge.js';
-import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
+import {showPicked, pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 import {gigOf, gigLong, gigShort, groupSets, isOpen, toggleGroup} from './gigdate.js';
 import {gigDialog, newSetDialog, offerFill} from './gigui.js';
 import {menuBox} from './menubox.js';
@@ -44,14 +44,28 @@ export function renderSetlists(v){
       : coll ? `<div class="empty"><h2>No setlists in ${esc(coll.name)} yet</h2><p>A new setlist joins ${esc(coll.name)} while it is shown.</p></div>`
       : `<div class="empty"><h2>No setlists yet</h2><p>Make one for each gig or rehearsal.</p></div>`);
   }
+  showPicked();
   renderNudge();                       // the backup reminder, under the bar (js/nudge.js)
   if(!openSet) offerFill();            // once per tablet: gig dates found in setlist names (js/gigui.js)
 }
 
+/* A row's two buttons (Jonathan, 2026-11-23): Play, and one \u22ef that holds Duplicate and Delete, like a song row; the name gets the room. */
+const cut = t => t.length > 40 ? t.slice(0, 40) + '\u2026' : t;
 const rowHtml = st => {
   const n = songCount(st), id = esc(st.id), g = gigOf(st);
-  return `<li class="row"><button class="main" data-set="${id}"><span class="t">${esc(st.name)}</span><span class="s">${g ? esc(gigShort(g)) + ' &middot; ' : ''}${esc(n)} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${id}" ${n ? '' : 'disabled'}>Play</button><button data-dupset="${id}">Duplicate</button><button data-delset="${id}">Delete</button></div></li>`;
+  return `<li class="row"><button class="main" data-set="${id}"><span class="t">${esc(st.name)}</span><span class="s">${g ? esc(gigShort(g)) + ' &middot; ' : ''}${esc(n)} song${n == 1 ? '' : 's'}</span></button><div class="acts"><button data-play="${id}" ${n ? '' : 'disabled'}>Play</button><button class="rowmore" data-setrowmenu="${id}" aria-label="Actions for ${esc(st.name)}" aria-haspopup="dialog">\u22ef</button></div></li>`;
 };
+const SET_ROW_ITEMS = [{id: 'dup', label: 'Duplicate', hint: 'Make a copy of this setlist'}, {id: 'del', label: 'Delete', hint: 'Remove this setlist (its songs stay in your library)'}];
+/* Delete is the menu item and then this question (the two taps the "Never" list asks for). Cancel changes nothing. */
+function askDeleteSet(st){
+  return new Promise(res => {
+    const m = modal(`<h2>Delete ${esc(cut(st.name))}?</h2><p>Its songs stay in your library.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Delete</button></div>`);
+    m.classList.add('delask');
+    const ok = m.querySelector('[data-ok]'); ok.disabled = true; setTimeout(() => { ok.disabled = false; }, 400);      // a quick double tap on the menu's Delete must not land on this one
+    m.querySelector('[data-x]').onclick = () => { m.remove(); res(false); };
+    ok.onclick = () => { m.remove(); res(true); };
+  });
+}
 /* The list of setlists: grouped by gig date when any has one (js/gigdate.js groupSets), else flat as it always was. */
 let groups = [];
 function listHtml(sets){
@@ -110,8 +124,17 @@ export async function onClick(b, d){
   if('dlall' in d){ downloadAll(sets.filter(inShown), shownColl()); return true; }
   if(d.set){ openSet = d.set; hooks.render(); return true; }
   if('allsets' in d){ openSet = null; hooks.render(); return true; }
-  if(d.dupset){ const src = sets.find(s => s.id === d.dupset); if(src) await duplicate(src); return true; }
-  if(d.delset){ if(!armed(b)) return true; await once('delset', () => commit(() => markDeleted('sets', d.delset), 'Could not delete the setlist. Nothing was changed.')); return true; }
+  if(d.setrowmenu){
+    const st = sets.find(x => x.id === d.setrowmenu); if(!st) return true;
+    b.focus();                                                  // Safari does not focus a button that was tapped
+    let del = false;
+    await menuBox({title: cut(st.name), items: SET_ROW_ITEMS, opener: b, run: id => { if(id === 'dup') return duplicate(st); del = true; }});
+    if(del){
+      if(await askDeleteSet(st)) await once('delset', () => commit(() => markDeleted('sets', st.id), 'Could not delete the setlist. Nothing was changed.'));
+      else if(b.isConnected) b.focus();
+    }
+    return true;
+  }
   if(d.play){ const st = sets.find(s => s.id === d.play); openViewer(entriesOf(st), 0); return true; }
   const st = sets.find(s => s.id === openSet);
   if(!st) return false;

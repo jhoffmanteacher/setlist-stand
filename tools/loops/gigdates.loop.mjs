@@ -29,6 +29,7 @@ import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, snapshot, diff, download
 import {importFixtures, songsOf, closeDone, readPackage} from './share-lib.mjs';
 import {openTablet, syncTap, reportCounts} from './sync-two.mjs';
 import * as G from '../../js/gigdate.js';
+import {setAct} from './setrow.mjs';
 
 /* ---------- small helpers ---------- */
 const pad = n => String(n).padStart(2, '0');
@@ -375,7 +376,7 @@ async function loopList(ctx){
 
     /* Duplicate does not copy the date; the original keeps it */
     await page.click('#view [data-allsets]');
-    await page.click(`#view [data-dupset="${recs.soon.id}"]`);
+    await setAct(page, 'dup', recs.soon.id);
     await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Soon Gig copy');
     assert(await gigline(page) === null, 'the copy shows a date');
     const copy = await waitFor(() => setNamed(page, 'Soon Gig copy'), 'copy not saved');

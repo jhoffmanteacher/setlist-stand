@@ -62,7 +62,14 @@ export function pickerHtml(){
   if(!state.colls.length) return `<div class="collbar">${manage}</div>`;
   const def = getDefault(), cur = shownColl();
   const one = (id, label, on) => `<button data-collpick="${esc(id)}" aria-pressed="${on}">${label}</button>`;
-  return `<div class="collbar" role="group" aria-label="Collection">${one('all', 'All', !cur)}${state.colls.map(c => one(c.id, esc(c.name) + (c.id === def ? ' (default)' : ''), !!cur && cur.id === c.id)).join('')}${manage}</div>`;
+  /* .collchips only matters on a narrow window (CSS): there the chips scroll sideways and the Collections button stays on screen beside them. */
+  return `<div class="collbar" role="group" aria-label="Collection"><div class="collchips">${one('all', 'All', !cur)}${state.colls.map(c => one(c.id, esc(c.name) + (c.id === def ? ' (default)' : ''), !!cur && cur.id === c.id)).join('')}</div>${manage}</div>`;
+}
+
+/* The picker scrolls sideways on a narrow window: the collection shown is brought into view (the page itself is never scrolled). */
+export function showPicked(){
+  const bar = document.querySelector('.collchips'), on = bar && bar.querySelector('[aria-pressed=true]');
+  if(on && bar.scrollWidth > bar.clientWidth) bar.scrollLeft = Math.max(0, on.offsetLeft - (bar.clientWidth - on.offsetWidth) / 2);
 }
 
 /* ---------- names ---------- */

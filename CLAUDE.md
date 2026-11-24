@@ -8,7 +8,7 @@ An installable web app (PWA) for a teacher and gigging musician who plays PDF ch
 - Vendored libs in `vendor/`, exactly: pdf.js 3.11.174, pdf-lib 1.17.1, JSZip 3.10.1. Any other library, framework or build step needs Jonathan's OK.
 - No music in the repo, ever. The repo is public.
 - One job per file. Split a file when it starts doing two things or passes about 300 to 400 lines, not before. Every new app file goes in `PRECACHE` in `sw.js` (`checks.mjs` fails otherwise).
-- Supported tablets: iPadOS 16+, Android Chrome 100+. No newer browser feature without a fallback (theme colours have fallbacks for `light-dark()`).
+- Supported devices: tablets (iPadOS 16 or newer, Android Chrome 100 or newer); phones on the same browsers for managing the library and viewing charts in a pinch (no Annotate, no Crop on a phone: `isPhone()` in `js/device.js`, the screen's short side under 600 CSS px, never the user agent; `tools/checks.mjs` fails on any user-agent sniffing). Layout follows the WINDOW (an iPad in Split View gets the narrow layout), features follow the device. Those browser versions are the floor: do not use a browser feature newer than that without a fallback (theme colours have fallbacks for `light-dark()`).
 
 ## Layout
 - `index.html`, `css/app.css`, `manifest.webmanifest`, `icons/`, `vendor/`, `tests/fixtures/` (small text-only PDFs), `docs/` (`DECISIONS.md`, `THIRD-PARTY.md`), `README.md`, `CHANGELOG.md`

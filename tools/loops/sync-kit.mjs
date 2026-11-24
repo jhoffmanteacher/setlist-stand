@@ -18,6 +18,7 @@ import {buildLibrary} from './share-lib.mjs';
 import {openTablet, makeFromBackup, syncTap, libraryOf, readDrive} from './sync-two.mjs';
 import {canonHash, titleOf} from './sync-model.mjs';
 import {songDelete} from './songrow.mjs';
+import {setDelete} from './setrow.mjs';
 
 export const YEAR = 365 * 864e5;
 export const H = f => sha256(fs.readFileSync(path.join(FIX, f)));
@@ -107,8 +108,7 @@ export async function deleteSetUi(t, id){
   await until(t, 'sets', id, async () => {
     await showAll(page, '#tSets');
     if(await page.locator('[data-allsets]').count()) await page.click('[data-allsets]');
-    const b = page.locator(`#view [data-delset="${id}"]`);
-    await b.click(); await b.click();
+    await setDelete(page, id);
   });
 }
 export async function deleteCollUi(t, cid){

@@ -11,6 +11,7 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, snapshot, diff, restoreZip, backupNow, wipe, JSZip, PDFDocument, openSetMenu, answerRestore} from './harness.mjs';
 import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
+import {setDelete} from './setrow.mjs';
 
 /* ---------- small UI helpers (approaches copied from tools/smoke.mjs) ---------- */
 const liveOf = v => (v && Array.isArray(v.strokes) ? v.strokes : []).filter(s => !s.deleted);
@@ -241,7 +242,7 @@ async function buildRich(s){
   await addSongs(page, [await T(ids.three)]);
   const scratch = (await setNamed(page, 'Scratch')).id;
   await page.click('#view [data-allsets]');
-  await twoTap(page, `#view [data-delset="${scratch}"]`);
+  await setDelete(page, scratch);
   await waitFor(async () => (await idbAll(page, 'sets'))[scratch]?.deleted === true, 'set deletion marker not saved');
   /* Delete a song (it leaves a marker and drops out of Gig) */
   await toLibrary(page);

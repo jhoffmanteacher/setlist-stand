@@ -1208,6 +1208,18 @@ const FAULTS = [
     loop: 'roundtrip over 8', why: "the earlier '(before restore)' setlists that are repointed are not named"},
   {id: 'restore-stop-keeping-silent', file: 'js/backup.js', find: 'if(wasStopped() || !keep) return;', replace: 'if(!keep) return;',
     loop: 'roundtrip over 2', why: 'Stop pressed while the charts are being kept leaves the box open on "Stopping…" and never says the restore stopped'},
+  /* phone 1 (Part 1 of the phone-layout work order): every dialog fits a phone, the strip never crowds its letters, a toast uses the width, no user-agent sniffing */
+  {id: 'phone-box-does-not-scroll', file: 'css/app.css', find: 'flex-direction:column;gap:12px;overflow:auto;overscroll-behavior:contain}', replace: 'flex-direction:column;gap:12px}',
+    loop: 'phone 1 360x640', why: 'a dialog taller than a sideways phone does not scroll as a whole: its Cancel and the last menu items run off the bottom of the screen and cannot be reached'},
+  {id: 'phone-toast-half-width', file: 'css/app.css', find: '#toast{bottom:calc(24px + env(safe-area-inset-bottom));left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right));max-width:calc(100% - 32px - env(safe-area-inset-left) - env(safe-area-inset-right))}',
+    replace: '#toast{bottom:calc(24px + env(safe-area-inset-bottom));left:50%;right:auto;transform:translateX(-50%);max-width:none}',
+    loop: 'phone 1 360x800', why: 'a message can only use the right half of a phone screen (the old centring rule): a long one wraps into a narrow column'},
+  {id: 'phone-strip-letters-overlap', file: 'js/azstrip.js', find: '  fitLetters(el);\n}', replace: '}',
+    loop: 'phone 1 915x412', why: 'the A to Z strip draws all 27 letters whatever the room: on a short screen they sit on top of each other'},
+  {id: 'phone-dialog-no-safe-area', file: 'css/app.css', find: 'padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}', replace: 'padding:16px}',
+    loop: 'phone 1 safe area', why: 'a dialog can sit under an iPhone\'s notch or home bar'},
+  {id: 'phone-user-agent-sniff', file: 'js/util.js', find: 'export function toast(m){', replace: 'export function toast(m){ const phoneByAgent = /Mobi|Android/.test(navigator.userAgent);',
+    loop: 'phone 1 no sniffing', also: ['checks'], why: 'the app decides what a phone is by what the browser calls itself, which an iPad pretending to be a Mac, or a phone asking for the desktop site, defeats'},
 ];
 
 const args = process.argv.slice(2);

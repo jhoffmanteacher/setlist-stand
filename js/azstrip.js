@@ -40,6 +40,24 @@ let watching = false, queued = false;
 function measure(){
   const el = document.getElementById('azStrip'), cell = document.getElementById('libStrip'); if(!el || !cell) return;
   el.style.setProperty('--az-top', Math.round(cell.getBoundingClientRect().top) + 'px');
+  fitLetters(el);
+}
+/* Room for the letters: 27 letters at least MIN_LETTER px each when the strip is tall enough. A shorter strip draws fewer letters, evenly
+   spaced and each at least LEAD_H px tall with a dot under it (sliding still reaches every letter: letterAt() works from the finger's
+   height), and one too short for six letters is hidden until the page is scrolled and there is room (as a phone's contact list does). */
+const MIN_LETTER = 14, LEAD_H = 20, MIN_LEADS = 6;
+function fitLetters(el){
+  const all = [...el.querySelectorAll('[data-az]')], H = el.getBoundingClientRect().height;
+  const clear = () => { el.classList.remove('thin', 'low'); for(const b of all) b.classList.remove('off', 'lead', 'last'); };
+  clear();
+  if(H >= all.length * MIN_LETTER) return;
+  const leads = Math.floor(H / LEAD_H);
+  if(leads < MIN_LEADS){ el.classList.add('low'); return; }
+  el.classList.add('thin');
+  const pick = new Set(Array.from({length: leads}, (_, i) => Math.round(i * (all.length - 1) / (leads - 1))));
+  all.forEach((b, i) => { if(pick.has(i)) b.classList.add('lead'); else b.classList.add('off'); });
+  all[[...pick].pop()].classList.add('last');
+  if(el.querySelector('[tabindex="0"].off')){ for(const b of all) b.tabIndex = -1; el.querySelector('.lead').tabIndex = 0; }
 }
 /* Not while a finger is sliding on the strip: the letters must not move under it (the strip goes to its place when the finger lifts). */
 const later = () => { if(queued || dragging) return; queued = true; requestAnimationFrame(() => { queued = false; if(!dragging) measure(); }); };
@@ -55,7 +73,12 @@ export function fitStrip(){
 
 /* Touch and mouse: the letter under the finger jumps the list, and sliding along the strip scrubs through it (like the contacts list
    on a phone). Registered here, once, so main.js is not touched. */
-const letterAt = (x, y) => { const e = document.elementFromPoint(x, y); const b = e && e.closest && e.closest('#azStrip [data-az]'); return b ? b.dataset.az : null; };
+const letterAt = (x, y) => {
+  const strip = document.getElementById('azStrip');
+  if(strip && strip.classList.contains('thin')){            // letters left out: the finger's height says which letter (a hidden one included)
+    const r = strip.getBoundingClientRect(); return LETTERS[Math.min(LETTERS.length - 1, Math.max(0, Math.floor((y - r.top) / r.height * LETTERS.length)))];
+  }
+  const e = document.elementFromPoint(x, y); const b = e && e.closest && e.closest('#azStrip [data-az]'); return b ? b.dataset.az : null; };
 document.addEventListener('pointerdown', e => {
   if(e.button > 0) return;
   const b = e.target.closest && e.target.closest('#azStrip [data-az]'); if(!b) return;
@@ -88,7 +111,7 @@ document.addEventListener('focusin', e => {
 });
 document.addEventListener('keydown', e => {
   const b = e.target.closest && e.target.closest('#azStrip [data-az]'); if(!b || e.altKey || e.ctrlKey || e.metaKey) return;
-  const all = [...document.querySelectorAll('#azStrip [data-az]')], i = all.indexOf(b);
+  const all = [...document.querySelectorAll('#azStrip [data-az]:not(.off)')], i = all.indexOf(b);
   const to = e.key === 'ArrowDown' ? Math.min(i + 1, all.length - 1) : e.key === 'ArrowUp' ? Math.max(i - 1, 0) : e.key === 'Home' ? 0 : e.key === 'End' ? all.length - 1 : -1;
   if(to < 0) return;
   e.preventDefault(); all[to].focus();

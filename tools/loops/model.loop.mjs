@@ -49,6 +49,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {FIX, sha256, idbAll, snapshot, diff, restoreZip, backupNow, wipe, sleep, openSetMenu} from './harness.mjs';
 import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
+import {setAct, answerSetDelete} from './setrow.mjs';
 
 const NAME = 'model: random action sequences match the model, survive reload and a backup round trip';
 const DEFAULT_CASES = 10, ACTIONS = 22, FULL_EVERY = 6;   // ~100 s: sized so a full run does not hog the Mac (see CLAUDE.md)
@@ -950,7 +951,7 @@ A.dupSet = {w: 1.2, plan: (M, r) => { const st = setPick(M, r, () => true); retu
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
     if(a.inside){ await openSetUI(s, M, st); await quiet(); await openSetMenu(s.page, 'dup'); }
-    else { await toSets(s, M); await revealSet(s, M, st); await quiet(); await s.page.click(`#view [data-dupset="${st.id}"]`); }
+    else { await toSets(s, M); await revealSet(s, M, st); await quiet(); await setAct(s.page, 'dup', st.id); }
     await s.page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, st.name + ' copy', {timeout: 5000});
     const known = new Set(M.sets.map(x => x.id));
     const rec = await until(async () => Object.values(await idbAll(s.page, 'sets')).find(x => !known.has(x.id)), 4000, 'the copy');
@@ -976,16 +977,16 @@ A.renameSet = {w: 1, plan: (M, r) => { const st = setPick(M, r, () => true); ret
     st.name = a.name;
   }};
 A.deleteSet = {w: 0.8, plan: (M, r) => { const st = setPick(M, r, () => true); return st ? {set: st.label} : null; },
-  desc: a => `delete setlist ${a.set} (two taps)`,
+  desc: a => `delete setlist ${a.set} (menu item, then Delete in the question)`,
   async run(s, M, a){
     const st = M.sets.find(x => x.label === a.set);
     await toSets(s, M);
     await revealSet(s, M, st);
-    const b = s.page.locator(`#view [data-delset="${st.id}"]`);
-    await b.click();
-    if(await b.textContent() !== 'Tap again') throw new Error(`first tap on Delete shows "${await b.textContent()}"`);
+    await setAct(s.page, 'del', st.id);
+    await s.page.locator('.modal.delask').waitFor({timeout: 5000});
+    if(!(await s.page.locator(`#view [data-set="${st.id}"]`).count())) throw new Error('the menu item Delete deleted the setlist before the question was answered');
     await quiet();
-    await b.click();
+    await answerSetDelete(s.page, true);
     await s.page.waitForFunction(id => !document.querySelector(`#view [data-set="${id}"]`), st.id, {timeout: 5000});
     st.deleted = true;
   }};

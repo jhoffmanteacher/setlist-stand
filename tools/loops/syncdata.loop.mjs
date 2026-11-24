@@ -19,6 +19,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {FIX, TMP, JSZip, assert, idbAll, snapshot, diff, openSetMenu} from './harness.mjs';
 import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
+import {setDelete} from './setrow.mjs';
 
 const YEAR = 365 * 864e5;
 const H64 = 'ab'.repeat(32);
@@ -191,9 +192,8 @@ async function loopStamps(ctx){
     assert(k2.deleted === true, 'the deleted collection is not a marker: ' + JSON.stringify(k2));
     await edit('delete a setlist', [['sets', S3.id]], async () => {
       await page.click('#tSets');
-      const b = page.locator(`#view [data-delset="${S3.id}"]`);
-      await b.click(); await b.click();
-      await page.waitForFunction(id => !document.querySelector(`#view [data-delset="${id}"]`), S3.id, {timeout: 5000});
+      await setDelete(page, S3.id);
+      await page.waitForFunction(id => !document.querySelector(`#view [data-set="${id}"]`), S3.id, {timeout: 5000});
     });
     assert((await rec(page, 'sets', S3.id)).deleted === true, 'the deleted setlist is not a marker');
     await edit('delete a song that is in a setlist', [['songs', A.id], ['sets', S1.id]], async () => {

@@ -35,9 +35,10 @@ const authCount = g => g.requests.filter(r => r.kind === 'auth').length;
 export const HOME_NAME = 'Setlist Stand', CHARTS_NAME = 'Charts', DATA_NAME = 'Library data (do not edit)', MARKS_NAME = 'Marks (do not edit)', BACKUPS_NAME = 'Backups';
 export const REPORT_TITLES = /^Sync (finished|stopped|could not finish)/;
 
-export async function openTablet(ctx, {name = 'A', share = null, fixtures = false} = {}){
+export async function openTablet(ctx, {name = 'A', share = null, fixtures = false, device = {}} = {}){
   /* Playwright's WebKit cannot intercept requests from a page a service worker controls (sync.loop.mjs): the worker is off there. */
-  const s = await ctx.session({serviceWorkers: process.env.SS_BROWSER === 'webkit' ? 'block' : 'allow'});
+  /* `device`: browser-context options for a device that is not a tablet (a phone: viewport, screen, isMobile, hasTouch, deviceScaleFactor; phone 1 third device) */
+  const s = await ctx.session({serviceWorkers: process.env.SS_BROWSER === 'webkit' ? 'block' : 'allow', ...device});
   const google = await installFakeGoogle(s.context, {appBase: ctx.base, name, ...(share ? {share: share.google} : {})});
   const t = {name, ctx, s, page: s.page, context: s.context, google, watch: {violations: [], songWrites: 0, pdfRemovals: 0},
     async close(){ await s.close(); }};

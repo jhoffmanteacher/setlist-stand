@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {FIX, assert, sleep, idbAll, snapshot, diff, openSetMenu} from './harness.mjs';
 import {songAct, answerDelete} from './songrow.mjs';
+import {setAct, setDelete} from './setrow.mjs';
 
 const FULL = 'The tablet is full. Free up some space, then try again. Nothing was changed.';
 const FILES = ['one-page.pdf', 'two-page.pdf', 'three-page.pdf'];
@@ -236,18 +237,18 @@ async function loopSets(ctx){
     assert(await page.locator('#view [data-addto]').count() === 0, 'New setlist: the screen opened a setlist that was not saved');
 
     await sleep(450); await clearToast(page);
-    await page.click('#view [data-dupset]');
+    await setAct(page, 'dup');
     await refused(page, before, 'Duplicate (list)');
     expectSame(list0, await page.$$eval('#view li.row .t', xs => xs.map(x => x.textContent)), 'Duplicate: the list changed on screen');
 
     await sleep(450); await clearToast(page);
-    await page.click('#view [data-delset]'); await page.click('#view [data-delset]');
+    await setDelete(page);
     await refused(page, before, 'Delete setlist');
     expectSame(list0, await page.$$eval('#view li.row .t', xs => xs.map(x => x.textContent)), 'Delete setlist: the list changed on screen');
 
     /* and with the fault off they all work */
     await fault(page, null); await sleep(450);
-    await page.click('#view [data-dupset]');
+    await setAct(page, 'dup');
     await waitFor(async () => (await page.$$eval('#view h2', xs => xs.map(x => x.textContent))).includes('Gig One copy'), 'Duplicate did not open its copy');
     assert(ids.length === 3, 'seed');
   } finally { await s.close(); }
@@ -394,7 +395,9 @@ async function loopDouble(ctx){
     await page.click('#view [data-allsets]'); await page.waitForSelector('#view [data-newset]');
     const sets = async () => Object.values(await idbAll(page, 'sets')).filter(x => !x.deleted);
     await sleep(500);
-    await page.evaluate(() => { const b = document.querySelector('#view [data-dupset]'); b.click(); b.click(); });
+    await page.click('#view [data-setrowmenu]');
+    await page.locator('.modal.menubox').waitFor();
+    await page.evaluate(() => { const b = document.querySelector('.modal.menubox [data-item="dup"]'); b.click(); b.click(); });
     await waitFor(async () => (await sets()).length === 2, 'Duplicate did not write');
     await sleep(800);
     assert((await sets()).length === 2, `a double tap on Duplicate made ${(await sets()).length - 1} copies`);

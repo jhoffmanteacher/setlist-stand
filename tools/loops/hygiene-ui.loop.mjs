@@ -6,6 +6,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {FIX, TMP, JSZip, assert, sleep, sha256, idbAll, download, backupNow, wipe, restoreZip, PDFDocument, openShareMenu, openBackupMenu, driveBox, WEBKIT, openSetMenu} from './harness.mjs';
 import {installFakeGoogle} from './fake-google.mjs';
+import {setAct, setDelete, answerSetDelete} from './setrow.mjs';
 
 const FIXTURES = ['one-page.pdf', 'two-page.pdf', 'three-page.pdf'];
 const ALLOWED_SOURCES = new Set(["'self'", "'none'", "'unsafe-inline'", 'data:', 'blob:']);
@@ -278,7 +279,20 @@ async function dialogLoop(ctx){
     assert(await page.locator('#items > li.row').count() === 0, 'Add songs: Escape added songs');
     assert(await page.evaluate(sel => document.activeElement === document.querySelector(sel), at), 'Add songs: focus did not return to the Add songs button');
     await page.click('#view [data-allsets]');
-    await page.click('#view [data-delset]'); await page.click('#view [data-delset]');           // the setlist was only for this check
+    /* Delete a setlist: the menu item alone deletes nothing; Cancel and Escape in the question change nothing; Delete in the question deletes */
+    const setsPre = JSON.stringify(await idbAll(page, 'sets'));
+    await setAct(page, 'del');
+    await page.locator('.modal.delask h2').waitFor({timeout: 5000});
+    assert(await liveSets(page).then(x => x.length) === 1 && JSON.stringify(await idbAll(page, 'sets')) === setsPre, 'the Delete menu item alone changed the setlist');
+    await answerSetDelete(page, false);
+    assert(JSON.stringify(await idbAll(page, 'sets')) === setsPre && await page.locator('#view [data-set]').count() === 1, 'Cancel in the setlist Delete question changed something');
+    await setAct(page, 'del');
+    await page.locator('.modal.delask').waitFor({timeout: 5000});
+    await page.keyboard.press('Escape');
+    await noModal(page);
+    assert(JSON.stringify(await idbAll(page, 'sets')) === setsPre && await page.locator('#view [data-set]').count() === 1, 'Escape in the setlist Delete question changed something');
+    await sleep(450);
+    await setDelete(page);                                                                      // the setlist was only for this check
     await page.waitForFunction(() => !document.querySelector('#view [data-set]'), null, {timeout: 5000});
     await page.click('#tLib');
 

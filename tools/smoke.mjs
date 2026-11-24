@@ -24,6 +24,7 @@ import {launchBrowser, WEBKIT} from './loops/browser.mjs';
 import {acquireSlot} from './loops/slot.mjs';
 import {songAct, songActIn, answerDelete, songDelete} from './loops/songrow.mjs';
 import {answerRestore, closeRestored} from './loops/harness.mjs';
+import {setAct} from './loops/setrow.mjs';
 import {splitName, displayName} from '../js/names.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -913,7 +914,7 @@ async function stepSetItems(t){
   await page.click('#view [data-allsets]');
   const gig = await gigSet(page);
   await page.waitForTimeout(450);          // the same button twice within 400 ms is a double tap and is ignored (js/saving.js once()); a person takes longer than this script
-  await page.click(`#view [data-dupset="${gig.id}"]`);
+  await setAct(page, 'dup', gig.id);
   await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Gig copy', null, {timeout: 5000})
     .catch(() => { throw new Error('list Duplicate did not open "Gig copy"'); });
   const gc = await setByName(page, 'Gig copy');

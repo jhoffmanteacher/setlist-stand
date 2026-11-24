@@ -80,10 +80,12 @@ export async function startServer({root = ROOT, overrides = new Map()} = {}){
 }
 
 /* A browser session: new context + page. `errors` collects page errors and console errors; `requests` every URL requested. */
-export async function openSession(base, {viewport = {width: 1280, height: 800}, hasTouch = false, browser, storage, serviceWorkers = 'allow'} = {}){
+export async function openSession(base, {viewport = {width: 1280, height: 800}, hasTouch = false, screen, isMobile, deviceScaleFactor, browser, storage, serviceWorkers = 'allow'} = {}){
   const own = !browser;
   browser = browser || await launchBrowser();
-  const context = await browser.newContext({viewport, hasTouch, acceptDownloads: true, serviceWorkers, ...(storage ? {storageState: storage} : {})});
+  /* screen / isMobile / deviceScaleFactor are for a phone-sized device (tools/loops/phone.loop.mjs); left out, the context is exactly what it was. */
+  const phone = {...(screen ? {screen} : {}), ...(isMobile !== undefined ? {isMobile} : {}), ...(deviceScaleFactor ? {deviceScaleFactor} : {})};
+  const context = await browser.newContext({viewport, hasTouch, ...phone, acceptDownloads: true, serviceWorkers, ...(storage ? {storageState: storage} : {})});
   const page = await context.newPage();
   const errors = [], requests = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));

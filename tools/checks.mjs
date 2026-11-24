@@ -309,6 +309,8 @@ const precache = parsePrecache(swSrc);
   // http(s) URLs in any letter case, and protocol-relative ones ("//host/x" in quotes or after src=, href=, url( ).
   scan('no remote URLs in app code', URL_RE, (m) => m[0], (f, url) => !!ALLOWED_URLS[f]?.includes(url));
   scan('no window.claude in app code', /window\s*\.\s*claude\b/g, () => 'window.claude');
+  // No user-agent sniffing (Jonathan, 2026-11-23): a phone is told from a tablet by its screen (isPhone() in js/device.js), never by what the browser calls itself.
+  scan('no user-agent sniffing in app code', /\bnavigator\s*(?:\.\s*|\[\s*['"`])(?:userAgentData|userAgent|platform|vendor)\b|\buserAgentData\b/g, (m) => m[0].replace(/\s+/g, ' '), (f) => !/^(js\/[^/]+\.js|sw\.js)$/.test(f));
 }
 
 // ---------------------------------------------------------------- (c2) CSP pinned

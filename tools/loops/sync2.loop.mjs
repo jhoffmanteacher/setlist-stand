@@ -38,6 +38,7 @@ import {marksCounts} from './sync-ink-kit.mjs';
 import {newModel, addTablet, copyTablet, localEdit, localNew, localDelete, adopt, sync, compareTablet, compareDrive, KINDS, pdfName, titleOf, canonHash,
   inkSeed, inkSync, inkCompareTablet, inkCompareDrive, inkDiff, splitInkKey, inkAdoptLoose} from './sync-model.mjs';
 import {songAct, songDelete} from './songrow.mjs';
+import {setDelete} from './setrow.mjs';
 
 const YEAR = 365 * 864e5;
 const VERBOSE = process.argv.includes('--verbose');
@@ -139,8 +140,7 @@ async function deleteSetUi(t, id){
   const {page} = t;
   await showAll(page, '#tSets');
   if(await page.locator('[data-allsets]').count()) await page.click('[data-allsets]');
-  const b = page.locator(`#view [data-delset="${id}"]`);
-  await b.click(); await b.click();
+  await setDelete(page, id);
 }
 /* Writes a record straight into the tablet's database (what a newer app, or a hand-made test case, would leave there). */
 const writeRecord = (t, store, rec) => t.page.evaluate(async ({store, rec}) => {

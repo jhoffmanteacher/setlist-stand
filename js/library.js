@@ -14,7 +14,7 @@ import {backupNow} from './backup.js';
 import {copySong} from './copysong.js';
 import {renderNudge} from './nudge.js';
 import {commit} from './saving.js';
-import {pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
+import {showPicked, pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
 export const newVersionRunning = () => nvRunning;
@@ -46,6 +46,7 @@ export function renderLibrary(v){
   $('#q').oninput = e => { q = e.target.value; renderLib(); };
   $('#showArch').onchange = e => { showArchived = e.target.checked; renderLib(); };
   renderLib();
+  showPicked();
   renderSafety();
   renderDrive();
 }

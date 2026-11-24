@@ -58,6 +58,11 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 @supports (height:100dvh){.az{height:calc(100dvh - var(--y) - 8px - env(safe-area-inset-bottom))}}   /* Chrome 100 to 107 and iPadOS 16.0 to 16.3: vh above */
 .az button{flex:1 1 0;min-height:0;padding:0;border:0;border-radius:8px;background:transparent;font-size:14px;font-weight:700;color:var(--acc);white-space:normal}
 .az button.none{color:var(--mute);opacity:.55}
+.az.low{visibility:hidden;pointer-events:none}
+.az.thin button.off{display:none}
+.az.thin button.lead{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;line-height:1}
+.az.thin button.lead::after{content:"";width:3px;height:3px;border-radius:50%;background:currentColor;opacity:.5}
+.az.thin button.lead.last::after{display:none}
 .row{scroll-margin-top:8px}
 .row .num{font-family:'Barlow Condensed',sans-serif;font-size:26px;width:2.2ch;text-align:right;color:var(--mute)}
 .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
@@ -111,6 +116,7 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 #viewer.annot #nextup{display:none}
 /* Collections: the picker under the tabs, the manager dialog and the tick boxes in Edit */
 .collbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 8px}
+.collchips{display:contents}
 .collbar button[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
 .collmgr .box{width:min(640px,100%)}
 .mgr{display:flex;flex-direction:column;gap:10px;overflow:auto}
@@ -120,8 +126,8 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 fieldset.checks{border:0;padding:0;margin:0;gap:0}
 fieldset.checks legend{padding:0;margin-bottom:4px}
 .box fieldset.checks{max-height:45vh;overflow:auto}     /* many options (the gig-date fill-in): the buttons stay on screen */
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:30;padding:16px}
-.box{background:var(--card);color:var(--ink);border-radius:14px;padding:20px;width:min(520px,100%);max-height:85vh;display:flex;flex-direction:column;gap:12px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:30;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+.box{background:var(--card);color:var(--ink);border-radius:14px;padding:20px;width:min(520px,100%);max-height:85vh;display:flex;flex-direction:column;gap:12px;overflow:auto;overscroll-behavior:contain}
 .box h2{overflow-wrap:anywhere;font-size:28px}
 .pick{overflow:auto;border-top:1px solid var(--line)}
 .pick label{display:flex;gap:12px;align-items:center;min-height:50px;border-bottom:1px solid var(--line);cursor:pointer}
@@ -141,7 +147,7 @@ fieldset.checks legend{padding:0;margin-bottom:4px}
 .grp button{display:flex;align-items:center;gap:8px;width:100%;min-height:48px;border:0;background:transparent;padding:0 4px;text-align:left;font-weight:700;font-size:18px}
 .grp .chev{width:1.2em;color:var(--mute)}
 .btns{display:flex;justify-content:flex-end;gap:8px}
-#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#eeeae2;color:#17181c;padding:10px 16px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;font-weight:600}
+#toast{position:fixed;left:16px;right:16px;margin:0 auto;width:fit-content;max-width:calc(100% - 32px);text-align:center;bottom:24px;background:#eeeae2;color:#17181c;padding:10px 16px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;font-weight:600}
 #toast.on{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 @media(max-width:600px){.top h1{font-size:32px}.acts button{padding:0 10px;font-size:14px}}
@@ -194,7 +200,7 @@ textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 #tools,#cropBar{padding-bottom:calc(8px + env(safe-area-inset-bottom));padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
 #cropStage{bottom:calc(64px + env(safe-area-inset-bottom))}
 #nextup{right:calc(12px + env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom))}
-#toast{bottom:calc(24px + env(safe-area-inset-bottom))}
+#toast{bottom:calc(24px + env(safe-area-inset-bottom));left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right));max-width:calc(100% - 32px - env(safe-area-inset-left) - env(safe-area-inset-right))}
 #update{top:calc(12px + env(safe-area-inset-top))}
 body.playing #update,body.splitting #update,body.busy #update{display:none}   /* never offered while a song, the songbook splitter or a restore/backup box is on screen; it shows when you go Back */
 
@@ -276,3 +282,33 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
 .cu-row.cu-off{color:var(--mute)}
 .cu-b{display:flex;flex-direction:column;gap:2px;min-width:0}
 .cu-n{font-size:14px;color:var(--mute)}
+
+/* Phone-size layout (Jonathan, 2026-11-23). Keyed on the WINDOW (an iPad in Split View gets it too); nothing here changes a window 820 px wide
+   and 600 px high or more. A dialog fits any screen: the box scrolls as a whole while its heading and its buttons stay on screen. */
+@supports (height:100dvh){.box{max-height:85dvh}}                   /* Chrome 100 to 107 and iPadOS 16.0 to 16.3: vh above */
+@media(max-height:640px){
+  .box fieldset.checks{max-height:none;overflow:visible}      /* the box scrolls as a whole (a scrolling fieldset hides its last tick box under its legend in Safari) */
+  .box{max-height:calc(100vh - 32px)}
+  @supports (height:100dvh){.box{max-height:calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}}
+}
+.box>h1,.box>h2{position:sticky;top:-20px;z-index:1;background:var(--card);padding-top:20px;margin-top:-20px}
+.box>.btns{position:sticky;bottom:-20px;z-index:1;background:var(--card);padding-bottom:20px;margin-bottom:-20px;flex-wrap:wrap}
+.pick,.mgr,.tlines{min-height:96px;flex:0 1 auto}
+.pick,.tlines{flex-shrink:1}
+@media(max-width:600px),(max-height:500px){
+  .top{padding-top:calc(10px + env(safe-area-inset-top));padding-bottom:6px;gap:8px;flex-wrap:nowrap}
+  .top h1{font-size:28px;white-space:nowrap}
+  .tabs button{padding:0 12px}
+  .bar{margin:6px 0 10px;gap:8px}
+  .bar input{flex:1 1 120px}
+  .collbar{flex-wrap:nowrap;margin:2px 0 6px}
+  .collbar>button{flex:none}                                    /* the Collections button stays on screen */
+  .collchips{display:flex;gap:8px;flex:1 1 auto;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding-bottom:2px;
+    -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 20px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 20px),transparent)}   /* the fade says it scrolls */
+  .collchips::-webkit-scrollbar{display:none}
+  .collchips button{flex:none}
+  .nudge{margin:0 0 8px;padding:4px 4px 4px 10px;gap:4px 8px;font-size:15px;line-height:1.3}
+  .nudge button{min-height:40px;padding:0 12px}
+  #libMenus.bar{margin-top:0}
+}
+@media(max-width:600px){.top h1{font-size:28px}}
