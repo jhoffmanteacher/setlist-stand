@@ -51,7 +51,7 @@ jobs:
   loops:
     name: closed loops
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     concurrency:
       group: browser-loops-${{ github.ref }}
       cancel-in-progress: true

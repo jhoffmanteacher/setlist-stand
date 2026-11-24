@@ -171,8 +171,7 @@ const FAULTS = [
     loop: 'update h', why: 'an app with no internet still tries to look for updates'},
   {id: 'heal-off', file: 'sw.js', find: "else if (event.data === 'ss-heal')", replace: 'else if (false)',
     loop: 'offline j', why: 'after another site on the same address wipes the offline copy, it is never refilled: the app does not open at a gig without Wi-Fi'},
-  {id: 'heal-ignores-version', file: 'sw.js', find: "  if (!m || m[1] !== VERSION) return 'newer';\n", replace: '',
-    loop: 'offline k', why: 'a wiped offline copy is refilled with a NEWER version\'s files under the old version\'s name'},
+  /* 'heal-ignores-version' (the first VERSION check removed) was retired 2026-11-24: the refill now asks the server's VERSION a second time after the files arrive (sw.js heal), so dropping the first check alone is no longer a mistake that stores a newer version's files. The second check has its own planted faults (review-*, loop 'offline n'). */
   {id: 'heal-not-on-screen', file: 'js/boot.js', find: '    heal();\n    if(Math.abs(Date.now() - last) < GAP) return;', replace: '    if(Math.abs(Date.now() - last) < GAP) return;',
     loop: 'offline l', why: 'an offline copy wiped while the app stays open is refilled only on a reload or an hourly check: switched back to within the hour, then reopened at the gig, the app does not open'},
   {id: 'banner-over-dialog', file: 'js/boot.js', find: "if(b) b.style.display = dialogOpen() ? 'none' : '';", replace: "if(b) b.style.display = '';",
