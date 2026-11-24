@@ -592,19 +592,33 @@ const songItems = st => st.items.filter(it => it.type === 'song').map(it => it.i
 async function loopKeptSetlist(ctx){
   /* (h) a replaced (3a) or deleted (3b) song held by a Copy-song twin that stays: no chart copy is needed, and the kept setlist plays
      the twin, not the backup's older chart and not a deleted song */
-  for(const how of ['replaced', 'deleted']){
+  /* 'other crop': the twin has another crop than the song: it does not hold it (the kept setlist would lose the crop), so the chart
+     is copied */
+  for(const how of ['replaced', 'deleted', 'other crop']){
     const s = await session(ctx), page = s.page;
     try{
       const {file, data, pdfs} = await seedLibrary(page);
       const X = await makePdf('Rb newer ' + how, 1), HX = sha256(X);
+      const crops = how === 'other crop' ? {rb: {all: {x: .1, y: .1, w: .8, h: .8}, pages: {}}, rt: {all: {x: .2, y: .2, w: .6, h: .6}, pages: {}}} : {};
       await putFile(page, 'rb', X); await putFile(page, 'rt', X);
-      await inStore(page, async (S, HX) => {
+      await inStore(page, async (S, {HX, crops}) => {
         const b = await S.get('songs', 'rb');
-        await S.putAll([{store: 'songs', key: 'rb', value: {...b, pages: 1, hash: HX, updated: Date.now()}}, {store: 'ink', key: 'rb:1', delete: true},
-          {store: 'songs', key: 'rt', value: {...b, id: 'rt', song: 'Over twin', title: 'Over twin', pages: 1, hash: HX, updated: Date.now()}}]);
+        await S.putAll([{store: 'songs', key: 'rb', value: {...b, pages: 1, hash: HX, updated: Date.now(), ...(crops.rb ? {crop: crops.rb} : {})}}, {store: 'ink', key: 'rb:1', delete: true},
+          {store: 'songs', key: 'rt', value: {...b, id: 'rt', song: 'Over twin', title: 'Over twin', pages: 1, hash: HX, updated: Date.now(), ...(crops.rt ? {crop: crops.rt} : {})}}]);
         const st = await S.get('sets', 'rs'); st.name = 'Gig changed here'; await S.saveSet(st);
-      }, HX);
+      }, {HX, crops});
       await s.goto();
+      if(how === 'other crop'){
+        const b0 = await snapshot(page);
+        const {q} = await restoreOver(page, file, `(h ${how})`);
+        assert(/Charts and marks are kept: 1 chart from this tablet/.test(q), `(h ${how}) a twin with another crop was taken as holding rb:\n` + q);
+        const after = await snapshot(page), [kept] = setCopiesOf(after), [c] = copiesOf(after);
+        assert(c && JSON.stringify(c.crop) === JSON.stringify(crops.rb) && kept && JSON.stringify(songItems(kept)) === JSON.stringify(['ra', c.id, 'rc']), `(h ${how}) the kept setlist plays ${JSON.stringify(kept && songItems(kept))}; the copy ${JSON.stringify(c)}`);
+        const d = model(b0, data, after, {keep: ['rb'], keepSets: ['rs']});
+        assert(!d.length, `(h ${how}) the library differs from the model:\n    ` + d.slice(0, 12).join('\n    '));
+        assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+        continue;
+      }
       const F = how === 'replaced' ? data : {...data, songs: data.songs.map(x => x.id === 'rb' ? {id: 'rb', deleted: true, updated: 9e12} : x), ink: {'ra:1': data.ink['ra:1']}};
       const f = how === 'replaced' ? file : await zipOf(F, pdfs, `over-del-${Date.now()}.zip`);
       const b0 = await snapshot(page);
@@ -669,7 +683,6 @@ async function loopKeptSetlist(ctx){
 }
 
 /* ---------- loop 8 ---------- */
-const setItems = st => st.items.map(it => it.type === 'break' ? 'break:' + it.name : it.id);
 async function loopStaying(ctx){
   /* (s1) a setlist made here after the backup plays a song the restore replaces: it is left as it is (it plays the backup's version),
      and the question names it instead of saying it stays as it is */
@@ -701,11 +714,16 @@ async function loopStaying(ctx){
       const f = await zipOf(F, pdfs, `over-s1b-${Date.now()}.zip`);
       const b0 = await snapshot(page);
       const {q} = await restoreOver(page, f, '(s1b)');
-      assert(/1 setlist that stays will lose the songs the backup deletes, as deleting a song here does: New Gig\./.test(q), '(s1b) the question:\n' + q);
+      assert(/1 setlist that stays will no longer show the songs the backup deletes: New Gig\./.test(q), '(s1b) the question:\n' + q);
       assert(/1 song on this tablet is kept, because you changed it after the backup deleted it\./.test(q) && !/song on this tablet is not in the backup/.test(q), '(s1b) a song kept because it changed after the backup deleted it:\n' + q);
       assert(/It puts back the backup's version of [^:]*1 collection[^:]*:/.test(q) && /Band here \(changed here later\)/.test(q), '(s1b) the collection put back is not named:\n' + q);
       const a = await snapshot(page), rn = a.sets.rn;
-      assert(JSON.stringify(setItems(rn)) === '["ra"]' && rn.updated > b0.sets.rn.updated && rn.name === 'New Gig', '(s1b) the staying setlist after the backup deleted rb: ' + JSON.stringify(rn));
+      /* never written (a stamp would make it beat the other tablet's copy at the next Sync): the row of rb is hidden when drawn */
+      expectSame(b0.sets.rn, rn, '(s1b) an ordinary setlist that stays: before (left) and after (right), byte for byte, `updated` included');
+      await page.click('#tSets'); await page.locator('#view [data-set="rn"]').click();
+      await page.waitForFunction(() => document.querySelectorAll('#view [data-playat]').length === 1, null, {timeout: 8000})
+        .catch(async () => { throw new Error('(s1b) New Gig does not show exactly one song: ' + await page.locator('#view').innerText()); });
+      await page.click('#view [data-allsets]'); await page.click('#tLib');
       expectSame(b0.songs.rc, a.songs.rc, '(s1b) the song changed here after the backup deleted it');
       assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
     } finally { await s.close(); } }
@@ -723,7 +741,7 @@ async function loopStaying(ctx){
       const FB = {...data, songs: data.songs.map(x => x.id === 'ra' ? {...x, hash: sha256(A2), updated: x.updated + 1} : x), ink: {'rb:1': data.ink['rb:1']}};
       const fb = await zipOf(FB, {...pdfs, ra: A2}, `over-s2b-${Date.now()}.zip`);
       const {q} = await restoreOver(page, fb, '(s2) B');
-      assert(/1 earlier "\(before restore\)" setlist is pointed at the kept charts, so it plays what it played before\./.test(q), '(s2) the question:\n' + q);
+      assert(/1 earlier "\(before restore\)" setlist is pointed at the kept charts, so it plays what it played before: Gig changed here \(before restore\)\./.test(q), '(s2) the question:\n' + q);
       assert(/1 setlist that stays will play the backup's version of songs it puts back: Gig\./.test(q), '(s2) the ordinary setlist that plays ra is not named:\n' + q);
       const s2 = await snapshot(page), K2 = s2.sets[K.id];
       assert(JSON.stringify(playsOf(s2, K2)) === JSON.stringify(want), '(s2) the kept setlist no longer plays what it played:\n    before ' + JSON.stringify(want) + '\n    after  ' + JSON.stringify(playsOf(s2, K2)));
@@ -733,6 +751,28 @@ async function loopStaying(ctx){
       await wipe(page); await s.goto();
       await restoreZip(page, bk);
       expectSame(s2, await snapshot(page), '(s2) after Back up -> wipe -> Restore (right) vs before (left)');
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); } }
+
+  /* (s2b) the same, but the charts are too big to keep: the question says the kept setlist will play the backup's version (no copy is
+     made to point it at), and after "Restore without keeping copies" it is left as it was */
+  { const {s, file, data, pdfs} = await seeded(ctx), page = s.page;
+    try{
+      await restoreOver(page, file, '(s2b) A');
+      const [K] = setCopiesOf(await snapshot(page));
+      const A2 = await makePdf('Ra newer chart too big', 1);
+      const FB = {...data, songs: data.songs.map(x => x.id === 'ra' ? {...x, hash: sha256(A2), updated: x.updated + 1} : x), ink: {'rb:1': data.ink['rb:1']}};
+      const fb = await zipOf(FB, {...pdfs, ra: A2}, `over-s2c-${Date.now()}.zip`);
+      await page.evaluate(async () => { (await import(new URL('js/restoreplan.js', location.href).href)).keepLimits.maxBytes = 10; });
+      await pick(page, fb);
+      const box = page.locator('.modal.restoreask');
+      await box.waitFor({timeout: 60000});
+      const q = (await box.locator('.box').innerText()).replace(/\s+/g, ' ');
+      assert(/2 setlists that stay will play the backup's version of songs it puts back: Gig, Gig changed here \(before restore\)\./.test(q) && !/pointed at the kept charts/.test(q), '(s2b) the question when no copy can be kept:\n' + q);
+      await sleep(500); await box.locator('[data-nokeep]').click(); await sleep(300); await box.locator('[data-nokeep]').click();
+      assert(/^Restored/.test(await waitToast(page, /^Restored|Nothing was changed/, 60000)), '(s2b) the restore without copies');
+      await page.evaluate(async () => { (await import(new URL('js/restoreplan.js', location.href).href)).keepLimits.maxBytes = 300e6; });
+      expectSame(K, (await snapshot(page)).sets[K.id], '(s2b) the kept setlist (no copy made to point it at): before (left) and after (right)');
       assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
     } finally { await s.close(); } }
 

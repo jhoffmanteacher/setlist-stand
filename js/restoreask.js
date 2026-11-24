@@ -59,9 +59,11 @@ export function askRestore(plan, saved, drive){
   /* setlists this restore does not write over, but that play a song it replaces or deletes: never "stays as it is" */
   const P = plan.staying, few = list => list.slice(0, 5).map(x => esc(cut(x.name))).join(', ') + (list.length > 5 ? ` and ${list.length - 5} more` : '');
   const sl = (n, rest) => `${n == 1 ? '1 setlist that stays' : n + ' setlists that stay'} ${rest}`;
-  if(P.play.length) after.push(sl(P.play.length, `will play the backup's version of songs it puts back: ${few(P.play)}.`) + (kc && !tooBig ? ' The versions from this tablet are in Archived.' : ''));
-  if(P.drop.length) after.push(sl(P.drop.length, `will lose the songs the backup deletes, as deleting a song here does: ${few(P.drop.map(x => x.set))}.`));
-  if(P.keptFix.length) after.push(`${P.keptFix.length == 1 ? '1 earlier "(before restore)" setlist is' : P.keptFix.length + ' earlier "(before restore)" setlists are'} pointed at the kept charts, so ${P.keptFix.length == 1 ? 'it plays' : 'they play'} what ${P.keptFix.length == 1 ? 'it' : 'they'} played before.`);
+  /* with the charts too big to keep, an earlier "(before restore)" setlist that needs a new copy plays the backup's version too */
+  const fix = tooBig ? P.keptFix.filter(x => !x.needsCopy) : P.keptFix, play = [...P.play, ...(tooBig ? P.keptFix.filter(x => x.needsCopy) : [])];
+  if(play.length) after.push(sl(play.length, `will play the backup's version of songs it puts back: ${few(play)}.`) + (kc && !tooBig ? ' The versions from this tablet are in Archived.' : ''));
+  if(P.drop.length) after.push(sl(P.drop.length, `will no longer show the songs the backup deletes: ${few(P.drop.map(x => x.set))}.`));
+  if(fix.length) after.push(`${fix.length == 1 ? '1 earlier "(before restore)" setlist is' : fix.length + ' earlier "(before restore)" setlists are'} pointed at the kept charts, so ${fix.length == 1 ? 'it plays' : 'they play'} what ${fix.length == 1 ? 'it' : 'they'} played before: ${few(fix)}.`);
   const stay = counts(S.stay, T.stay, C.stay), one = S.stay + T.stay + C.stay == 1;
   if(stay) after.push(`${stay} on this tablet ${one ? 'is' : 'are'} not in the backup. ${one ? 'It stays as it is' : 'They stay as they are'}.`);
   const kn = counts(S.newerKept, T.newerKept, C.newerKept), one2 = S.newerKept + T.newerKept + C.newerKept == 1;

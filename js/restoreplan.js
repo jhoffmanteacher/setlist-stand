@@ -79,7 +79,8 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
   const held = async (t, marks, withCrop) => {
     if(!t.hash) return null;
     const hs = holders.get(String(t.hash).toLowerCase()) || [];
-    for(const h of [...hs.filter(h => h.id === t.id), ...hs.filter(h => h.id !== t.id)]) if(holds(h, t, marks, withCrop) && (!h.tablet || await wholeFile(h.id))) return h.id;
+    /* another song (a Copy-song twin) holds it only with the same crop too: the kept setlist would play it instead */
+    for(const h of [...hs.filter(h => h.id === t.id), ...hs.filter(h => h.id !== t.id)]) if(holds(h, t, marks, withCrop || h.id !== t.id) && (!h.tablet || await wholeFile(h.id))) return h.id;
     return null;
   };
   const marksDiffer = (t, b, marks) => { for(let p = 1; p <= Math.max(num(t.pages), num(b.pages)); p++){ const a = sig(marks.get(p) || []); if(a === null || a !== sig(pageThere(b.id + ':' + p))) return true; } return false; };
@@ -153,8 +154,9 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
   for(const t of here.sets.values()) if(!t.deleted && !bSets.has(t.id)) sets.stay++;
 
   /* Setlists the restore does not write over (not in the backup, changed here after the backup deleted them, or the same in the
-     backup) that play a song this restore replaces or deletes. An ordinary one is left as it is (it plays the backup's version) except
-     that a song the backup deletes leaves it, as deleting a song here does (js/deleteops.js); it is named in the question. An earlier
+     backup) that play a song this restore replaces or deletes. An ordinary one is never written (a stamp would make it beat the other
+     tablet's copy at the next Sync): it plays the backup's version, and a row whose song the backup deletes is hidden when the list is
+     drawn (liveItems), the record unchanged; it is named in the question. An earlier
      "(before restore)" copy (kept:'restore') is repointed in place to the new archived copy or the song holding the chart, so it still
      plays exactly what it played. */
   const removedIds = new Set(songs.removed.map(x => x.id)), touched = new Set([...keep.map(k => k.song.id), ...heldBy.keys()]);
@@ -164,7 +166,8 @@ export async function planRestore(data, incoming, {raw = null, unreadable = new 
     const b = bSets.get(r.id), untouched = stays(r, b), same = !!b && !b.deleted && sameRecord(r, b);
     if(!untouched && !same) continue;
     const ids = (Array.isArray(r.items) ? r.items : []).filter(it => it && it.type === 'song').map(it => it.id);
-    if(untouched && r.kept === KEPT){ if(ids.some(id => touched.has(id))){ staying.keptFix.push(r); affected.add(r.id); } continue; }
+    /* needsCopy: it plays a song that only an archived copy made by this restore keeps (none when the person restores without copies) */
+    if(untouched && r.kept === KEPT){ if(ids.some(id => touched.has(id))){ staying.keptFix.push({set:r, id:r.id, name:r.name, needsCopy:ids.some(id => keep.some(k => k.song.id === id))}); affected.add(r.id); } continue; }
     const drop = untouched ? ids.filter(id => removedIds.has(id)) : [];
     if(drop.length){ staying.drop.push({set:r, ids:drop}); affected.add(r.id); }
     if(ids.some(id => touched.has(id) && !removedIds.has(id))){ staying.play.push({id:r.id, name:r.name}); affected.add(r.id); }
@@ -224,14 +227,10 @@ export async function buildKeeps(plan, job, {copies = true} = {}){
     ops.push({store:'sets', key:c.id, value:c, ifUpdated:null});
     setNames.push(c.name);
   }
-  /* setlists that stay: a song the backup deletes leaves an ordinary one (as a deletion does); an earlier kept copy points at the new
-     archived copy or the holder. Stamped over the record as read and guarded: a change made meanwhile refuses the whole write. */
+  /* an earlier kept copy that stays points at the new archived copy or the holder (only copies made here: none without copies), stamped
+     over the record as read and guarded (a change made meanwhile refuses the whole write); ordinary staying setlists are not written */
   const playsNow = id => copyOf.get(id) || plan.heldBy.get(id) || id;
-  for(const {set:st, ids} of plan.staying.drop){
-    const gone = new Set(ids);
-    ops.push({store:'sets', key:st.id, value:{...st, items:st.items.filter(it => !(it && it.type === 'song' && gone.has(it.id))), updated:stamp(st)}, ...ifUpdatedOf(st.updated)});
-  }
-  for(const st of plan.staying.keptFix){
+  for(const {set:st} of plan.staying.keptFix){
     const items = st.items.map(it => it && it.type === 'song' && playsNow(it.id) !== it.id ? {...it, id:playsNow(it.id)} : it);
     if(items.some((it, i) => it !== st.items[i])) ops.push({store:'sets', key:st.id, value:{...st, items, updated:stamp(st)}, ...ifUpdatedOf(st.updated)});
   }
