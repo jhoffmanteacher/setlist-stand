@@ -11,7 +11,8 @@ const line = t => t.page.evaluate(() => { const n = document.querySelector('#lib
 async function setSync(t, ms){ await t.page.evaluate(v => v === null ? localStorage.removeItem('ss-last-sync') : localStorage.setItem('ss-last-sync', String(v)), ms); await t.page.reload(); await t.page.waitForSelector('#libList'); await sleep(500); }
 /* The tablet synced just now (after every record here), then the clock moves n days on: records stay older than the sync. */
 async function agoDays(t, n){ await t.page.evaluate(() => localStorage.setItem('ss-last-sync', String(Date.now()))); await t.page.clock.setSystemTime(await t.page.evaluate(() => Date.now()) + n * DAY); await t.page.reload(); await t.page.waitForSelector('#libList'); await sleep(500); }
-const days = n => Date.now() - n * DAY - 3600e3;                     // for a tablet with no records to compare (loop 2)
+/* n calendar days ago, at local noon: the app counts calendar days, so "now minus n days minus an hour" made it n + 1 between midnight and 1 am */
+const days = n => { const d = new Date(); d.setHours(12, 0, 0, 0); return d.getTime() - n * DAY; };      // for a tablet with no records to compare (loop 2)
 const none = async (t, what) => { const l = await line(t); assert(!l, `${what}: a reminder shows: ${JSON.stringify(l)}`); };
 const same = async (t, text, btns, what) => { const l = await line(t); assert(l && l.text === text && JSON.stringify(l.btns) === JSON.stringify(btns), `${what}: got ${JSON.stringify(l)}, wanted "${text}" with ${btns.join(', ')}`); };
 async function onTabs(t, fn){
