@@ -30,12 +30,13 @@ import {pathToFileURL} from 'node:url';
 import {assert} from './harness.mjs';
 
 const load = ctx => import(pathToFileURL(path.join(ctx.root, 'js', 'syncink.js')).href);
-/* js/backup.js reads `window` when it loads (through js/util.js); nothing in what is tested here uses it. */
+/* js/backup.js reads `window` and adds a page-wide listener (the tap guard) when it loads (through js/util.js); nothing in what is tested here uses either. */
 async function loadBackup(ctx){
-  const had = 'window' in globalThis;
+  const had = 'window' in globalThis, hadL = 'addEventListener' in globalThis;
   if(!had) globalThis.window = {};
+  if(!hadL) globalThis.addEventListener = () => {};
   try{ return await import(pathToFileURL(path.join(ctx.root, 'js', 'backup.js')).href); }
-  finally{ if(!had) delete globalThis.window; }
+  finally{ if(!had) delete globalThis.window; if(!hadL) delete globalThis.addEventListener; }
 }
 const hexOf = s => crypto.createHash('sha256').update(Buffer.from(s, 'utf8')).digest('hex');
 const clone = v => v == null ? v : JSON.parse(JSON.stringify(v));
