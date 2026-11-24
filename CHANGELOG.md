@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-23: Restore asks first and keeps what it replaces
+- **Restore from backup** now tells you first, in plain words, what it will change: what it adds, puts back, deletes and leaves alone. Cancel changes nothing. An empty tablet is not asked.
+- **Nothing is thrown away:** any chart or marks the restore would replace or delete go to Archived as "(before restore DATE)", and a setlist you changed since the backup is kept as "<name> (before restore)", still playing what it played.
+- If a chart on the tablet cannot be read, the question says so and the restore still goes ahead. If the copies would be too big to keep, it offers "Restore without keeping copies" (two taps).
+
 ## 2026-11-23: A to Z strip and a song count
 - The Library shows how many songs you have ("74 songs", or "3 of 74 songs" while you search or look at one collection).
 - With 30 or more songs, a strip of letters appears along the right edge: tap a letter, or slide your finger along the strip, to jump to the songs that start with it. Letters with no songs are dimmed.
