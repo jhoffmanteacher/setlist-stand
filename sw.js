@@ -11,7 +11,7 @@
  *   server still has this same VERSION (another site may have wiped them).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-23-11';
+const VERSION = '2026-11-23-12';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
