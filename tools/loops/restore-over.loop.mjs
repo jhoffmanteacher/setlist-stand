@@ -592,8 +592,8 @@ const songItems = st => st.items.filter(it => it.type === 'song').map(it => it.i
 async function loopKeptSetlist(ctx){
   /* (h) a replaced (3a) or deleted (3b) song held by a Copy-song twin that stays: no chart copy is needed, and the kept setlist plays
      the twin, not the backup's older chart and not a deleted song */
-  /* 'other crop': the twin has another crop than the song: it does not hold it (the kept setlist would lose the crop), so the chart
-     is copied */
+  /* 'other crop': the song has the same crop here as in the backup (so its crop is not "changed here"), and the twin has another crop:
+     the twin does not hold it (the kept setlist would play it without the song's crop, which would be gone), so the chart is copied */
   for(const how of ['replaced', 'deleted', 'other crop']){
     const s = await session(ctx), page = s.page;
     try{
@@ -609,12 +609,14 @@ async function loopKeptSetlist(ctx){
       }, {HX, crops});
       await s.goto();
       if(how === 'other crop'){
+        const Fc = {...data, songs: data.songs.map(x => x.id === 'rb' ? {...x, crop: crops.rb} : x)};
+        const fc = await zipOf(Fc, pdfs, `over-crop-${Date.now()}.zip`);
         const b0 = await snapshot(page);
-        const {q} = await restoreOver(page, file, `(h ${how})`);
+        const {q} = await restoreOver(page, fc, `(h ${how})`);
         assert(/Charts and marks are kept: 1 chart from this tablet/.test(q), `(h ${how}) a twin with another crop was taken as holding rb:\n` + q);
         const after = await snapshot(page), [kept] = setCopiesOf(after), [c] = copiesOf(after);
         assert(c && JSON.stringify(c.crop) === JSON.stringify(crops.rb) && kept && JSON.stringify(songItems(kept)) === JSON.stringify(['ra', c.id, 'rc']), `(h ${how}) the kept setlist plays ${JSON.stringify(kept && songItems(kept))}; the copy ${JSON.stringify(c)}`);
-        const d = model(b0, data, after, {keep: ['rb'], keepSets: ['rs']});
+        const d = model(b0, Fc, after, {keep: ['rb'], keepSets: ['rs']});
         assert(!d.length, `(h ${how}) the library differs from the model:\n    ` + d.slice(0, 12).join('\n    '));
         assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
         continue;
