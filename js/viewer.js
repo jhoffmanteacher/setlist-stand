@@ -371,10 +371,10 @@ export function initViewer(){
   viewer.addEventListener('click', e => { const b = e.target.closest('button'); if(b) b.blur(); });
   addEventListener('keydown', e => {
     if(e.defaultPrevented || !viewer.classList.contains('on') || !$('#cropper').hidden) return;
-    const k = e.key, jm = document.querySelector('.modal.jumplist');
+    const k = e.key, jm = [...document.querySelectorAll('.modal')].pop(), jl = jm && jm.classList.contains('jumplist') ? jm : null;      // the jump list only when it is the dialog on top
     /* a dialog already took this key, except that a pedal's page-turn key closes the "Go to a song" list (a stray tap on the title opened it) and turns */
-    if(document.querySelector('.modal') && !(jm && ['ArrowRight', 'ArrowDown', 'PageDown', 'ArrowLeft', 'ArrowUp', 'PageUp'].includes(k))) return;
-    if(jm) jm.remove();
+    if(document.querySelector('.modal') && !(jl && ['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'ArrowLeft', 'ArrowUp', 'PageUp'].includes(k))) return;
+    if(jl) jl.remove();
     /* a key held down (a pedal held, a key repeating) turns ONE page, not one per repeat */
     if(['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)){ e.preventDefault(); if(!e.repeat) next(); }
     else if(['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)){ e.preventDefault(); if(!e.repeat) prev(); }

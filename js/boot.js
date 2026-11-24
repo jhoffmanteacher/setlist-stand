@@ -114,7 +114,7 @@
      tab's own tap only happens where the banner shows. */
   /* Otherwise (the first install, or another tab's update): ask the worker that now serves this tab whether its offline copy
      is whole, so the "Works offline" line can show on a first visit too (nothing is fetched when nothing is missing). */
-  sw.addEventListener('controllerchange', () => { if(asked && !quiet()) reloadNow(); else if(!asked && !quiet()) heal(); });
+  sw.addEventListener('controllerchange', () => { if(asked && !quiet()) reloadNow(); else if(!asked) heal(); });      // heal() only posts a message, so a dialog or a song on screen does not matter
   /* Listened for from the start, so the kill switch's message is not missed before load. */
   sw.addEventListener('message', e => {
     const d = e.data;
@@ -140,7 +140,7 @@
      window load event fires even when the app's modules failed. */
   /* No worker serving the page 15 s after it registered (the first install failed, or it was reloaded past the worker): there is no
      offline copy to count on, so the "Works offline" line says so. A worker that takes over later gives its own answer. */
-  const start = () => { sw.register('sw.js').then(r => { watch(r); setTimeout(() => { if(!sw.controller && !offline) setOffline('offline'); }, 15000); }).catch(() => {}); };
+  const start = () => { sw.register('sw.js').then(r => { watch(r); setTimeout(() => { if(!sw.controller && !offline && !r.installing && !r.waiting) setOffline('offline'); }, 15000); }).catch(() => {}); };
   if(document.readyState === 'complete') start(); else addEventListener('load', start);
 
   window.ssBoot = Object.freeze({beforeReload(fn){ beforeReload = fn; }, offline: () => offline, started: didStart});

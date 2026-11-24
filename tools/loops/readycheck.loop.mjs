@@ -22,7 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {FIX, assert, sleep, snapshot, diff, PDFDocument} from './harness.mjs';
-import {missing404, goOffline, cacheName, precachePaths, waitInstalled, intercept, until} from './site-copy.mjs';
+import {makeSiteCopy, removeCopy, askUpdate, swState, missing404, goOffline, cacheName, precachePaths, waitInstalled, intercept, until} from './site-copy.mjs';
 
 const pagesOf = async f => (await PDFDocument.load(fs.readFileSync(path.join(FIX, f)))).getPageCount();
 
@@ -179,7 +179,7 @@ export const loops = [
   name: 'readycheck 3: Stop half-way ends at once, says how far it got, and leaves no worker running',
   async run(ctx){
     const s = await ctx.session({serviceWorkers: 'block'});
-    await countWorkers(s.context, 200);           // every message to a pdf.js worker waits 200 ms: one chart takes about a second
+    await countWorkers(s.context, 700);           // every message to a pdf.js worker waits 700 ms: one chart takes several seconds, so a Stop that waited for it would be far over the limit below
     try{
       const {page} = s;
       await s.goto();
@@ -197,10 +197,10 @@ export const loops = [
       const took = Date.now() - t0;
       const box = await readBox(page);
       assert(box.rows.length < 3, `Stop did not stop: ${box.rows.length} of 3 charts listed`);
-      assert(took < 2500, `Stop took ${took} ms: the chart being read must be dropped at once`);
+      assert(took < 1200, `Stop took ${took} ms: the chart being read must be dropped at once`);
       assert(box.status.startsWith(`Stopped after ${box.rows.length} of 3 charts.`), `last line "${box.status}"`);
       assert(!/All 3 charts/.test(box.status), 'a stopped check says every chart is ready');
-      await sleep(1500);                         // a check that carried on behind the box would list more rows by now
+      await sleep(2500);                         // a check that carried on behind the box would list more rows by now
       const later = await readBox(page);
       assert(later.rows.length === box.rows.length, `the check carried on after Stop: ${later.rows.length} rows`);
       const w1 = await workers(page);
@@ -336,6 +336,40 @@ export const loops = [
       await sleep(300);
       assert(!(await boxShown(page)), 'the box stayed after the app started late');
     } finally { if(restore) restore(); await s.close(); }
+  }
+},
+{
+  name: 'readycheck 8: did not start with a fix WAITING: Reload on the box takes the waiting version (no plain reload of the broken page)',
+  async run(ctx){
+    const brk = dir => { const f = path.join(dir, 'js', 'main.js'); fs.writeFileSync(f, fs.readFileSync(f, 'utf8') + '\n)(\n'); };
+    const v2 = makeSiteCopy(ctx.root, {marker: 'v2-broken-main', mutate: brk});
+    const v3 = makeSiteCopy(ctx.root, {marker: 'v3', bumps: 2});
+    const s = await ctx.session();
+    const marker = page => page.evaluate(() => document.querySelector('meta[name=ss-marker]')?.content || null);
+    const update = async (page, what) => { for(let k = 0; k < 3; k++){ await askUpdate(page); try{ return await until(async () => (await swState(page)).waiting, what, 10000); }catch(e){ if(k === 2) throw e; } } };
+    try{
+      const {page} = s;
+      await s.goto();
+      await waitInstalled(page, cacheName(ctx.root), precachePaths(ctx.root));
+      await page.reload(); await page.waitForSelector('#libList');
+      /* version 2 (js/main.js does not parse) goes in by the usual tap on the banner */
+      ctx.server.root = v2;
+      await update(page, 'version 2 did not wait for the tap');
+      await until(() => page.evaluate(() => { const b = document.querySelector('#update'); return !!b && !b.hidden && b.getBoundingClientRect().height > 0; }), '#update did not show for version 2', 5000);
+      await page.click('#update');
+      await until(async () => (await marker(page)) === 'v2-broken-main', 'the tap did not reload into version 2', 15000);
+      await until(() => boxShown(page), 'the "did not start" box did not show with version 2', 14000);
+      assert(await page.locator('#libList').count() === 0, 'test setup: version 2 drew the library: its broken js/main.js did not break the app');
+      /* the fix is deployed and waits (a worker only takes over when told to) */
+      ctx.server.root = v3;
+      await update(page, 'version 3 did not wait while the box was up');
+      await page.getByRole('button', {name: 'Reload', exact: true}).click();
+      await page.waitForSelector('#libList', {timeout: 15000})
+        .catch(() => { throw new Error('Reload on the box did not bring the waiting fix in: the broken version 2 reloaded itself'); });
+      assert(await marker(page) === 'v3', 'the page after Reload is not version 3: ' + await marker(page));
+      await sleep(500);
+      assert(!(await boxShown(page)), 'the box still shows after the fix started');
+    } finally { ctx.server.root = ctx.root; await s.close(); removeCopy(v2); removeCopy(v3); }
   }
 },
 ];
