@@ -147,7 +147,7 @@ async function loopBackupProgress(ctx){
     await startWatch(page, null);
     await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
     const [dl] = await Promise.all([page.waitForEvent('download', {timeout: 120000}), openBackupMenu(page, 'backup')]);
-    assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d\.zip$/.test(dl.suggestedFilename()), 'file name ' + dl.suggestedFilename());
+    assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d-\d{4}\.zip$/.test(dl.suggestedFilename()), 'file name ' + dl.suggestedFilename());
     await toastIs(page, /Backup saved|failed|stopped/, 'no answer after the backup');
     assert(await toastText(page) === 'Backup saved', 'message "' + await toastText(page) + '"');
     await bannerGuard(page, await lines(page), 'a completed backup');

@@ -1,9 +1,9 @@
 import {esc, modal, hooks, toast} from './util.js';
-import {state, get, putAll, load, stamp} from './store.js';
+import {state, get, putAll, load, stamp, liveItems} from './store.js';
 import {explainError} from './errors.js';
 import {driveSetUp} from './syncui.js';
 import {lastSync} from './sync.js';
-import {validGig, gigOf, gigLong, fillCandidates, YEAR_MIN, YEAR_MAX} from './gigdate.js';
+import {validGig, gigOf, gigLong, fillCandidates, todayStr, YEAR_MIN, YEAR_MAX} from './gigdate.js';
 
 /* The gig-date dialogs. All go through modal(): focus trapped, Escape cancels, the page behind inert. */
 /* Set, change or clear a gig date. Resolves to {gig: 'YYYY-MM-DD'|null} (null = clear) or null for Cancel. */
@@ -91,4 +91,18 @@ export async function offerFill(){
     try{ await load(); hooks.render(); }catch(err){}       // written by now: a problem drawing must not say "Nothing was changed"
     toast(!ops.length ? 'Nothing needed filling in.' : ops.length == 1 ? 'Gig date filled in.' : `${ops.length} gig dates filled in.`);
   } finally { asking = false; }
+}
+
+/* "Tonight" (Jonathan, 2026-11-23): when a setlist's gig date is TODAY (the tablet's own date), the top of the Library and of the
+   Setlists list shows one line, "Tonight: <name>", with Play (js/setlists.js plays it as Play setlist does). More than one: the first
+   by name, and "and N more setlists today", which opens the Setlists list (on that list it is plain text). Nothing when there is none.
+   Every collection's setlists count: a gig tonight matters whatever is being shown. */
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, {sensitivity:'base', numeric:true}) || (a.id < b.id ? -1 : 1);
+export function tonightHtml(onSetlists = false){
+  const today = todayStr(), sets = state.sets.filter(st => gigOf(st) === today).sort(byName);
+  if(!sets.length) return '';
+  const st = sets[0], n = liveItems(st).filter(it => it.type === 'song').length, more = sets.length - 1;
+  const moreTxt = more ? `and ${more} more setlist${more == 1 ? '' : 's'} today` : '';
+  return `<div class="tonight" data-tonightline><div class="tn"><span class="tn1">Tonight: <b>${esc(st.name)}</b></span>${!more ? '' : onSetlists ? `<span class="tnmore">${moreTxt}</span>` : `<button class="tnmore" data-tonightmore>${moreTxt}</button>`}</div>`
+    + `<button class="pri" data-tonight="${esc(st.id)}" aria-label="Play ${esc(st.name)}" ${n ? '' : 'disabled'}>Play</button></div>`;
 }

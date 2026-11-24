@@ -16,14 +16,48 @@
    memory only (no storage key); the page load counts as a check (the browser checked sw.js on that navigation).
    Refill: another site on the same github.io address can delete this app's offline copy (Cache Storage belongs to the
    whole address). On each page load and each time the app is on screen (maybeCheck), the worker is asked ('ss-heal') to
-   fetch what is missing again; it does so only when the server still has the SAME version (sw.js heal()). */
+   fetch what is missing again; it does so only when the server still has the SAME version (sw.js heal()).
+   Ready offline (2026-11-23): the worker's answer to that request ('whole', 'healed', 'refused', 'newer', 'offline') says
+   whether this tablet holds the whole offline copy. ssBoot.offline() gives 'ok' (whole or healed), 'incomplete' (files are
+   missing and could not be fetched yet) or null (no answer yet: no worker yet, or the app opened without internet), and
+   'ss-offline-state' fires on window when it changes (js/readycheck.js readyLine() turns it into the Library's line).
+   Did not start (2026-11-23): js/main.js calls ssBoot.started() once all its modules loaded and ran. If that has not
+   happened STARTED_MS after this file ran, a plain box (#nostart, plain DOM: no module of the app is there to draw a
+   dialog) says "Setlist Stand did not start. Your music is safe." with a Reload button; it goes away by itself if the
+   app starts after all (a slow network). It sits in the page, not over it: the "Updated. Tap to reload" banner for the
+   fix stays on top and tappable. This part works even without a service worker. */
 (function(){
   'use strict';
-  if(!('serviceWorker' in navigator)) return;
+  const STARTED_MS = 8000;
+  let started = false;
+  function noStart(){
+    let b = document.getElementById('nostart');
+    if(!b){
+      b = document.createElement('div'); b.id = 'nostart'; b.className = 'nostart'; b.setAttribute('role', 'alert'); b.hidden = true;
+      b.innerHTML = '<p>Setlist Stand did not start. Your music is safe.</p><button type="button" id="nostartReload">Reload</button>';
+      document.body.prepend(b);
+    }
+    return b;
+  }
+  function didStart(){ started = true; const b = document.getElementById('nostart'); if(b) b.hidden = true; }
+  setTimeout(() => {
+    if(started || !document.body) return;
+    const b = noStart(); b.hidden = false;
+    const r = b.querySelector('button'); if(r) r.onclick = () => location.reload();
+  }, STARTED_MS);
+
+  if(!('serviceWorker' in navigator)){ window.ssBoot = Object.freeze({beforeReload(){}, offline: () => null, started: didStart}); return; }
   const sw = navigator.serviceWorker;
   const GAP = 60 * 60 * 1000;          // at most one update check an hour (Jonathan, 2026-11-23)
   const TICK = 5 * 60 * 1000;          // the timer only compares two numbers
-  let reg = null, asked = false, reloaded = false, last = Date.now(), beforeReload = null;
+  let reg = null, asked = false, reloaded = false, last = Date.now(), beforeReload = null, offline = null;
+  /* The worker's refill answer, kept as 'ok' / 'incomplete'; an answer this file does not know changes nothing. */
+  function setOffline(r){
+    const s = r === 'whole' || r === 'healed' ? 'ok' : r === 'refused' || r === 'newer' || r === 'offline' ? 'incomplete' : null;
+    if(!s || s === offline) return;
+    offline = s;
+    try{ dispatchEvent(new CustomEvent('ss-offline-state', {detail: s})); }catch(e){ /* the line is read again on the next draw */ }
+  }
 
   /* A dialog (js/util.js modal(): Edit song, a chart update list, a text import review...) sits UNDER the banner
      (.modal z-index 30, #update 50), so the banner is hidden while one is open and a tap cannot throw the dialog away. */
@@ -72,9 +106,15 @@
   if(document.body) new MutationObserver(underDialog).observe(document.body, {childList: true});      // dialogs go to the end of <body>
   /* Never mid-song (or mid-split, or under a restore/backup box or a dialog): a controllerchange then (another tab's tap) waits; this
      tab's own tap only happens where the banner shows. */
-  sw.addEventListener('controllerchange', () => { if(asked && !quiet()) reloadNow(); });
+  /* Otherwise (the first install, or another tab's update): ask the worker that now serves this tab whether its offline copy
+     is whole, so the "Works offline" line can show on a first visit too (nothing is fetched when nothing is missing). */
+  sw.addEventListener('controllerchange', () => { if(asked && !quiet()) reloadNow(); else if(!asked && !quiet()) heal(); });
   /* Listened for from the start, so the kill switch's message is not missed before load. */
-  sw.addEventListener('message', e => { if(e.data && e.data.type === 'ss-sw-killed') reloadNow(); });
+  sw.addEventListener('message', e => {
+    const d = e.data;
+    if(d && d.type === 'ss-sw-killed') reloadNow();
+    else if(d && d.type === 'ss-heal') setOffline(d.result);
+  });
 
   /* Every time the app is on screen (and on each tick), online, with no song, split, box or dialog open: first the refill
      (another site may have wiped the offline copy since; it costs one look at the cache when nothing is missing), then,
@@ -95,5 +135,5 @@
   const start = () => { sw.register('sw.js').then(watch).catch(() => {}); };
   if(document.readyState === 'complete') start(); else addEventListener('load', start);
 
-  window.ssBoot = Object.freeze({beforeReload(fn){ beforeReload = fn; }});
+  window.ssBoot = Object.freeze({beforeReload(fn){ beforeReload = fn; }, offline: () => offline, started: didStart});
 })();

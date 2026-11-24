@@ -80,7 +80,7 @@ async function loopSongMenu(ctx){
     const before = await snapshot(page);
     /* the menu: items, title, Cancel / Escape, focus back, nothing changed */
     await openSongMenu(page, shortId);
-    assert((await labelsOf(page)).join() === 'edit,copy,newversion,archive,del', 'live menu: ' + (await labelsOf(page)).join());
+    assert((await labelsOf(page)).join() === 'edit,addset,copy,newversion,archive,del', 'live menu: ' + (await labelsOf(page)).join());
     assert((await page.textContent('.modal.menubox h2')) === 'Short - Band', 'menu title: ' + await page.textContent('.modal.menubox h2'));
     await closeMenu(page, 'cancel');
     assert((await focusOn(page)) === 'songmenu:' + shortId, 'after Cancel the focus is on ' + await focusOn(page));

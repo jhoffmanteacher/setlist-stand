@@ -10,7 +10,7 @@ import {KINDS} from './syncmerge.js';
 import {downloadBlob, putFile, patchFile, deleteFile, recordFileName, pdfFileName, recordProps, pdfProps, TooBig} from './driveops.js';
 import {DriveError} from './drive.js';
 import {deleteOps} from './deleteops.js';
-import {fetchRecord, normalize, perFile, refusedText} from './syncplan.js';
+import {fetchRecord, normalize, perFile, refusedText, nameOf} from './syncplan.js';
 import {mergePage} from './syncink.js';
 import {incomingPages, mergeIncoming} from './syncmarks.js';
 
@@ -179,7 +179,7 @@ async function download(ctx, a){
   }
   ops.push({store:STORE[a.kind], key:a.id, value:rec, ifUpdated});
   const marks = incoming ? mergeIncoming(ctx, rec, incoming, ops) : {got:0, up:false};        // its pages of marks go in the same write (with ifUpdated)
-  try{ await putAll(ops, archivedCopy ? undefined : {fromSync:true}); wrote.add(a.kind + ':' + a.id); rep.got[a.kind]++; if(archivedCopy) rep.archived++; unskip(a.kind, a.id); }
+  try{ await putAll(ops, archivedCopy ? undefined : {fromSync:true}); wrote.add(a.kind + ':' + a.id); rep.got[a.kind]++; if(archivedCopy){ rep.archived++; (rep.archivedNames = rep.archivedNames || []).push(nameOf('song', rec)); } unskip(a.kind, a.id); }
   catch(err){ if(err && err.name === 'StaleWrite'){ rep.changedMeanwhile++; return; } throw err; }       // edited in another tab meanwhile: the next sync decides again
   if(a.kind === 'song' && !here && !rec.deleted) ctx.arrived.add(a.id);          // a new song from Drive, written by this run
   if(a.kind === 'song') ctx.downNow.add(a.id);                                    // written from Drive in this round of downloads (js/syncmarks.js)

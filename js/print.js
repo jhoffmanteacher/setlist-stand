@@ -2,7 +2,32 @@ import {esc, toast, modal, fileName, saveBlob, canShareFile, shareBlob} from './
 import {get, getInk, liveStrokes, songById, cropOf} from './store.js';
 import {gigOf} from './gigdate.js';
 
-const hexRgb = h => PDFLib.rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255);
+/* A mark's colour for pdf-lib. One that is not #rrggbb (a damaged backup or sync) prints black: it must never fail the whole PDF. */
+const hexRgb = h => typeof h === 'string' && /^#[0-9a-f]{6}$/i.test(h)
+  ? PDFLib.rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255) : PDFLib.rgb(0, 0, 0);
+
+/* The part of a copied page a reader shows, the way pdf.js (the viewer) works it out: the MediaBox and CropBox each put in
+   order (a box may be written corner to corner either way round), the CropBox cut down to the MediaBox, the MediaBox
+   alone when there is no CropBox or the two do not overlap. {x, y, width, height}, width and height above 0, or null. */
+function viewBox(pg){
+  const rect = get => {
+    try{
+      const a = get(); if(!a || typeof a.size !== 'function' || a.size() !== 4) return null;
+      const n = [0, 1, 2, 3].map(i => { const v = a.lookup(i); return v && typeof v.asNumber === 'function' ? v.asNumber() : NaN; });
+      if(!n.every(Number.isFinite)) return null;
+      const r = [Math.min(n[0], n[2]), Math.min(n[1], n[3]), Math.max(n[0], n[2]), Math.max(n[1], n[3])];
+      return r[2] > r[0] && r[3] > r[1] ? r : null;
+    }catch(e){ return null; }
+  };
+  const media = rect(() => pg.node.MediaBox()) || [0, 0, 612, 792];     // pdf.js uses Letter when a page has no usable MediaBox
+  const crop = rect(() => pg.node.CropBox());
+  let v = media;
+  if(crop){
+    const i = [Math.max(crop[0], media[0]), Math.max(crop[1], media[1]), Math.min(crop[2], media[2]), Math.min(crop[3], media[3])];
+    if(i[2] > i[0] && i[3] > i[1]) v = i;
+  }
+  return {x:v[0], y:v[1], width:v[2] - v[0], height:v[3] - v[1]};
+}
 
 /* Where a point of the displayed page (u, v as fractions, origin top-left) sits in the PDF's own coordinates. */
 function toPdf(box, rot, u, v){
@@ -112,13 +137,17 @@ export async function buildSetPdf(ids, withInk, opts = {}){
     seen.set(id, r);
     return r;
   };
+  /* A song with no stored PDF, or one pdf-lib cannot read or copy, is left out and named (`left`, each once); the rest print. */
+  const leaveOut = (id, why) => { if(!left.some(x => x.id === id)) left.push({id, why}); };
   for(const id of ids){
     if(opts.cancelled && opts.cancelled()) return {bytes:null, locked, left, lockedPages, cancelled:true};
-    const blob = await get('files', id); if(!blob) continue;
+    const blob = await get('files', id); if(!blob){ leaveOut(id, 'missing'); continue; }
     const song = songById(id);
     /* Detected with isEncrypted, not by catching EncryptedPDFError: pdf-lib's bundled build throws it as a plain Error
        (instanceof and .name do not identify it). ignoreEncryption only lets the check run; the file is not copied. */
-    const src = await PDFDocument.load(await blob.arrayBuffer(), {ignoreEncryption:true});
+    let src;
+    try{ src = await PDFDocument.load(await blob.arrayBuffer(), {ignoreEncryption:true}); }
+    catch(e){ leaveOut(id, 'broken'); continue; }
     if(src.isEncrypted){
       const r = await protectedSong(id, blob);
       if(!r) return {bytes:null, locked, left, lockedPages, cancelled:true};
@@ -130,11 +159,11 @@ export async function buildSetPdf(ids, withInk, opts = {}){
       }
       continue;
     }
-    const pages = await out.copyPages(src, src.getPageIndices());
+    let pages;
+    try{ pages = await out.copyPages(src, src.getPageIndices()); }catch(e){ leaveOut(id, 'broken'); continue; }
     for(let i = 0; i < pages.length; i++){
       const pg = out.addPage(pages[i]);
-      let box; try{ box = pg.getCropBox(); }catch(e){ box = null; }
-      if(!box){ const s = pg.getSize(); box = {x:0, y:0, width:s.width, height:s.height}; }
+      const box = viewBox(pg);         // what the viewer shows: marks are fractions of it (a reversed or oversized box must not mirror or shift them)
       const rot = ((pg.getRotation().angle % 360) + 360) % 360;
       await markPage(pg, box, rot, id, song, i + 1);
     }
@@ -165,7 +194,8 @@ export function printDialog(st, ids){
     } else { m.remove(); toast('PDF saved'); }
   };
   const titleOf = id => songById(id)?.title || 'A song';
-  const WHY = {password:'needs a password, so it can\'t be printed.', broken:'could not be read, so it can\'t be printed.'};
+  const WHY = {password:'needs a password, so it can\'t be printed.', broken:'could not be read, so it can\'t be printed.',
+    missing:'has no PDF stored on this tablet, so it can\'t be printed.'};
   /* Protected songs: say which, and offer to print them as pictures, or the rest without them (never blank pages
      without a word). Songs pdf.js cannot open at all are named on their own lines and always left out. */
   const askLocked = (bytes, locked, left, lockedPages, withInk) => {

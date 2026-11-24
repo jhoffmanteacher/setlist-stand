@@ -346,6 +346,37 @@ print(json.dumps(out))`;
   } finally { await s.close(); }
 }},
 
+{name: 'hardening: a restore leaves out marks that cannot be drawn (a note with no text, a line with no points), counts them in the result, blackens a colour that is not #rrggbb, and restores everything else', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    const good = {id: 'g1', t: 'pen', c: '#112233', w: .003, p: [[.1, .1], [.2, .2]], updated: 5};
+    const page1 = [good,
+      {id: 'n0', t: 'text', c: '#112233', x: .1, y: .1, size: .02, updated: 5},                                       // a note with no text
+      {id: 'n1', t: 'text', c: '#112233', x: .1, y: .1, size: .02, text: 7, updated: 5},                              // text that is not a string
+      {id: 'p0', t: 'pen', c: '#112233', w: .003, updated: 5},                                                         // no list of points
+      {id: 'p1', t: 'pen', c: '#112233', w: .003, p: 'abc', updated: 5},
+      {id: 'p2', t: 'hl', c: '#112233', w: .003, p: [[.1, 'x']], updated: 5},                                          // a point that is not two numbers
+      {id: 'c1', t: 'pen', c: 'red', w: .003, p: [[.3, .3], [.4, .4]], updated: 5},                                    // a colour print cannot read: black, kept
+      {id: 'c2', t: 'text', w: 0, c: undefined, x: .5, y: .5, size: .02, text: 'ok note', updated: 5},               // no colour: black, kept
+      {id: 'd1', deleted: true, updated: 6}];                                                                          // an erase marker is kept as it is
+    const msg = await restore(page, await zipFile({songs: [liveSong('mk', 'mk')], ink: {'mk:1': {updated: 5, strokes: page1}}}, {mk: ONE}), /^Restored/);
+    assert(msg === 'Restored 1 song and 0 setlists', 'restore toast: ' + JSON.stringify(msg));
+    assert(/5 marks that could not be read were left out\./.test(lastKept || ''), 'the result does not count the marks that were left out: ' + JSON.stringify(lastKept));
+    const rec = (await idbAll(page, 'ink'))['mk:1'], ids = rec.strokes.map(x => x.id).sort().join();
+    assert(ids === 'c1,c2,d1,g1', 'the stored page holds ' + ids + ', want c1,c2,d1,g1 (the five that cannot be drawn left out, the rest kept)');
+    const by = Object.fromEntries(rec.strokes.map(x => [x.id, x]));
+    expectSame(by.g1, good, 'a good mark');
+    assert(by.c1.c === '#000000' && by.c2.c === '#000000', `colours became ${by.c1.c} and ${by.c2.c}, want #000000`);
+    assert(by.d1.deleted === true, 'the erase marker was changed');
+    /* the song opens with those marks and the next backup works */
+    await clearToast(page);
+    await backupNow(page);
+    assert(await waitToast(page, /Backup/) === 'Backup saved', 'backup after the restore: ' + await page.locator('#toast').textContent());
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
 {name: 'hardening: a backup always restores (hash from the stored PDF; a song without a PDF is left out and reported)', async run(ctx){
   const s = await ctx.session(), page = s.page;
   try{

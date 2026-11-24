@@ -52,6 +52,7 @@ async function newSet(page, name, titles){
   await page.click('.modal [data-ok]');
   await page.waitForFunction(n => document.querySelector('#view h2')?.textContent === n, name);
   for(const t of titles){
+    await sleep(450);                     // Add songs is one edit under once(): the same edit within 400 ms is ignored (a person cannot add that fast)
     const n0 = await page.locator('#items > li.row').count();
     await page.click('#view [data-addto]');
     await page.locator('.modal .pick').waitFor();
@@ -565,7 +566,7 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
   } finally { await s.close(); }
 }},
 
-{name: 'viewer-hardening 8: Undo of a mark on a song no longer open leaves a deletion marker', async run(ctx){
+{name: 'viewer-hardening 8: Undo belongs to the song showing: after a song change it never touches the song left; on its own song it leaves a deletion marker', async run(ctx){
   const s = await ctx.session(), page = s.page;
   try{
     await s.goto();
@@ -577,14 +578,30 @@ w = PdfWriter(); w.append(PdfReader(sys.argv[1])); w.encrypt('', 'owner', algori
     await stroke(page, [.2, .2], [.5, .25]);
     await waitFor(async () => liveOf((await inkAll(page))[A.id + ':1']).length === 1, 'first stroke not saved');
     await stroke(page, [.2, .5], [.5, .55]);
-    const s2 = await waitFor(async () => { const l = liveOf((await inkAll(page))[A.id + ':1']); return l.length === 2 && l[1]; }, 'second stroke not saved');
+    await waitFor(async () => { const l = liveOf((await inkAll(page))[A.id + ':1']); return l.length === 2 && l[1]; }, 'second stroke not saved');
+    const aBefore = fmt((await inkAll(page))[A.id + ':1']);
     await page.keyboard.press('ArrowRight');
     await waitFor(async () => await title(page) === B.title, 'did not turn to the second song');
+    /* Undo on B, with no mark made on B: nothing to undo, and A (off the screen) is left exactly as it was */
     await page.click('#tUndo');
-    const rec = await waitFor(async () => { const r = (await inkAll(page))[A.id + ':1']; return r && !liveOf(r).some(x => x.id === s2.id) ? r : null; }, 'Undo did not remove the second stroke of the closed song');
-    const mk = rec.strokes.find(x => x.id === s2.id);
-    assert(mk && mk.deleted === true && keysOf(mk) === 'deleted,id,updated' && mk.updated >= s2.updated, `undone stroke left no deletion marker: ${fmt(rec.strokes)}`);
-    assert(liveOf(rec).length === 1, 'first stroke lost: ' + fmt(rec.strokes));
+    await waitFor(async () => (await page.locator('#toast').textContent()).includes('Nothing to undo'), async () => `Undo on ${B.title} did not say "Nothing to undo" (toast "${await page.locator('#toast').textContent()}")`);
+    await sleep(600);
+    assert(fmt((await inkAll(page))[A.id + ':1']) === aBefore, `Undo on ${B.title} changed ${A.title}, a song not showing: ${aBefore} -> ${fmt((await inkAll(page))[A.id + ':1'])}`);
+    /* a mark on B, then Undo: it goes, as a deletion marker (a backup merge must not bring it back) */
+    await stroke(page, [.2, .3], [.5, .35]);
+    const b1 = await waitFor(async () => liveOf((await inkAll(page))[B.id + ':1'])[0], 'the stroke on B was not saved');
+    await page.click('#tUndo');
+    const rec = await waitFor(async () => { const r = (await inkAll(page))[B.id + ':1']; return r && !liveOf(r).length ? r : null; }, `Undo did not remove the stroke on ${B.title}`);
+    const mk = rec.strokes.find(x => x.id === b1.id);
+    assert(mk && mk.deleted === true && keysOf(mk) === 'deleted,id,updated' && mk.updated >= b1.updated, `undone stroke left no deletion marker: ${fmt(rec.strokes)}`);
+    /* back to A: its Undo history went with the song change, so Undo changes nothing on either song */
+    const bBefore = fmt(rec);
+    await page.keyboard.press('ArrowLeft');
+    await waitFor(async () => await title(page) === A.title, 'did not turn back to the first song');
+    await page.click('#tUndo');
+    await sleep(600);
+    const end = await inkAll(page);
+    assert(fmt(end[A.id + ':1']) === aBefore && fmt(end[B.id + ':1']) === bBefore, `Undo after coming back to ${A.title} changed a mark from before the song change: A ${fmt(end[A.id + ':1'])}, B ${fmt(end[B.id + ':1'])}`);
     noErrors(s);
   } finally { await s.close(); }
 }},

@@ -33,12 +33,59 @@ export const unique = taken => { let id = uid(), n = 0; while(taken.has(id)) id 
 /* Modules call hooks.render() to redraw the home screen; main.js fills it in. */
 export const hooks = {render(){}};
 
+/* toast(message) shows a line at the foot of the screen for a moment. toast(message, {action, run, ms}) adds ONE button (Undo) beside it:
+   a real button, so it is reached by Tab and pressed by Enter; tapping it hides the toast and calls run(). The button is taken away when
+   the toast goes (after `ms`, default 6 s) or when the next toast replaces it: only the newest action can be pressed. */
 let toastT;
-export function toast(m){
-  const t = $('#toast'); t.textContent = m; t.classList.add('on');
-  /* a short message stays 2.2 s; a long one (a refusal that explains itself) stays long enough to read, up to 9 s */
-  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), Math.min(9000, Math.max(2200, String(m).length * 55)));
+function hideToast(){
+  const t = $('#toast'); t.classList.remove('on', 'act');
+  const b = t.querySelector('.toastact'); if(b) b.remove();
 }
+export function toast(m, {action = '', run = null, ms = 0} = {}){
+  const t = $('#toast'); t.textContent = m;
+  const act = !!(action && run);
+  if(act){
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'toastact'; b.textContent = action;
+    b.onclick = () => { if(!b.isConnected) return; hideToast(); clearTimeout(toastT); run(); };
+    t.append(' ', b);
+  }
+  t.classList.add('on'); t.classList.toggle('act', act);
+  /* a short message stays 2.2 s; a long one (a refusal that explains itself) stays long enough to read, up to 9 s */
+  clearTimeout(toastT); toastT = setTimeout(hideToast, ms || (act ? 6000 : Math.min(9000, Math.max(2200, String(m).length * 55))));
+}
+
+/* The second tap of a double tap must not land on the page behind a dialog the first tap closed (at 412 px the song picker's Add
+   button sits over a setlist row's Remove). When a dialog is closed by a real tap (modal()'s remove, inside that tap's event), a real
+   pointer, mouse or touch event within QUIET ms and NEAR px of that tap, and outside any dialog, is swallowed with the rest of its gesture.
+   A tap anywhere else, a key, and a click made by code (a file chooser opened from a menu) are never held back. menuBox's item runs in
+   the tap that chose it, while that tap is still being handled, so this never touches it. */
+const QUIET = 400, NEAR = 40;
+let guard = null, eatUntil = 0, eatAt = null, eatenAt = 0;
+const eaten = new Set();                   // pointers whose pointerdown was swallowed: the rest of their gesture goes too (for 3 s at most)
+const near = (x, y, p) => !!p && Math.abs(x - p.x) <= NEAR && Math.abs(y - p.y) <= NEAR;
+const inDialog = t => !!(t && t.closest && t.closest('.modal'));
+const guarded = (x, y, t) => !!guard && performance.now() < guard.until && near(x, y, guard) && !inDialog(t);
+const eat = e => { e.stopImmediatePropagation(); if(e.cancelable) e.preventDefault(); };
+function armGuard(){
+  const e = window.event;          // the event being handled when the dialog closed, if any
+  if(!e || !e.isTrusted || typeof e.clientX !== 'number' || (e.type === 'click' && e.detail === 0)) return;      // a key (Enter, Escape) is not a tap
+  guard = {until: performance.now() + QUIET, x: e.clientX, y: e.clientY};
+}
+const pt = e => e.changedTouches && e.changedTouches[0] ? e.changedTouches[0] : e;
+const eating = () => { if(eaten.size && performance.now() - eatenAt > 3000) eaten.clear(); return eaten.size > 0; };
+addEventListener('pointerdown', e => { if(e.isTrusted && guarded(e.clientX, e.clientY, e.target)){ eating(); eaten.add(e.pointerId); eatenAt = performance.now(); eat(e); } }, true);
+for(const type of ['pointermove', 'pointerup', 'pointercancel']) addEventListener(type, e => {
+  if(!eating() || !eaten.has(e.pointerId)) return;
+  if(type !== 'pointermove'){ eaten.delete(e.pointerId); eatUntil = performance.now() + 800; eatAt = {x: e.clientX, y: e.clientY}; }
+  eat(e);
+}, true);
+/* (no touchstart: a non-passive one on the window would make every scroll wait for this script; the app has no touch listeners, and the
+   touchend and click of a swallowed tap are swallowed here) */
+for(const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'touchend']) addEventListener(type, e => {
+  if(!e.isTrusted) return;
+  const p = pt(e);
+  if(eating() || (performance.now() < eatUntil && near(p.clientX, p.clientY, eatAt)) || guarded(p.clientX, p.clientY, e.target)) eat(e);
+}, {capture: true, passive: false});
 
 /* Every dialog goes through modal(): it is a real dialog for screen readers and keyboards. Focus moves in and Tab
    stays inside; Escape presses Cancel ([data-x]) or closes it; the page behind is inert while it is open; and
@@ -89,6 +136,8 @@ export function modal(html){
   m.remove = () => {
     if(!m.isConnected) return;
     remove();
+    armGuard();                                                // a double tap's second tap must not land on the page behind
+
     if(!document.querySelector('.modal')) setBehind(false);   // else another dialog is still open: keep the page inert
     if(opener && opener.isConnected && opener !== document.body && typeof opener.focus === 'function') opener.focus();
   };
@@ -123,15 +172,20 @@ export function ask(title, val = ''){
 }
 /* A dialog with several text fields. fields: [{key, label, value}]. Resolves to {key: value} or null.
    checks (optional): {label, options:[{value, label, on}]} adds a group of tick boxes under the fields (the Collections of a
-   song or a setlist); the result then also has `checks`: the values ticked. With no text fields the first tick box takes focus. */
-export function form(title, fields, checks){
+   song or a setlist); the result then also has `checks`: the values ticked. With no text fields the first tick box takes focus.
+   check (optional): v => null, or [key, message] for a value that cannot be saved: Save then keeps the box open, says the message
+   under the fields and puts focus in that field (Edit song with its title emptied). */
+export function form(title, fields, checks, check = null){
   return new Promise(res => {
     const group = checks && checks.options.length ? `<fieldset class="fld checks"><legend>${esc(checks.label)}</legend>${checks.options.map(o => `<label class="opt"><input type="checkbox" value="${esc(o.value)}" ${o.on ? 'checked' : ''}>${esc(o.label)}</label>`).join('')}</fieldset>` : '';
-    const m = modal(`<h2>${esc(title)}</h2>${fields.map(f => `<label class="fld"><span>${esc(f.label)}</span><input type="text" maxlength="200" data-k="${f.key}" value="${esc(f.value || '')}"></label>`).join('')}${group}<div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
-    const ins = [...m.querySelectorAll('input[type=text]')];
+    const m = modal(`<h2>${esc(title)}</h2>${fields.map(f => `<label class="fld"><span>${esc(f.label)}</span><input type="text" maxlength="200" data-k="${f.key}" value="${esc(f.value || '')}"></label>`).join('')}${check ? '<p class="hint warnline" role="alert" data-err hidden></p>' : ''}${group}<div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Save</button></div>`);
+    const ins = [...m.querySelectorAll('input[type=text]')], err = m.querySelector('[data-err]');
     if(ins[0]){ ins[0].focus(); ins[0].select(); }
+    if(err) m.addEventListener('input', () => { err.hidden = true; });
     const done = ok => {
       const v = ok ? Object.fromEntries(ins.map(i => [i.dataset.k, i.value.trim()])) : null;
+      const bad = v && check && check(v);
+      if(bad){ err.textContent = bad[1]; err.hidden = false; const i = ins.find(x => x.dataset.k === bad[0]); if(i) i.focus(); return; }
       if(v && checks) v.checks = [...m.querySelectorAll('fieldset.checks input:checked')].map(c => c.value);
       m.remove(); res(v);
     };
@@ -163,8 +217,9 @@ export function pick(songs, {title = 'Add songs', button = 'Add', needOne = fals
   const hasArch = long.some(s => s.archived);
   return new Promise(res => {
     const rows = () => {
-      const base = (showAll ? long : short).filter(s => showArch || !s.archived), list = base.filter(s => songMatches(s, q));
-      if(!list.length) return `<p>${base.length ? 'No songs match.' : (showAll ? long : short).length ? 'Only archived songs are left. Tick Show archived to see them.' : 'Your library is empty. Add PDFs first.'}</p>`;
+      const every = showAll ? long : short, base = every.filter(s => showArch || !s.archived), list = base.filter(s => songMatches(s, q));
+      if(!list.length) return `<p>${!base.length ? (every.length ? 'Only archived songs are left. Tick Show archived to see them.' : 'Your library is empty. Add PDFs first.')
+        : !showArch && every.some(s => s.archived && songMatches(s, q)) ? 'Only archived songs match. Tick Show archived to see them.' : 'No songs match.'}</p>`;
       return list.map(s => { const n = order.indexOf(s.id) + 1;
         return `<label${ordered ? ' class="po"' : ''}><input type="checkbox" value="${esc(s.id)}" ${n ? 'checked' : ''}>${ordered ? `<span class="badge" aria-hidden="true">${n || ''}</span>` : ''}<span class="pt">${esc(s.title)}${s.archived ? ' (archived)' : ''}</span>${ordered && n ? `<span class="vh">, ${n}</span>` : ''}</label>`; }).join('');
     };

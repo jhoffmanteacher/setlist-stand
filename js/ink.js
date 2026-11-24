@@ -2,7 +2,7 @@
    so marks never move when a crop changes. A canvas carries the crop it is drawn through in cv._crop. */
 import {$, esc, toast, armed, uid, modal} from './util.js';
 import {explainError} from './errors.js';
-import {putInk, getInk, reconcile, liveStrokes, stamp} from './store.js';
+import {putInk, reconcile, liveStrokes, stamp} from './store.js';
 import {V, stage, viewer, draw} from './viewer.js';
 
 const FULL = {x:0, y:0, w:1, h:1};
@@ -18,24 +18,38 @@ let penW = 'medium';
 try{ const k = localStorage.getItem('ss-pen-w'); if(k && Object.hasOwn(PEN_W, k)) penW = k; }catch(e){}
 const FONT = '600 {px}px Barlow, system-ui, sans-serif';
 
+/* A mark that came damaged (a backup, a sync) is skipped, never allowed to stop the page drawing: a note needs its text,
+   a stroke needs a list of points; a point that is not two finite numbers is left out; a colour that is not #rrggbb is
+   drawn black. */
+const HEX = /^#[0-9a-f]{6}$/i;
+const colourOf = c => typeof c === 'string' && HEX.test(c) ? c : '#1a1a1a';
+const okPt = p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]);
+export const drawableNote = s => !!s && s.t === 'text' && typeof s.text === 'string' && Number.isFinite(s.x) && Number.isFinite(s.y) && Number.isFinite(s.size);
 export function paint(cv, strokes){
   const c = cv.getContext('2d'), w = cv.width, h = cv.height, cr = cropOfCv(cv), pw = w / cr.w;
   c.clearRect(0, 0, w, h);
-  for(const s of strokes){
-    if(s.deleted) continue;
-    if(s.t === 'text'){
-      const px = s.size * pw; c.save(); c.font = FONT.replace('{px}', px); c.fillStyle = s.c; c.textBaseline = 'top';
-      s.text.split('\n').forEach((ln, i) => c.fillText(ln, (s.x - cr.x) / cr.w * w, (s.y - cr.y) / cr.h * h + i * px * 1.2));
-      c.restore(); continue;
-    }
-    const X = p => (p[0] - cr.x) / cr.w * w, Y = p => (p[1] - cr.y) / cr.h * h;
-    c.save(); c.lineCap = 'round'; c.lineJoin = 'round';
-    c.strokeStyle = s.c; c.lineWidth = s.w * pw;
-    if(s.t === 'hl'){ c.globalAlpha = .4; c.lineCap = 'butt'; }
-    c.beginPath();
-    s.p.forEach((p, i) => i ? c.lineTo(X(p), Y(p)) : c.moveTo(X(p), Y(p)));
-    if(s.p.length === 1) c.lineTo(X(s.p[0]) + .5, Y(s.p[0]));
-    c.stroke(); c.restore();
+  for(const s of Array.isArray(strokes) ? strokes : []){
+    if(!s || typeof s !== 'object' || s.deleted) continue;
+    c.save();
+    try{
+      if(s.t === 'text'){
+        if(!drawableNote(s)) continue;
+        const px = s.size * pw; c.font = FONT.replace('{px}', px); c.fillStyle = colourOf(s.c); c.textBaseline = 'top';
+        s.text.split('\n').forEach((ln, i) => c.fillText(ln, (s.x - cr.x) / cr.w * w, (s.y - cr.y) / cr.h * h + i * px * 1.2));
+        continue;
+      }
+      const pts = Array.isArray(s.p) ? s.p.filter(okPt) : [];
+      if(!pts.length) continue;
+      const X = p => (p[0] - cr.x) / cr.w * w, Y = p => (p[1] - cr.y) / cr.h * h;
+      c.lineCap = 'round'; c.lineJoin = 'round';
+      c.strokeStyle = colourOf(s.c); c.lineWidth = (Number.isFinite(s.w) && s.w > 0 ? s.w : PEN_W.medium) * pw;
+      if(s.t === 'hl'){ c.globalAlpha = .4; c.lineCap = 'butt'; }
+      c.beginPath();
+      pts.forEach((p, i) => i ? c.lineTo(X(p), Y(p)) : c.moveTo(X(p), Y(p)));
+      if(pts.length === 1) c.lineTo(X(pts[0]) + .5, Y(pts[0]));
+      c.stroke();
+    }catch(e){ /* this mark only */ }
+    finally{ c.restore(); }
   }
 }
 const r4 = n => Math.round(n * 1e4) / 1e4;
@@ -53,7 +67,7 @@ function ptOn(cv, e){
   const p = [cr.x + (e.clientX - r.left) / r.width * cr.w, cr.y + (e.clientY - r.top) / r.height * cr.h];
   return Number.isFinite(p[0]) && Number.isFinite(p[1]) ? p : null;
 }
-const toScreen = (cv, r, p) => { const cr = cropOfCv(cv); return [(p[0] - cr.x) / cr.w * r.width, (p[1] - cr.y) / cr.h * r.height]; };
+const toScreen = (cv, r, p) => { const cr = cropOfCv(cv); if(!okPt(p)) return [NaN, NaN]; return [(p[0] - cr.x) / cr.w * r.width, (p[1] - cr.y) / cr.h * r.height]; };
 
 /* The gesture in progress: everything it needs is captured at pointerdown (song id, page, its strokes in c.arr,
    the canvas, the tool), so nothing that changes meanwhile (the song or page on screen, the tool) can send the mark
@@ -100,10 +114,14 @@ function eraseAt(e){
     cur.arr = keep; cur.changed = true; showArr(cur, keep);
   }
 }
+/* Undo belongs to the song showing: V.hist is emptied whenever the song changes (js/viewer.js), and a gesture that ends
+   after its song has gone (a stale one, ended later) saves but leaves no Undo step, so Undo can never change a song that
+   is off the screen. */
+function undoable(c){ if(c.id === V.id) V.hist.push({id:c.id, pn:c.pn, before:c.before}); }
 function endStroke(){
   const c = cur; cur = null;
   if(c.s && c.s.p.length){ c.arr = c.arr.concat([tidy(c.s)]); c.changed = true; }
-  if(c.changed){ V.hist.push({id:c.id, pn:c.pn, before:c.before}); saveInk(c.id, c.pn, c.arr); }
+  if(c.changed){ undoable(c); saveInk(c.id, c.pn, c.arr); }
   showArr(c, c.arr);
 }
 
@@ -118,7 +136,7 @@ function noteBox(cv, r, n){
 }
 function noteAt(cv, e){
   const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  return liveStrokes(V.ink.get(+cv.dataset.pn)).filter(s => s.t === 'text').reverse().find(n => { const b = noteBox(cv, r, n); return x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1; });
+  return liveStrokes(V.ink.get(+cv.dataset.pn)).filter(drawableNote).reverse().find(n => { const b = noteBox(cv, r, n); return x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1; });
 }
 const nearestSize = f => Object.entries(SIZES).sort((a, b) => Math.abs(a[1] - f) - Math.abs(b[1] - f))[0][0];
 /* Resolves to {text, size, c}, 'delete', or null. */
@@ -215,7 +233,7 @@ function endNote(c, cancelled){
   if(cancelled){ showArr(c, c.before); return; }
   if(c.note && c.moved){            // moved: the note object was edited in place, so save it as one step
     const next = c.arr.map(s => s.id === c.note.id ? {...s, updated:stamp(s)} : s);       // the copy still has the note's old `updated`
-    V.hist.push({id:c.id, pn:c.pn, before:c.before}); saveInk(c.id, c.pn, next); showArr(c, next);
+    undoable(c); saveInk(c.id, c.pn, next); showArr(c, next);
   } else if(V.id === c.id && curCv(c).isConnected){   // a tap: the note dialog, only while that page is still shown
     c.cv = curCv(c);
     const orig = c.note && c.before.find(s => s.id === c.note.id);
@@ -287,17 +305,12 @@ export function initInk(){
   $('#tUndo').onclick = () => {
     if(inkBusy()) return;
     inkReset();
-    const h = V.hist.pop(); if(!h){ toast('Nothing to undo'); return; }
-    if(h.id === V.id){
-      const back = reconcile(V.ink.get(h.pn) || [], h.before);
-      saveInk(h.id, h.pn, back); V.ink.set(h.pn, back);
-      const cv = stage.querySelector(`.ink[data-pn="${h.pn}"]`); if(cv) paint(cv, back); else { V.page = h.pn; draw(); }
-    } else {
-      /* that song is not open: undo against what is stored now, so strokes added since become deletion markers
-         (a raw snapshot would drop them with no marker, and a backup merge would bring them back) */
-      getInk(h.id, h.pn).then(stored => saveInk(h.id, h.pn, reconcile(stored, h.before)))
-        .catch(err => toast(explainError(err, 'Could not undo that mark. Your music is safe.')));
-    }
+    const h = V.hist.pop();
+    if(!h || h.id !== V.id || !V.doc){ V.hist = []; toast('Nothing to undo'); return; }     // never a song that is not showing
+    const back = reconcile(V.ink.get(h.pn) || [], h.before);
+    saveInk(h.id, h.pn, back); V.ink.set(h.pn, back);
+    const cv = [...stage.querySelectorAll(`.ink[data-pn="${h.pn}"]`)].find(x => x._ink === V.ink);
+    if(cv) paint(cv, back); else { V.page = h.pn; draw(); }
   };
   $('#tClear').onclick = e => {
     if(inkBusy()) return;

@@ -60,6 +60,7 @@ async function backupFile(){
     set('phs3', 'Old wedding', sg(10, 11), {gig: '2020-03-14'}),
     set('phs4', 'Next week', sg(12, 13), {gig: dayFromNow(7)}),
     set('phs5', 'Empty list', []),
+    set('phs6', 'Tonight at the Harbor', sg(15, 16), {gig: dayFromNow(0)}),          // the Tonight line (js/gigui.js) is on the Library and the Setlists list
     ...[18, 19, 20, 21, 22, 23].map((d, i) => set(`phf${i}`, `Harbor Gig October ${d} 2031`, sg(14 + i))),
   ];
   const colls = [{id: 'phh', name: BAND, created: T, updated: T}, {id: 'phb', name: 'Band Two', created: T, updated: T}];
@@ -172,6 +173,8 @@ const SCREENS = [
     last: null},
   {name: 'Edit song', open: async p => { await toLib(p); await p.locator('#libList [data-songmenu="ph-long"]').tap(); await p.locator('[data-item="edit"]').tap(); await p.locator('.modal [data-ok]').waitFor(); },
     last: 'fieldset.checks input[type=checkbox]', lastOk: async (p, was) => (await topModal(p).locator('fieldset.checks input').last().isChecked()) !== was, lastWhy: 'the last collection box did not change'},
+  {name: 'Add to setlist', open: async p => { await toLib(p); await p.locator('#libList [data-songmenu="ph-long"]').tap(); await p.locator('[data-item="addset"]').tap(); await p.locator('.modal.addtoset').waitFor(); },
+    last: '[data-addset]', lastAct: 'none', lastOk: async () => true},
   {name: 'Share / Import menu', open: async p => { await toLib(p); await p.locator('[data-sharemenu]').tap(); await p.locator('.modal.menubox').waitFor(); },
     last: '[data-item="share"]', lastOk: async p => /Share songs/.test(await topModal(p).locator('h2').innerText()), lastWhy: 'Share songs did not open'},
   {name: 'Share songs', open: async p => { await toLib(p); await menuItem(p, '[data-sharemenu]', 'share'); await p.locator('.modal .pick').waitFor(); },
@@ -199,7 +202,7 @@ const SCREENS = [
   {name: 'Download PDF', open: async p => { await openSet(p, 'phs1'); await menuItem(p, '[data-setmenu]', 'print'); await p.locator('#pInk').waitFor(); },
     last: '#pInk', lastOk: async p => !(await p.locator('#pInk').isChecked()), lastWhy: 'the annotations box did not untick'},
   {name: 'Collections manager', open: async p => { await toLib(p); await p.locator('[data-collmanage]').tap(); await p.locator('.modal .mgr .mrow').first().waitFor(); },
-    last: '.mrow [data-mdel]', lastOk: async p => /Songs stay in your library/.test(await topModal(p).locator('.mrow [data-mdel]').last().innerText()), lastWhy: 'Delete did not ask for its second tap'},
+    last: '.mrow [data-mdel]', lastOk: async p => /Tap again to delete/.test(await topModal(p).locator('.mrow [data-mdel]').last().innerText()), lastWhy: 'Delete did not ask for its second tap'},
   {name: 'New collection name', open: async p => { await toLib(p); await p.locator('[data-collmanage]').tap(); await p.locator('[data-newcoll]').tap(); await p.locator('.modal input[type=text]').waitFor(); },
     last: 'input[type=text]', lastAct: 'fill', fill: 'A new band', lastOk: async p => (await topModal(p).locator('input[type=text]').inputValue()) === 'A new band', lastWhy: 'the name did not take'},
   {name: 'text import review', open: async p => {
@@ -284,7 +287,10 @@ async function runSize(ctx, [W, H], out){
     const lib = await libTop(page);
     info.rowTop = lib && Math.round(lib.top);
     info.rowShows = !!lib && lib.top >= 0 && lib.bottom <= lib.H;
-    if(W === 360 && H === 800) rec.ok('Library: the first song row starts at y <= 430 with two collections and the reminder', lib && lib.top <= 430, `the first row starts at y = ${lib && Math.round(lib.top)}`);
+    if(W === 360 && H === 800) rec.ok('Library: the first song row starts at y <= 430 with two collections, the reminder and the Tonight line', lib && lib.top <= 430, `the first row starts at y = ${lib && Math.round(lib.top)}`);
+    const tn = await page.evaluate(() => { const t = document.querySelector('#view .tonight'); if(!t) return null; const b = t.getBoundingClientRect(); return {top: b.top, h: b.height, text: t.querySelector('.tn1').textContent, right: b.right}; });
+    rec.ok('Library: the Tonight line shows, one short line inside the screen', !!tn && tn.text === 'Tonight: Tonight at the Harbor' && tn.h <= 64 && tn.right <= W + 0.5, JSON.stringify(tn));
+    if(H >= 640 && H > W) rec.ok('Library: with the Tonight line, a whole song row still shows without scrolling', info.rowShows, `the first row is at ${lib && Math.round(lib.top)} to ${lib && Math.round(lib.bottom)} of ${H}`);
     /* Sideways the header is taller than the screen can spare: the agreed answer (work order, Part 1 Build 2) is that it scrolls away and the list is reachable, with the strip at hand. */
     if(W === 800 && H === 360){
       const r = await page.evaluate(async () => { const row = document.querySelector('#libList .row'); row.scrollIntoView({block: 'start'}); await new Promise(r => setTimeout(r, 150)); const b = row.getBoundingClientRect(), a = document.getElementById('azStrip'); return {top: b.top, bottom: b.bottom, H: innerHeight, strip: !!a && getComputedStyle(a).visibility !== 'hidden' && a.getBoundingClientRect().height > 100}; });

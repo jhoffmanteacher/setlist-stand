@@ -11,7 +11,7 @@
    calendar days old, or there is none; AND this tablet's own `ss-drive-backup` is absent or as old (a tablet with a clock far ahead
    cannot make a copy at every sync; a stored time far in the future counts as absent). So two tablets that sync in one week make
    ONE copy between them. `ss-drive-backup` is per tablet: never synced, backed up or shared. */
-import {makeBackup, LAST_BACKUP} from './backup.js';
+import {makeBackup, backupName, LAST_BACKUP} from './backup.js';
 import {all, get} from './store.js';
 import {putFile, trashFile, ensureBackups, findBackups, listBackups} from './driveops.js';
 import {daysAgo, lastBackup} from './nudge.js';
@@ -20,7 +20,7 @@ export const DRIVE_BACKUP = 'ss-drive-backup';        // localStorage: when THIS
 export const EVERY_DAYS = 7, KEEP = 4;
 export const limits = {maxBytes:150e6};                // the PDFs together: over this no copy is made (an object so a test can lower it). The zip is held in memory about three times over (measured for Download all, js/downloadall.js: the same limit), and a tab the tablet kills here would be killed again at the end of every sync
 const mb = n => Math.max(1, Math.round(n / 1e6));
-export const copyName = t => 'setlist-stand-backup-' + new Date(t).toISOString().slice(0, 10) + '.zip';   // the name Back up everything gives, so Restore takes it as it is
+export const copyName = backupName;   // the name Back up everything gives (the local date and time), so Restore takes it as it is
 
 function ownTime(){
   try{ const t = Number(localStorage.getItem(DRIVE_BACKUP)); return t > 0 && t <= Date.now() + 864e5 ? t : 0; }catch(e){ return 0; }

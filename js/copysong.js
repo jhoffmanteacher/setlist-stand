@@ -1,6 +1,6 @@
 import {esc, modal, toast, hooks} from './util.js';
 import {putAll, get, load, state, songById, upgradeInk, inkRecord} from './store.js';
-import {displayName, cutName} from './names.js';
+import {displayName, cutName, compareSongs} from './names.js';
 import {explainError} from './errors.js';
 import {unique} from './shareimport.js';
 
@@ -12,7 +12,13 @@ import {unique} from './shareimport.js';
    tablet saves nothing. Songs are matched by id, never by hash: two songs may hold the same PDF. */
 const same = (a, b) => String(a || '').replace(/\s+/g, ' ').trim().toLowerCase() === String(b || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-/* The dialog. Resolves to the version typed (trimmed), or null for Cancel. Save waits for a name that is not the original's version. */
+/* A version name is taken when the original or ANY other copy of the same chart has it, live or archived: a song with the same song name
+   and artist as compareSongs sees them (case, accents and extra spaces do not matter), and a version equal in the same way. */
+const keyOf = (x, version) => ({song:x.song || x.title, artist:x.artist || '', version:String(version || '').replace(/\s+/g, ' ').trim(), id:''});
+const sameChart = (a, b) => compareSongs(keyOf(a, ''), keyOf(b, '')) === 0;
+const takenBy = (s, v) => state.songs.find(x => x.id !== s.id && sameChart(x, s) && compareSongs(keyOf(x, x.version), keyOf(s, v)) === 0);
+
+/* The dialog. Resolves to the version typed (trimmed), or null for Cancel. Save waits for a name that no copy of this chart has. */
 function askVersion(s){
   return new Promise(res => {
     const m = modal(`<h2>Copy song</h2><p>Copy of ${esc(s.title)}</p>
@@ -22,10 +28,11 @@ function askVersion(s){
     m.classList.add('copyask');
     const inp = m.querySelector('input'), ok = m.querySelector('[data-ok]'), err = m.querySelector('[data-err]');
     const check = () => {
-      const v = inp.value.trim(), dup = !!v && same(v, s.version);
+      const v = inp.value.trim(), mine = !!v && (same(v, s.version) || compareSongs(keyOf(s, s.version), keyOf(s, v)) === 0), other = !!v && !mine && takenBy(s, v), dup = mine || !!other;
       ok.disabled = !v || dup;
       err.hidden = !dup;
-      err.textContent = dup ? 'That is already this song’s version. Type a different version name.' : '';
+      err.textContent = mine ? 'That is already this song’s version. Type a different version name.'
+        : other ? `${other.archived ? 'An archived' : 'Another'} copy of this song already has that version name. Type a different version name.` : '';
       return !!v && !dup;
     };
     const done = v => { m.remove(); res(v); };

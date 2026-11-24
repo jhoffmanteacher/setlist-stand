@@ -39,8 +39,9 @@ The kill switch (`tools/kill-switch/kill-sw.js`) replaces the offline copy with 
 What each tablet does:
 - The browser checks `sw.js` the next time the app is opened (or reloaded). Allow up to ~10 minutes for Pages,
   then one open of the app.
-- The kill switch deletes the app's offline copy and takes over. An open tab reloads ONCE by itself; a song
-  that was open comes back on the same page.
+- The kill switch deletes the app's offline copy and takes over. An open tab reloads ONCE by itself (that
+  part is done by `js/boot.js`: if the broken update stopped it too, the tab does not reload; reload the page
+  once by hand and it is the plain online app). A song that was open comes back on the same page.
 - Nothing the musician saved is touched: songs, PDFs, setlists, markings and notes stay on the tablet.
 - While it is armed the app needs the internet. It will NOT open offline. Do not go to a gig without Wi-Fi
   or data while it is armed: fix the real problem first and go back (below).
@@ -90,4 +91,5 @@ Another website on the same address (jhoffmanteacher.github.io, for example the 
 Stand's offline copy on a tablet. Open Setlist Stand WITH internet and leave it open on the Library for a minute: it
 refills its offline copy by itself (no message, nothing to tap; the refill is all or nothing, so a short visit may
 store nothing yet). Then try again without internet. If a new version is waiting ("Updated. Tap to reload"),
-tap it first: the new version brings its own complete offline copy.
+tap it, then leave the app open with internet for a minute: the new version fills its offline copy while
+it is open (a short visit may not finish it; open it again with internet and wait another minute).

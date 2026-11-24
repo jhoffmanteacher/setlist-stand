@@ -470,4 +470,42 @@ export const loops = [
     } finally { login(); restore(); await s.close(); }
   }
 },
+{
+  name: 'offline n: a deploy that lands while the refill is fetching files: the refill stores nothing (it asks the server\'s VERSION again after the files arrive)',
+  async run(ctx){
+    const s = await installedWithSong(ctx);
+    const file = '/vendor/pdf.worker.min.js', real = fs.readFileSync(path.join(ctx.root, 'sw.js'), 'utf8');
+    let armed = false, lateAnswers = 0;
+    /* The first look at the server's sw.js (before any file is fetched) is the real one: the same version. Then, as soon as a file
+       is asked for, the "deploy lands": the NEXT look at sw.js names another version. */
+    const fileWatch = intercept(ctx.server, (req, res, p) => { if(p === file && !lateAnswers) armed = true; return false; });
+    const swWatch = intercept(ctx.server, (req, res, p) => {
+      if(p !== '/sw.js' || !armed) return false;
+      armed = false; lateAnswers++;
+      res.writeHead(200, {'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-cache'}).end(real.replace(/(const\s+VERSION\s*=\s*')[^']+'/, "$1deployed-while-refilling'"));
+      return true;
+    });
+    try{
+      const {page} = s;
+      const name = cacheName(ctx.root), want = precachePaths(ctx.root);
+      await sleep(1000);                                           // the load's own refill request was answered (the copy was whole)
+      assert(await wipeCaches(page) === 0, 'test setup: the caches could not be deleted');
+      await backOnScreen(page);
+      await until(() => page.evaluate(() => window.__ssHeal), 'the worker never answered the refill request', 15000);
+      const said = await page.evaluate(() => window.__ssHeal);
+      assert(lateAnswers === 1, `the refill looked at the server's sw.js ${lateAnswers ? 'more than once' : 'only before the files arrived (a deploy landing meanwhile goes unseen)'}`);
+      assert(said === 'newer', `a deploy landed while the files were arriving and the refill answered "${said}", want "newer"`);
+      await sleep(500);
+      const keys = await cacheKeys(page, name) || [];
+      assert(!keys.length, `the refill stored ${keys.length} file(s) although the server's VERSION changed while they were fetched: ${keys.slice(0, 4).map(k => k || './').join(', ')}`);
+      /* nothing is stuck: with the server steady again, the next time on screen fills the copy with the server's own bytes */
+      await backOnScreen(page);
+      await waitInstalled(page, name, want, 20000)
+        .catch(async e => { throw new Error(`a later refill did not fill the copy: ${e.message} (the worker answered ${await page.evaluate(() => window.__ssHeal)})`); });
+      const got = await cachedHashes(page, name, want);
+      const wrong = want.filter(p => got[p] !== sha(fs.readFileSync(path.join(ctx.root, toRepoPath(p)))));
+      assert(!wrong.length, 'refilled entries that differ from the files on the server: ' + wrong.map(p => p || './').join(', '));
+    } finally { swWatch(); fileWatch(); await s.close(); }
+  }
+},
 ];

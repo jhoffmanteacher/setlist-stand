@@ -24,7 +24,7 @@ async function showPage(pn){
   st = null;
   const W = stage.clientWidth - 32, H = stage.clientHeight - 32;
   let r;
-  try{ r = await renderPage(pn, W, H, null); }catch(e){ cropper.hidden = true; return; }
+  try{ r = await renderPage(pn, W, H, null); }catch(e){ if(token === loadTok) close(); return; }
   if(token !== loadTok || cropper.hidden) return;
   const cv = $('#cropCv'); cv.width = r.cv.width; cv.height = r.cv.height;
   cv.getContext('2d').drawImage(r.cv, 0, 0);
@@ -35,7 +35,8 @@ async function showPage(pn){
   $('#cropHint').textContent = `Page ${pn} of ${V.n}`;
   $('#cropPrev').disabled = pn <= 1; $('#cropNext').disabled = pn >= V.n;
 }
-function close(){ $('#cropper').hidden = true; st = null; loadTok++; }
+/* Closing frees the editor's page-sized canvas (iPad Safari takes canvas memory back only from an emptied canvas). */
+function close(){ $('#cropper').hidden = true; st = null; loadTok++; const cv = $('#cropCv'); cv.width = 0; cv.height = 0; }
 async function apply(whole){
   if(!st) return;
   const song = V.song, rect = {x:round(st.rect.x), y:round(st.rect.y), w:round(st.rect.w), h:round(st.rect.h)}, pn = st.pn;

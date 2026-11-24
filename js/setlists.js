@@ -7,10 +7,11 @@ import {shareSet} from './share.js';
 import {renderNudge} from './nudge.js';
 import {showPicked, pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
 import {gigOf, gigLong, gigShort, groupSets, isOpen, toggleGroup} from './gigdate.js';
-import {gigDialog, newSetDialog, offerFill} from './gigui.js';
+import {gigDialog, newSetDialog, offerFill, tonightHtml} from './gigui.js';
 import {menuBox} from './menubox.js';
 import {chooseTextFile} from './setlisttext.js';
 import {commit, once} from './saving.js';
+import {readyCheck} from './readycheck.js';
 
 export let openSet = null;
 export const closeSet = () => { openSet = null; };
@@ -39,7 +40,7 @@ export function renderSetlists(v){
       : `<div class="empty"><h2>Empty setlist</h2><p>Tap Add songs to pick charts from your library.</p></div>`}`;
   } else {
     const shownSets = sets.filter(inShown), coll = shownColl();
-    v.innerHTML = pickerHtml() + `<div class="bar"><button class="pri" data-newset>New setlist</button><button data-importtext>Import from a text file</button><button data-dlall ${shownSets.some(st => songCount(st)) ? '' : 'disabled'}>Download all</button></div><div id="libNudge"></div>` +
+    v.innerHTML = tonightHtml(true) + pickerHtml() + `<div class="bar"><button class="pri" data-newset>New setlist</button><button data-importtext>Import from a text file</button><button data-dlall ${shownSets.some(st => songCount(st)) ? '' : 'disabled'}>Download all</button></div><div id="libNudge"></div>` +
       (shownSets.length ? listHtml(shownSets)
       : coll ? `<div class="empty"><h2>No setlists in ${esc(coll.name)} yet</h2><p>A new setlist joins ${esc(coll.name)} while it is shown.</p></div>`
       : `<div class="empty"><h2>No setlists yet</h2><p>Make one for each gig or rehearsal.</p></div>`);
@@ -80,6 +81,7 @@ function listHtml(sets){
 /* The open setlist's More menu (Jonathan, 2026-11-22: the bar was crowded). Every item does what its own button did. */
 const setMenuItems = (st, n) => [
   {id: 'gig', label: 'Gig date', hint: gigOf(st) ? `${gigLong(gigOf(st))} (tap to change)` : 'Set or change the date of this gig'},
+  {id: 'ready', label: 'Ready check', hint: 'Open every chart now to be sure each one is here', disabled: !n},
   {id: 'print', label: 'Download PDF', hint: 'Save the songs as one PDF', disabled: !n},
   {id: 'share', label: 'Share', hint: 'Send this setlist and its songs as one file', disabled: !n},
   {id: 'dup', label: 'Duplicate', hint: 'Make a copy of this setlist'},
@@ -93,6 +95,37 @@ async function duplicate(st){
 }
 /* An edit of the open setlist's items: a COPY of the record is saved, the screen is drawn again from storage (js/saving.js). */
 const saveItems = (st, next) => commit(() => saveSet({...st, items:next}), 'Could not save the setlist. Nothing was changed.');
+
+/* Remove takes the row out at once; the toast then offers Undo for 6 seconds (Jonathan, 2026-11-23), which puts the same item (a song,
+   or a break with its name and id) back at the place it had. Each is ONE write under once(), like every other setlist edit, and a refused
+   save says so and changes nothing. Only the newest Remove can be undone: a second Remove (or any other message) replaces the toast. */
+const itemName = it => it.type === 'break' ? `the break \u201c${cutT(it.name)}\u201d` : cutT((songById(it.id) || {}).title || 'the song');
+const cutT = t => t.length > 40 ? t.slice(0, 40) + '\u2026' : t;
+async function removeItem(st, k){
+  const items = liveItems(st), it = items[k]; if(!it) return;
+  const ok = await once('remove', () => saveItems(st, items.filter((_, i) => i !== k)));
+  if(ok) toast(`Removed ${itemName(it)}.`, {action:'Undo', ms:6000, run:() => undoRemove(st.id, it, k)});
+}
+async function undoRemove(setId, it, k){
+  const put = () => {
+    const st = state.sets.find(s => s.id === setId);
+    if(!st){ toast('That setlist is gone, so nothing was put back.'); return true; }
+    if(it.type === 'song' && !songById(it.id)){ toast('That song is no longer in your library, so nothing was put back.'); return true; }
+    const items = liveItems(st);
+    if(it.type === 'break' && items.some(x => x.id === it.id)) return true;          // already back
+    const next = [...items]; next.splice(Math.min(k, items.length), 0, it);
+    return commit(async () => { await saveSet({...st, items:next}); toast(`Put back ${itemName(it)}.`); }, 'Could not put it back. Nothing was changed.');
+  };
+  /* another save still running (a drag that ended a moment ago): wait for it rather than drop the Undo */
+  for(let i = 0; i < 20; i++){
+    let ran = false;
+    await once('undo' + (++undos), () => { ran = true; return put(); });
+    if(ran) return;
+    await new Promise(r => setTimeout(r, 150));
+  }
+  toast('Could not put it back: another change was still being saved. Nothing was changed.');
+}
+let undos = 0;
 
 const menuTitle = st => st.name.length > 40 ? st.name.slice(0, 40) + '\u2026' : st.name;
 async function changeGig(st){
@@ -136,6 +169,8 @@ export async function onClick(b, d){
     return true;
   }
   if(d.play){ const st = sets.find(s => s.id === d.play); openViewer(entriesOf(st), 0); return true; }
+  if(d.tonight){ const st = sets.find(s => s.id === d.tonight); if(st) openViewer(entriesOf(st), 0); return true; }     // the Tonight line (js/gigui.js), on the Library or the Setlists list
+  if('tonightmore' in d){ openSet = null; $('#tSets').click(); return true; }                                         // "and N more setlists today": the Setlists list
   const st = sets.find(s => s.id === openSet);
   if(!st) return false;
   const items = liveItems(st);
@@ -144,13 +179,14 @@ export async function onClick(b, d){
     /* With a collection shown the list holds its songs, and "Show all songs" reaches the rest. */
     const open = songs, c = shownColl();      // archived songs are in the list too, hidden until "Show archived" is ticked (pick)
     const add = await pick(c ? open.filter(inShown) : open, c ? {all:open, ordered:true} : {ordered:true});
-    if(add.length) await saveItems(st, [...items, ...add.map(id => ({type:'song', id}))]);
+    if(add.length) await once('addsongs' + Date.now(), () => saveItems(st, [...items, ...add.map(id => ({type:'song', id}))]));
     return true;
   }
   if('setmenu' in d){
     b.focus();                                                  // Safari does not focus a button that was tapped: the box and the dialogs after it give focus back to it
     await menuBox({title: menuTitle(st), items: setMenuItems(st, songCount(st)), opener: b, run: id => {
       if(id === 'gig') return changeGig(st);
+      if(id === 'ready') return readyCheck(st.id);
       if(id === 'print') return printDialog(st, items.filter(it => it.type === 'song').map(it => it.id));
       if(id === 'share') return shareSet(st);
       if(id === 'dup') return duplicate(st);
@@ -170,7 +206,7 @@ export async function onClick(b, d){
     if(n) await saveItems(st, items.map((x, i) => i === k ? {...x, name:n} : x));
     return true;
   }
-  if(d.rm){ await once('remove', () => saveItems(st, items.filter((_, i) => i !== +d.rm))); return true; }
+  if(d.rm){ await removeItem(st, +d.rm); return true; }
   return false;
 }
 

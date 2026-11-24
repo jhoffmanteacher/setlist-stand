@@ -870,7 +870,7 @@ async function backupMenuLoop(ctx){
 
       /* each item starts its own action, and the box is gone */
       const dl = await download(page, () => openBackupMenu(page, 'backup'));
-      assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d\.zip$/.test(dl.name) && (await JSZip.loadAsync(await fsp.readFile(dl.file))).file('library.json'), `${at}: Back up everything gave ${dl.name}`);
+      assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d-\d{4}\.zip$/.test(dl.name) && (await JSZip.loadAsync(await fsp.readFile(dl.file))).file('library.json'), `${at}: Back up everything gave ${dl.name}`);
       await noModal(page);
       assert(await page.locator(opener).textContent() === 'Back up / Sync' && await page.locator(opener).isEnabled(), `${at}: the Back up / Sync button was not given back after the backup`);
       const [fc] = await Promise.all([page.waitForEvent('filechooser', {timeout: 8000}), openBackupMenu(page, 'restore')]);

@@ -1806,7 +1806,7 @@ async function stepCollections(t){
   await page.locator('.collmgr').waitFor();
   const del = page.locator(`.collmgr [data-mdel="${B}"]`);
   await del.click();
-  assert(await del.textContent() === 'Songs stay in your library', 'first tap on Delete says "' + await del.textContent() + '"');
+  assert(await del.textContent() === 'Tap again to delete', 'first tap on Delete says "' + await del.textContent() + '"');
   assert((await idbAll(page, 'colls'))[B].deleted !== true, 'one tap deleted the collection');
   await del.click();
   await page.waitForFunction(id => !document.querySelector(`.collmgr [data-mdel="${id}"]`), B, {timeout: 5000});

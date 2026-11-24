@@ -52,7 +52,7 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/ss-precommit.XXXXXX") || exit 0
 trap 'rm -rf "$tmp"' EXIT
 fails=$(printf '%s\n' "$js" | while IFS= read -r f; do
   case "$f" in
-    (sw.js|*.cjs) ext=cjs ;;   # sw.js is a classic service-worker script
+    (sw.js|js/boot.js|*.cjs) ext=cjs ;;   # sw.js and js/boot.js are classic scripts (a top-level await or import.meta must fail here)
     (*) ext=mjs ;;             # js/*.js, tools/*.mjs: ES modules (package.json "type": "module")
   esac
   out="$tmp/staged.$ext"

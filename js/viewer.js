@@ -5,11 +5,14 @@ import {awakeOpen, awakeClose, initAwake} from './awake.js';
 import {PageCache, release} from './pagecache.js';
 import {initBackNav} from './backnav.js';
 import {paint, setAnnot, widthMenu, inkBusy, inkReset, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
+import {jumpList} from './songjump.js';
 
 export const stage = $('#stage'), viewer = $('#viewer');
 /* cache: rendered pages (js/pagecache.js). prep: queue index -> {id, p: Promise of an open pdf.js document} for the songs
-   next to the one showing, kept open so a turn into them has nothing to open (see "Songs next to this one" below). */
-export const V = {queue:[], qi:0, brk:null, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
+   next to the one showing, kept open so a turn into them has nothing to open (see "Songs next to this one" below).
+   bad: the song showing is a chart that could not be opened (missing, damaged): a placeholder page stands in for it.
+   hist: the Undo steps of the song showing (js/ink.js), emptied whenever the song changes. */
+export const V = {queue:[], qi:0, brk:null, bad:false, page:1, n:0, doc:null, id:null, song:null, per:1, two:true, annot:false, finger:false,
   tool:'pen', color:'#1a1a1a', tok:0, dt:0, busy:false, cache:new PageCache(), prep:new Map(), ink:new Map(), hist:[]};
 try{ V.two = localStorage.getItem('ss-two') !== '0'; }catch(e){}
 
@@ -19,6 +22,7 @@ try{ V.two = localStorage.getItem('ss-two') !== '0'; }catch(e){}
 export async function openViewer(entries, qi, page = 1){
   if(!entries.some(e => e.type === 'song')) return;
   prune([]); V.queue = entries; V.hist = [];
+  jumpable(entries.length > 1);
   viewer.classList.add('on'); viewer.classList.remove('hide');
   document.body.style.overflow = 'hidden';
   document.body.classList.add('playing');      // hides the "Updated. Tap to reload" banner: a stray tap mid-song must not reload the app
@@ -33,21 +37,38 @@ export function closeViewer(){
   inkReset();                 // a gesture still open (no pen-up arrived) saves to its own song and page now
   setAnnot(false);
   viewer.classList.remove('on');
-  V.tok++; V.dt++; V.brk = null; gest = null;
+  V.tok++; V.dt++; V.brk = null; V.bad = false; V.hist = []; gest = null;
   if(V.doc){ V.doc.destroy(); V.doc = null; }
   prune([]);                                  // songs prepared for a turn that never came: closed, their pages released
   V.cache.clear(); setStage();
   document.body.style.overflow = '';
   document.body.classList.remove('playing');
   awakeClose();
-  if(document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  if(fsElement()) exitFs();
   hooks.render();
+}
+/* Full screen, with the webkit-prefixed names where the plain ones are missing (iPadOS 16.0 to 16.3). */
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+function exitFs(){
+  const f = document.exitFullscreen || document.webkitExitFullscreen;
+  try{ const p = f && f.call(document); if(p && p.catch) p.catch(() => {}); }catch(e){}
+}
+function enterFs(){
+  const root = document.documentElement, f = root.requestFullscreen || root.webkitRequestFullscreen, no = () => toast('Full screen is not available here');
+  if(!f){ no(); return; }
+  /* the prefixed call returns nothing and says a refusal by an event */
+  if(!root.requestFullscreen){
+    document.addEventListener('webkitfullscreenerror', no, {once:true});
+    document.addEventListener('webkitfullscreenchange', () => document.removeEventListener('webkitfullscreenerror', no), {once:true});
+  }
+  let p; try{ p = f.call(root); }catch(e){ no(); return; }
+  if(p && p.catch) p.catch(no);
 }
 const show = (qi, page) => V.queue[qi].type === 'break' ? showBreak(qi) : loadSong(qi, page);
 async function showBreak(qi){
   V.tok++; setAnnot(false);
   retire(qi);                                 // the song just left stays open: Back from the break is instant
-  V.brk = V.queue[qi]; V.qi = qi; V.song = null; V.id = null; V.page = 1; V.n = 1;
+  V.brk = V.queue[qi]; V.qi = qi; V.song = null; V.id = null; V.page = 1; V.n = 1; V.bad = false; V.hist = [];
   prune(around(qi));
   await draw();
 }
@@ -61,29 +82,40 @@ function takeDoc(qi, id){
 async function openDoc(id){
   const blob = await get('files', id);
   if(!blob) return null;
-  return pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer())}).promise;
+  const task = pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer())});
+  try{ return await task.promise; }
+  catch(err){ try{ task.destroy(); }catch(e){} throw err; }     // a PDF that will not open: its pdf.js worker is closed too, not left running
 }
+/* A chart that cannot be shown (no stored PDF, a PDF that will not open, its marks unreadable) becomes ONE placeholder page
+   that says so: the song counts as shown, so Next and Previous move on past it either way, and nothing can be drawn on
+   it (an empty marks map saved over its page would lose the real marks). */
 async function loadSong(qi, page){
   const tok = ++V.tok; const id = V.queue[qi].id;
-  let doc = null;
+  let doc = null, ink = null;
   try{
     doc = await takeDoc(qi, id);
-    if(!doc){ toast('That file is missing'); return; }
-    const ink = await getInkPages(id, doc.numPages);     // one read for every page, not one awaited read per page
-    if(tok !== V.tok){ dropDoc({p:Promise.resolve(doc)}); return; }
-    retire(qi);
-    Object.assign(V, {doc, id, qi, n:doc.numPages, song:songById(id), ink, brk:null});
-    /* From here until draw() puts the new pages up, the stage still shows the song just left; its canvases carry the
-       old song's marks map (ink._ink), so js/ink.js ignores a pen-down or Clear on them (they would land on THIS song). */
-    V.page = 1; calcPer();
-    V.page = page === 'last' ? lastStart() : Math.min(Math.max(1, +page || 1), V.n);
-    if(V.per === 2 && V.page % 2 === 0) V.page--;
+    if(doc) ink = await getInkPages(id, doc.numPages);     // one read for every page, not one awaited read per page
+  }catch(err){
+    if(doc) dropDoc({p:Promise.resolve(doc)});           // opened but never shown (the marks read failed): close it, or its worker and bytes leak
+    doc = null;
+  }
+  if(tok !== V.tok){ if(doc) dropDoc({p:Promise.resolve(doc)}); return; }
+  retire(qi);
+  if(!doc){
+    setAnnot(false);
+    Object.assign(V, {doc:null, id, qi, n:1, page:1, song:songById(id), ink:new Map(), brk:null, bad:true, hist:[]});
     prune(around(qi));
     await draw();
-  }catch(err){
-    if(doc && doc !== V.doc) dropDoc({p:Promise.resolve(doc)});     // opened but never shown (the ink read failed): close it, or its worker and bytes leak
-    toast('Could not open this PDF');
+    return;
   }
+  Object.assign(V, {doc, id, qi, n:doc.numPages, song:songById(id), ink, brk:null, bad:false, hist:[]});
+  /* From here until draw() puts the new pages up, the stage still shows the song just left; its canvases carry the
+     old song's marks map (ink._ink), so js/ink.js ignores a pen-down or Clear on them (they would land on THIS song). */
+  V.page = 1; calcPer();
+  V.page = page === 'last' ? lastStart() : Math.min(Math.max(1, +page || 1), V.n);
+  if(V.per === 2 && V.page % 2 === 0) V.page--;
+  prune(around(qi));
+  await draw();
 }
 const perFor = n => (V.two && innerWidth > innerHeight * 1.1 && n > 1) ? 2 : 1;
 function calcPer(){
@@ -180,11 +212,26 @@ function drawBreak(){
   /* a break page is the time to ready the songs on both sides (also after a resize or the Two pages toggle emptied the cache) */
   prepare(nextSong(V.qi), 'first'); prepare(prevSong(V.qi), 'last');
 }
+/* The placeholder for a chart that could not be opened, or one page that could not be drawn. */
+function badPage(msg){
+  const el = document.createElement('div');
+  el.className = 'badpage'; el.innerHTML = `<h2></h2><p></p>`;
+  el.querySelector('h2').textContent = V.song?.title || 'This song';
+  el.querySelector('p').textContent = msg;
+  return el;
+}
+export const BAD_CHART = 'This chart could not be opened. Your music is safe.', BAD_PAGE = 'This page could not be shown. Your music is safe.';
+function drawBad(){
+  setStage(badPage(BAD_CHART));
+  updateChrome();
+  prepare(nextSong(V.qi), 'first'); prepare(prevSong(V.qi), 'last');
+}
 export async function draw(){
   /* V.dt first, break or not: a render still running for the page just left (its document is kept open now) must find
      V.dt changed and never paint over the break page */
   const dt = ++V.dt;
   if(V.brk) return drawBreak();
+  if(V.bad) return drawBad();
   if(!V.doc) return;
   calcPer();
   const {W, H} = stageSize(V.per);
@@ -192,17 +239,19 @@ export async function draw(){
   for(let i = 0; i < V.per; i++){ const p = V.page + i; if(p <= V.n) pns.push(p); }
   const keys = pns.map(p => pageKey(V, p, W, H, cropOf(V.song, p) || FULL_CROP));
   const free = V.cache.hold(keys);                  // these pages must not be evicted before they are on the stage
-  let res;
   try{
-    try{ res = await Promise.all(pns.map(p => renderPage(p, W, H, cropOf(V.song, p)))); }catch(e){ return; }
+    /* a page that fails to draw gets the placeholder in its place: the stage always moves to the page (and song) V holds,
+       so Annotate, Crop and Undo never act on a song other than the one showing */
+    const res = await Promise.allSettled(pns.map(p => renderPage(p, W, H, cropOf(V.song, p))));
     if(dt !== V.dt) return;
-    setStage(...res.map((r, i) => {
-      const sh = document.createElement('div'); sh.className = 'sheet';
+    setStage(...res.map((x, i) => {
+      if(x.status !== 'fulfilled') return badPage(BAD_PAGE);
+      const r = x.value, sh = document.createElement('div'); sh.className = 'sheet';
       sh.style.width = r.cw + 'px'; sh.style.height = r.ch + 'px';
       const ink = document.createElement('canvas'); ink.className = 'ink'; ink.dataset.pn = pns[i];
       ink.width = r.cv.width; ink.height = r.cv.height; ink._crop = r.crop; ink._ink = V.ink;   // whose marks these are: js/ink.js draws only on the open song's canvases
       sh.append(r.cv, ink);
-      paint(ink, V.ink.get(pns[i]) || []);
+      try{ paint(ink, V.ink.get(pns[i]) || []); }catch(e){}     // a mark that cannot be drawn never stops the page showing
       return sh;
     }));
   } finally { free(); }
@@ -217,7 +266,7 @@ export async function draw(){
 const entryLabel = e => e.type === 'break' ? e.name : (songById(e.id)?.title || '');
 function updateChrome(){
   const nu = $('#nextup'), songs = V.queue.filter(e => e.type === 'song');
-  $('#vAnn').hidden = !!V.brk; $('#vCrop').hidden = !!V.brk;
+  $('#vAnn').hidden = !!V.brk || V.bad; $('#vCrop').hidden = !!V.brk || V.bad;
   if(V.brk){
     $('#vTitle').textContent = V.brk.name; $('#vSub').textContent = 'Break';
     nu.hidden = true; return;
@@ -225,8 +274,8 @@ function updateChrome(){
   $('#vTitle').textContent = V.song ? V.song.title : '';
   const pr = V.per === 2 && V.page < V.n ? `${V.page}–${V.page + 1}` : V.page;
   const k = V.queue.slice(0, V.qi + 1).filter(e => e.type === 'song').length;
-  $('#vSub').textContent = (songs.length > 1 ? `Song ${k} of ${songs.length} · ` : '') + `Page ${pr} of ${V.n}`;
-  const last = V.page + V.per > V.n, nxt = V.queue[V.qi + 1];
+  $('#vSub').textContent = (songs.length > 1 ? `Song ${k} of ${songs.length} · ` : '') + (V.bad ? 'Could not open' : `Page ${pr} of ${V.n}`);
+  const last = V.bad || V.page + V.per > V.n, nxt = V.queue[V.qi + 1];
   if(last && nxt){ nu.hidden = false; nu.textContent = 'Next: ' + entryLabel(nxt); }
   else if(last && songs.length > 1){ nu.hidden = false; nu.textContent = 'End of set'; }
   else nu.hidden = true;
@@ -238,16 +287,31 @@ async function goTo(qi, page){
 }
 /* No turn while a stroke, an erase or a note drag is under way (pedal, keys, buttons or a second finger): the mark
    belongs to the page it started on, and that page must stay on the screen until the pen lifts. */
+const shown = () => !!(V.doc || V.brk || V.bad);     // a placeholder holds page 1 of 1, so a turn always moves past it
 export async function next(){
-  if(V.busy || inkBusy() || (!V.doc && !V.brk)) return;
+  if(V.busy || inkBusy() || !shown()) return;
   if(!V.brk && V.page + V.per <= V.n){ V.page += V.per; draw(); }
   else if(V.qi < V.queue.length - 1) await goTo(V.qi + 1, 1);
   else toast(V.queue.length > 1 ? 'End of set' : 'Last page');
 }
 export async function prev(){
-  if(V.busy || inkBusy() || (!V.doc && !V.brk)) return;
+  if(V.busy || inkBusy() || !shown()) return;
   if(!V.brk && V.page > 1){ V.page = Math.max(1, V.page - V.per); draw(); }
   else if(V.qi > 0) await goTo(V.qi - 1, 'last');
+}
+
+/* ---------- jump to a song (the title in the top bar, when the viewer was opened from a setlist) ---------- */
+const ttl = () => $('#vtop .ttl');
+function jumpable(on){
+  const t = ttl();
+  t.classList.toggle('canjump', on);
+  if(on){ t.setAttribute('role', 'button'); t.tabIndex = 0; t.setAttribute('aria-haspopup', 'dialog'); t.title = 'Go to another song in this setlist'; }
+  else { for(const a of ['role', 'tabindex', 'aria-haspopup', 'title']) t.removeAttribute(a); }
+}
+function openJump(){
+  if(!ttl().classList.contains('canjump') || !viewer.classList.contains('on') || V.busy || inkBusy() || document.querySelector('.modal') || !$('#cropper').hidden) return;
+  jumpList(V.queue, V.qi, qi => { if(viewer.classList.contains('on') && qi !== V.qi && !V.busy && !inkBusy()) goTo(qi, 1); },
+    () => { if(document.activeElement === ttl()) ttl().blur(); });     // a pedal's Space must turn the page, not open the list again
 }
 
 /* ---------- pointers: drawing goes to ink.js, everything else is page turning ---------- */
@@ -255,6 +319,9 @@ export async function prev(){
    be lost when the page under the finger is replaced mid-touch); another finger is ignored while a gesture under
    2 s old is open, and starts a new one after that. */
 let gest = null;
+/* A tap is short and still: a touch that moved 12 px or more, or rested TAP_MS or longer (a hand settling on the screen,
+   a palm), turns no page and does not show or hide the bars. */
+export const TAP_MS = 500;
 stage.addEventListener('pointerdown', e => {
   if(inkPointerDown(e)) return;
   if(gest && !e.isPrimary && Date.now() - gest.t < 2000) return;
@@ -264,9 +331,9 @@ stage.addEventListener('pointermove', inkPointerMove);
 stage.addEventListener('pointerup', e => {
   if(inkPointerUp(e)) return;
   if(!gest || e.pointerId !== gest.id) return;
-  const dx = e.clientX - gest.x, dy = e.clientY - gest.y; gest = null;
+  const dx = e.clientX - gest.x, dy = e.clientY - gest.y, held = Date.now() - gest.t; gest = null;
   if(Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.3){ dx < 0 ? next() : prev(); return; }
-  if(Math.hypot(dx, dy) < 12){
+  if(Math.hypot(dx, dy) < 12 && held < TAP_MS){
     const f = e.clientX / innerWidth;
     if(f < .3) prev(); else if(f > .7) next(); else if(!V.annot) viewer.classList.toggle('hide');
     /* A finger is ignored while annotating unless "Finger draws" is on (the stylus only, so a resting palm marks nothing):
@@ -291,20 +358,23 @@ export function initViewer(){
      browser refuses the Full screen call there, so the button would only say "not available": leave it out. */
   if(navigator.standalone === true) $('#vFull').hidden = true;
   $('#vFull').onclick = () => {
-    if(document.fullscreenElement){ document.exitFullscreen().catch(() => {}); return; }
+    if(fsElement()){ exitFs(); return; }
     /* The WHOLE page goes full screen, not #viewer: in full screen the browser shows only the full-screen element and
        what is inside it, so with #viewer alone every dialog (appended to body), toast and the crop screen (siblings
        of #viewer) opened out of sight while the viewer behind them was made inert: a freeze. The viewer is
        position:fixed over everything, so the picture is the same. */
-    const root = document.documentElement, p = root.requestFullscreen ? root.requestFullscreen() : null;
-    if(p && p.catch) p.catch(() => toast('Full screen is not available here')); else if(!p) toast('Full screen is not available here');
+    enterFs();
   };
+  const t = ttl();
+  t.addEventListener('click', e => { if(e.pointerType || e.detail) t.blur(); openJump(); });     // a tap leaves no focus on it (see openJump)
+  t.addEventListener('keydown', e => { if((e.key === 'Enter' || e.key === ' ') && t.classList.contains('canjump')){ e.preventDefault(); if(!e.repeat) openJump(); } });
   viewer.addEventListener('click', e => { const b = e.target.closest('button'); if(b) b.blur(); });
   addEventListener('keydown', e => {
     if(e.defaultPrevented || !viewer.classList.contains('on') || document.querySelector('.modal') || !$('#cropper').hidden) return;   // a dialog already took this key
     const k = e.key;
-    if(['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)){ e.preventDefault(); next(); }
-    else if(['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)){ e.preventDefault(); prev(); }
+    /* a key held down (a pedal held, a key repeating) turns ONE page, not one per repeat */
+    if(['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)){ e.preventDefault(); if(!e.repeat) next(); }
+    else if(['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)){ e.preventDefault(); if(!e.repeat) prev(); }
     else if(k === 'Escape'){ if(!$('#wdMenu').hidden) widthMenu(false); else if(V.annot) setAnnot(false); else closeViewer(); }   // one layer at a time (back means this too: js/backnav.js)
   });
   let rt;

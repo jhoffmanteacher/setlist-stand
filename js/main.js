@@ -88,6 +88,7 @@ async function applyResume(){
   await openViewer(r.queue, r.qi, r.page);     // no tap here, so no new history entry: the one from before the reload is reused (js/backnav.js)
 }
 
+if(window.ssBoot && window.ssBoot.started) window.ssBoot.started();      // every module loaded and ran: js/boot.js's "did not start" box stays away
 /* ---------- start ---------- */
 (async () => {
   /* A song's history entry left from before a reload goes before anything is read or drawn; an update reload that puts the

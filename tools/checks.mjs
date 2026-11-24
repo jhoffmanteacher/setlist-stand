@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -239,24 +240,32 @@ if (process.argv.includes('--bump')) {
 }
 
 // ---------------------------------------------------------------- (a) syntax
+/* js/boot.js and sw.js are CLASSIC scripts (the browser runs them as a script, not as a module), so they are parsed as one with
+   vm.Script: a top-level `await`, `import` or `import.meta`, which a module may use, is a syntax error there and fails here. Every
+   other js/*.js file is an ES module and goes through `node --check` as a .mjs. */
+const CLASSIC = new Set(['js/boot.js', 'sw.js']);
 {
-  const name = 'syntax (node --check)';
+  const name = 'syntax (node --check; boot.js and sw.js as classic scripts)';
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'setlist-checks-'));
   const bad = [];
   try {
-    const targets = jsFiles().map((f) => [f, true]);
-    if (exists('sw.js')) targets.push(['sw.js', false]);
-    for (const [rel, isModule] of targets) {
-      let file = path.join(ROOT, rel);
-      if (isModule) {
-        file = path.join(tmp, rel.replace(/[\\/]/g, '__') + '.mjs');
-        fs.copyFileSync(path.join(ROOT, rel), file);
-      }
+    const targets = jsFiles().filter((f) => !CLASSIC.has(f));
+    for (const rel of targets) {
+      const file = path.join(tmp, rel.replace(/[\\/]/g, '__') + '.mjs');
+      fs.copyFileSync(path.join(ROOT, rel), file);
       try {
         execFileSync(process.execPath, ['--check', file], { stdio: ['ignore', 'ignore', 'pipe'] });
       } catch (e) {
         const msg = String(e.stderr || '').split('\n').find((l) => /Error/.test(l)) || 'syntax error';
         bad.push(`${rel} (${msg.trim()})`);
+      }
+    }
+    for (const rel of CLASSIC) {
+      if (!exists(rel)) continue;
+      try {
+        new vm.Script(read(rel), { filename: rel });
+      } catch (e) {
+        bad.push(`${rel} as a classic script (${String(e && e.message).split('\n')[0]})`);
       }
     }
   } finally {

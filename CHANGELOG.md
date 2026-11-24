@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-23: Review fixes and gig helpers
+- **A chart that will not open no longer blocks the setlist.** It shows "This chart could not be opened. Your music is safe." and the page turns move past it, both ways.
+- **Remove in a setlist has Undo** for 6 seconds. A quick double tap on Add no longer removes a song behind the box.
+- **Ready check** (setlist More menu): opens every chart with no internet and says which are fine, missing or will not open. The Library says "Works offline." when the offline copy is complete. If the app does not start, a box says so and offers Reload.
+- **Go to a song:** tap the song's name in a setlist to jump to another song. **Add to setlist...** is in a song's ⋯ menu. A setlist dated today shows "Tonight" with Play on both screens. Delete song names the setlists it is in and offers Archive instead.
+- Copy song refuses a version name another copy already has; Edit song keeps the box open when the title is emptied; searching a picker for an archived song says so; undo stays with the song on screen; a long press is not a page turn; held keys turn one page.
+- Download PDF names a song it had to leave out and prints a bad colour black; page boxes are read like the viewer reads them.
+- Backup files are named with your local date and time. A backup with marks that cannot be drawn restores without them (and says how many). A long setlist name no longer makes a share package refuse. The sync report says which songs now play the chart from your other tablet.
+- Safety checks: the start-up files are checked as the browser runs them; the offline refill re-checks the version after it downloads.
+
 ## 2026-11-23: Archived songs stay out of the song pickers
 - The box where you tick songs (Add songs to a setlist, Add songs to a collection, Share songs) no longer lists archived songs. If you have any, a **Show archived** box appears; tick it to see them (marked "(archived)") and add them. A song you ticked stays ticked if you hide archived again.
 - Setlists could not take archived songs before; now they can, through that box.

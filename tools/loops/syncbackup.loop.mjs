@@ -22,7 +22,7 @@ const finished = (r, what) => assert(r.state === 'finished', `${what}: the sync 
 const noErrors = (...ts) => { for(const t of ts){ const e = pageErrors(t); assert(!e.length, `${t.name}: page errors: ${e.join(' | ')}`); } };
 const ls = (t, k) => t.page.evaluate(k => localStorage.getItem(k), k);
 const setLs = (t, k, v) => t.page.evaluate(([k, v]) => v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v), [k, v]);
-const SAVED = /Saved a backup copy in your Google Drive \((setlist-stand-backup-\d{4}-\d{2}-\d{2}\.zip), (\d+) MB\)\. The last 4 are kept in the Backups folder\./;
+const SAVED = /Saved a backup copy in your Google Drive \((setlist-stand-backup-\d{4}-\d{2}-\d{2}-\d{4}\.zip), (\d+) MB\)\. The last 4 are kept in the Backups folder\./;
 const uploads = (t, from) => t.google.requests.slice(from).filter(e => e.by === t.name && e.kind === 'upload');
 const copies = g => readDrive(g).backups;
 /* The stand-in dates a file with the real clock; in these cases the tablet's clock is moved on. Real Drive's clock and the tablet's agree, so the newest
@@ -62,7 +62,11 @@ async function loopFirst(ctx){
     /* the same backup, made by the other path: Back up everything right after (nothing changed in between) */
     const bk = await backupNow(A.page);
     const mine = await JSZip.loadAsync(fs.readFileSync(bk.file)), theirs = await JSZip.loadAsync(d.backups[0].bytes);
-    assert(bk.name === d.backups[0].name, `the copy is named ${d.backups[0].name}, Back up everything names its file ${bk.name}`);
+    /* named like Back up everything's file: the LOCAL date and time the packing began (the minute can have moved on by the time Back up everything ran) */
+    const two = n => String(n).padStart(2, '0'), began = new Date(d.backups[0].t);
+    const localName = `setlist-stand-backup-${began.getFullYear()}-${two(began.getMonth() + 1)}-${two(began.getDate())}-${two(began.getHours())}${two(began.getMinutes())}.zip`;
+    assert(d.backups[0].name === localName, `the copy is named ${d.backups[0].name}, the local date and time it began at give ${localName}`);
+    assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d-\d{4}\.zip$/.test(bk.name) && bk.name.slice(0, -9) === localName.slice(0, -9), `the copy is named ${d.backups[0].name}, Back up everything names its file ${bk.name}`);
     const strip = async z => { const j = JSON.parse(await z.file('library.json').async('string')); delete j.saved; return j; };
     const dj = diff(await strip(theirs), await strip(mine));
     assert(!dj.length, 'library.json of the copy in Drive differs from the one Back up everything makes: ' + dj.join(' | '));

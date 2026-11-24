@@ -329,7 +329,7 @@ function checkLib(M, got, showArch){
   if(got.empty !== !live.length) out.push(`library "No music yet" shown=${got.empty}, live songs=${live.length}`);
   const cs = M.shown && collOf(M, M.shown);
   if(!live.length){
-    const wantH = cs ? `No songs in ${cs.name} yet` : 'No music yet', wantB = cs ? `Add songs to ${cs.name}` : null;
+    const wantH = cs ? `No songs in ${cs.name} yet` : arch.length ? 'All your songs are archived' : 'No music yet', wantB = cs ? `Add songs to ${cs.name}` : null;
     if(got.emptyH !== wantH || got.addBtn !== wantB) out.push(`empty library shows "${got.emptyH}" / button ${fmt(got.addBtn)}, expected "${wantH}" / ${fmt(wantB)}`);
   }
   if(got.archHead !== showArch) out.push(`"Archived" heading shown=${got.archHead}, Show archived=${showArch}`);
@@ -1053,7 +1053,7 @@ A.deleteColl = {w: 0.6, plan: (M, r) => { const live = liveColls(M); return live
     const before = {songs: await idbAll(page, 'songs'), sets: await idbAll(page, 'sets')};
     const b = page.locator(`.collmgr [data-mdel="${c.id}"]`);
     await b.click();
-    if(await b.textContent() !== 'Songs stay in your library') throw new Error(`first tap on Delete shows "${await b.textContent()}"`);
+    if(await b.textContent() !== 'Tap again to delete') throw new Error(`first tap on Delete shows "${await b.textContent()}"`);
     await b.click();
     await page.waitForFunction(id => !document.querySelector(`.collmgr [data-mdel="${id}"]`), c.id, {timeout: 5000});
     c.deleted = true;

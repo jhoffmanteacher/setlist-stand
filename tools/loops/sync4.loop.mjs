@@ -530,7 +530,7 @@ async function loopCharts(ctx){
     const everywhere = new Set([...hashesOf(LA), ...hashesOf(LB), ...[...readDrive(A.google).pdfs.values()].map(p => p.hash)]);
     assert(everywhere.has(p2.hash) && everywhere.has(a.hash), 'a chart was lost: the new chart or the old one is on neither tablet nor Drive');
     assert(hashesOf(LA).has(p2.hash) && hashesOf(LB).has(p2.hash), 'the new chart A made is not kept on both tablets');
-    assert(/1 chart on this tablet was replaced by a newer one from your other tablet and is kept in Archived/.test(ra.text), `A's report does not say its chart was kept in Archived: "${ra.text}"`);
+    assert(/^.+: now plays the chart from your other tablet\. The chart it had is in Archived\./m.test(ra.text), `A's report does not name the song and say its old chart was kept in Archived: "${ra.text}"`);
     const rep = replaced(LA);
     assert(rep.length === 1 && rep[0].archived === true && LA.files[rep[0].id] === p2.hash, 'the replaced chart is not one archived copy on A: ' + JSON.stringify(rep).slice(0, 300));
     assert(!whole(LA).length && !whole(LB).length, 'not whole: ' + [...whole(LA), ...whole(LB)].join(' | '));
@@ -607,7 +607,7 @@ async function loopMarks(ctx){
     const LB1 = await libraryOf(B);
     for(const pn of [1, 2]) assert(JSON.stringify(marksOn(LB1, copyB.id, pn)) === JSON.stringify(both(pn)), `B's archived copy page ${pn} does not end with both tablets' old marks: ${JSON.stringify(marksOn(LB1, copyB.id, pn))} (expected ${JSON.stringify(both(pn))})`);
     assert(!marksOn(LB1, b.id, 1).length, 'B\'s new chart has marks of the old one after A\'s Sync');
-    assert(!/replaced by a newer one/.test(ra.text), 'A says a chart was kept in Archived although B\'s archived copy already holds it: ' + ra.text);
+    assert(!/now plays the chart from your other tablet/.test(ra.text), 'A says a chart was kept in Archived although B\'s archived copy already holds it: ' + ra.text);
     assert(shared.length, 'the fixture mark is missing (the test is wrong)');
     noErrors(A, B);
     await A.close(); await B.close();
@@ -633,7 +633,7 @@ async function loopMarks(ctx){
     assert(JSON.stringify(marksOn(L2, 'heldcopy', 1)) === '["markHeld"]', 'the marks of the song that already held the old chart were changed: ' + JSON.stringify(marksOn(L2, 'heldcopy', 1)));
     assert(rep.length === 1 && rep[0].archived && L2.files[rep[0].id] === b2.hash && JSON.stringify(marksOn(L2, rep[0].id, 1)) === JSON.stringify(mineBefore), `a separate archived copy should keep A's marks on the old chart: ${JSON.stringify(rep.map(s => [s.version, marksOn(L2, s.id, 1)]))}`);
     assert(!marksOn(L2, b2.id, 1).length, 'the new chart kept the old chart\'s marks');
-    assert(/1 chart on this tablet was replaced by a newer one/.test(ra2.text), 'the report does not say the chart was kept in Archived: ' + ra2.text);
+    assert(/^.+: now plays the chart from your other tablet\. The chart it had is in Archived\./m.test(ra2.text), 'the report does not name the song and say its chart was kept in Archived: ' + ra2.text);
     assert(held && !whole(L2).length, 'not whole: ' + whole(L2).join(' | '));
     noErrors(A2, B2);
   } finally { await A.close().catch(() => {}); await B.close().catch(() => {}); if(A2) await A2.close(); if(B2) await B2.close(); }
@@ -683,7 +683,7 @@ async function loopArchiveFails(ctx){
     const r = await finishSync(A);
     finished(r, 'Sync A (the song was edited during the download)');
     const LA = await libraryOf(A);
-    assert(!/kept in Archived/.test(r.text), `the report says a chart was kept in Archived though nothing was written: "${r.text}"`);
+    assert(!/now plays the chart from your other tablet|The chart it had is in Archived/.test(r.text), `the report says a chart was kept in Archived though nothing was written: "${r.text}"`);
     assert(!live(LA).some(s => /replaced \d{4}-\d\d-\d\d/.test(s.version || '')), 'an archived copy was written although the download was refused');
     assert(LA.songs[a.id].version === 'edited during the download' && !whole(LA).length, 'the edit made during the download was lost, or the library is not whole');
     noErrors(A, B);

@@ -100,6 +100,34 @@ async function loopExport(ctx){
   } finally { await s.close(); }
 }
 
+/* Duplicate adds " copy" to a setlist's name, so a name can be longer than the 200 characters another tablet accepts: the package cuts it. */
+async function loopLongName(ctx){
+  const s = await ctx.session();
+  try{
+    const {page} = s;
+    await s.goto();
+    await importFixtures(page);
+    const long = 'Wedding reception, first set, ' + 'x'.repeat(170) + ' copy copy', brk = 'Break ' + 'y'.repeat(205);
+    assert(long.length > 200 && brk.length > 200, 'test setup: the names are not long enough');
+    await page.evaluate(async ({long, brk}) => {
+      const st = await import('./js/store.js'), {uid} = await import('./js/util.js');
+      await st.saveSet({id: uid(), name: long, created: Date.now(), items: [{type: 'song', id: st.state.songs[0].id}, {type: 'break', id: uid(), name: brk}]});
+      await st.load();
+    }, {long, brk});
+    await page.click('#tSets');
+    await page.click('#view [data-set]');
+    await page.waitForSelector('#view [data-setmenu]');
+    const pk = await readPackage((await download(page, () => openSetMenu(page, 'share'))).file);
+    await closeDone(page);
+    const sl = pk.share.setlist;
+    assert(sl && sl.name.length <= 200 && long.startsWith(sl.name) && sl.name.length >= 199, `the package's setlist name is ${sl && sl.name.length} characters, want the first 200 of ${long.length}`);
+    const b = sl.items.find(i => i.type === 'break');
+    assert(b && b.name.length <= 200 && brk.startsWith(b.name), `the package's break name is ${b && b.name.length} characters, want at most 200`);
+    assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'share 1: a package holds the stored PDF bytes, details, crops, order and breaks, and no annotation; the library is unchanged', run: loopExport},
+  {name: 'share 2: a setlist name or break name longer than 200 characters is cut in the package, so the other tablet accepts it', run: loopLongName},
 ];

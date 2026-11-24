@@ -47,8 +47,8 @@ export async function makePackage(songIds, set, opts = {}){
     songs.push(rec); local.set(id, pid);
   }
   let setlist = null;
-  if(set) setlist = {name:set.name, items:liveItems(set).filter(it => it.type === 'break' || local.has(it.id))
-    .map(it => it.type === 'break' ? {type:'break', name:it.name} : {type:'song', id:local.get(it.id)})};
+  if(set) setlist = {name:cutName(set.name), items:liveItems(set).filter(it => it.type === 'break' || local.has(it.id))
+    .map(it => it.type === 'break' ? {type:'break', name:cutName(it.name)} : {type:'song', id:local.get(it.id)})};
   zip.file('share.json', JSON.stringify({app:'setlist-stand', kind:'share', version:SHARE_VERSION, saved:new Date().toISOString(), songs, setlist}));
   return {blob:await zip.generateAsync({type:'blob'}), count:songs.length, skipped};
 }

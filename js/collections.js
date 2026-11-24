@@ -115,8 +115,9 @@ async function renameColl(id){
    write as the collection's own deletion marker. Nothing else is touched. Every record is stamped over its own last `updated`
    (stamp in js/store.js). */
 async function deleteColl(id){
-  const ops = await deleteOps('coll', id);       // the marker, and the collection id taken off every song and setlist that had it (js/deleteops.js, shared with sync)
-  try{ await putAll(ops); }
+  /* the marker, and the collection id taken off every song and setlist that had it (js/deleteops.js, shared with sync). Its reads are
+     inside the try too: a read that fails says so plainly, and nothing is written. */
+  try{ await putAll(await deleteOps('coll', id)); }
   catch(err){ toast(explainError(err, 'Could not delete the collection. Nothing was changed.')); return false; }
   if(getDefault() === id) setDefault(null);
   if(shown === id) shown = null;
@@ -135,7 +136,7 @@ export async function addSongsTo(id){
 
 /* ---------- the manager dialog ---------- */
 export function openManager(){
-  const m = modal('<h2>Collections</h2><div class="mgr"></div><div class="btns"><button data-newcoll>New collection</button><button class="pri" data-x>Done</button></div>');
+  const m = modal('<h2>Collections</h2><div class="mgr"></div><p class="hint">Deleting a collection keeps its songs and setlists.</p><div class="btns"><button data-newcoll>New collection</button><button class="pri" data-x>Done</button></div>');
   m.classList.add('collmgr');
   const list = m.querySelector('.mgr');
   let working = false;
@@ -157,7 +158,7 @@ export function openManager(){
     const b = e.target.closest('button'); if(!b || working || !m.contains(b)) return;
     const d = b.dataset;
     if(!('newcoll' in d || d.mren || d.mdef || d.madd || d.mdel)) return;
-    if(d.mdel && !armed(b, 'Songs stay in your library')) return;
+    if(d.mdel && !armed(b, 'Tap again to delete')) return;           // the line under the list says the songs and setlists stay
     working = true;
     try{
       let focus = null;

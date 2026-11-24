@@ -11,7 +11,7 @@
  *   server still has this same VERSION (another site may have wiped them).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-23-16';
+const VERSION = '2026-11-23-17';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -30,6 +30,9 @@ const PRECACHE = [
   'js/collections.js',
   'js/gigdate.js',
   'js/gigui.js',
+  'js/readycheck.js',
+  'js/songjump.js',
+  'js/songsets.js',
   'js/downloadall.js',
   'js/nudge.js',
   'js/saving.js',
@@ -135,6 +138,15 @@ async function heal() {
     return 'offline';
   }
   if (got.some((g) => !g)) return 'refused';
+  /* A deploy can land while the files are arriving, and some of them would then be of the new version. Ask the server's
+     VERSION again now that all have arrived: if it moved (or cannot be read), store nothing. */
+  try {
+    const again = await fetch('sw.js', { cache: 'no-store' });
+    const m2 = again.ok && /const\s+VERSION\s*=\s*'([^']+)'/.exec(await again.text());
+    if (!m2 || m2[1] !== VERSION) return 'newer';
+  } catch {
+    return 'offline';
+  }
   const cache = await caches.open(CACHE);
   await Promise.all(got.map(([u, res]) => cache.put(u, res)));
   return 'healed';

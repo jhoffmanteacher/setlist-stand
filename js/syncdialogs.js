@@ -89,7 +89,11 @@ export function reportDialog(rep, state = 'done', failure = ''){
   if(rep.unapplied) P(`Your ${rep.unapplied === 1 ? 'answer' : rep.unapplied + ' answers'} about what was deleted on your other tablet ${rep.unapplied === 1 ? 'was' : 'were'} not applied, because the sync stopped first. You are asked again next time.`);
   if(rep.kept) P(`Kept ${rep.kept} here that was deleted on your other tablet.`);
   if(rep.removed) P(`Deleted ${rep.removed} here, as you chose.`);
-  if(rep.archived) P(`${rep.archived} ${rep.archived === 1 ? 'chart' : 'charts'} on this tablet ${rep.archived === 1 ? 'was' : 'were'} replaced by a newer one from your other tablet and ${rep.archived === 1 ? 'is' : 'are'} kept in Archived.`);
+  if(rep.archived){                                    // one line per song (the title is the song's own), past 5 "and N more"
+    const names = (rep.archivedNames || []).slice(0, 5);
+    for(const n of names) P(`${n}: now plays the chart from your other tablet. The chart it had is in Archived.`);
+    if(rep.archived > names.length) P(`and ${rep.archived - names.length} more (the charts they had are in Archived).`);
+  }
   if(rep.later) P(`${rep.later} deleted on your other tablet ${rep.later === 1 ? 'is' : 'are'} still waiting for your answer: you are asked again at the next sync.`);
   const names = n => `'${esc(n.name)}'`;
   if(rep.both.length) lines.push(`${rep.both.length} changed on both tablets (the newer one was kept: ${list(rep.both.slice(0, 6).map(n => `${names(n)}${n.kept === 'there' ? ' from your other tablet' : ' from here'}`))}${rep.both.length > 6 ? ` and ${rep.both.length - 6} more` : ''}).`);

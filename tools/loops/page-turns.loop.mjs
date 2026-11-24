@@ -44,6 +44,7 @@ async function playSet(s, twoUp){
     await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Turns');
     const rows = () => page.locator('#items > li.row').count();
     const addSong = async n => {
+      await sleep(450);                   // Add songs is one edit under once(): the same edit within 400 ms is ignored (a person cannot add that fast)
       const n0 = await rows();
       await page.click('#view [data-addto]');
       await page.locator('.modal .pick').waitFor();

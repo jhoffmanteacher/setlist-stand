@@ -221,6 +221,7 @@ async function newSet(page, name){
 }
 const rowCount = page => page.locator('#items > li.row').count();
 async function addSong(page, title){
+  await sleep(450);                       // Add songs is one edit under once() too: the same edit within 400 ms is ignored, and a person cannot add that fast
   const n0 = await rowCount(page);
   await page.click('#view [data-addto]');
   await page.locator('.modal .pick').waitFor();
@@ -1119,6 +1120,108 @@ export const loops = [
       if(!z.dir.some(e => e.name === second && e.nameBytes === Buffer.byteLength(second))) fails.push('long titles: no " (2)" entry of the expected byte length');
     }
     assert(!fails.length, fails.join('; '));
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'print: odd page boxes (a MediaBox written corner to corner the other way, a CropBox larger than the MediaBox, both with an offset origin) print the marker and the ink where the viewer shows them', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    /* letter pages with a green marker square at PDF x 100..180, y 160..240 and a label; the boxes are written raw */
+    const variants = {reversed: {media: [612, 792, 0, 0]}, bigcrop: {media: [0, 0, 612, 792], crop: [-100, -100, 712, 892]},
+      both: {media: [662, 842, 50, 50], crop: [0, 0, 700, 900]}};
+    const files = [];
+    for(const [name, v] of Object.entries(variants)){
+      const doc = await PL.PDFDocument.create(), font = await doc.embedFont(PL.StandardFonts.HelveticaBold);
+      const pg = doc.addPage([PW, PH]);
+      pg.drawRectangle({x: 100, y: 160, width: 80, height: 80, color: PL.rgb(0, 160 / 255, 0)});
+      pg.drawText(`Box ${name}`, {x: 200, y: 400, size: 30, font, color: PL.rgb(0, 0, 0)});
+      pg.node.set(PL.PDFName.of('MediaBox'), doc.context.obj(v.media));
+      if(v.crop) pg.node.set(PL.PDFName.of('CropBox'), doc.context.obj(v.crop));
+      const f = path.join(TMP, `print-loop-box-${name}.pdf`);
+      fs.writeFileSync(f, await doc.save());
+      files.push({name, f, v});
+    }
+    const ids = await importFiles(page, files.map(x => x.f));
+    const fails = [], seen = {};
+    for(const {name, f, v} of files){
+      const id = ids[path.basename(f)];
+      /* where pdf.js (the viewer) puts the marker: the boxes put in order, the CropBox cut down to the MediaBox */
+      const ord = b => [Math.min(b[0], b[2]), Math.min(b[1], b[3]), Math.max(b[0], b[2]), Math.max(b[1], b[3])];
+      const m = ord(v.media), c = v.crop ? ord(v.crop) : m, vb = [Math.max(m[0], c[0]), Math.max(m[1], c[1]), Math.min(m[2], c[2]), Math.min(m[3], c[3])];
+      const W = vb[2] - vb[0], H = vb[3] - vb[1], markWant = {x0: (100 - vb[0]) / W, x1: (180 - vb[0]) / W, y0: (vb[3] - 240) / H, y1: (vb[3] - 160) / H};
+      await openSong(page, id, 1);
+      await pickTool(page, 'pen', RED);
+      const st = await drawPath(page, id, 1, [[.3, .55], [.45, .58], [.6, .62]]);
+      await sleep(200);
+      await grabViewer(page, 'bv', 1);
+      const view = {marker: await boxOf(page, 'bv', 0, {c: MARKER, aMin: .9, tol: 30}), pen: await boxOf(page, 'bv', 1, {c: RED, aMin: .5})};
+      assert(boxNear(view.marker, markWant, .01), `${name}: the viewer shows the marker at ${bb(view.marker)}, expected ${fmt(markWant)} (test assumption broken)`);
+      seen[name] = {st, view, W, H};
+      await page.click('#vBack');
+    }
+    await setOf(page, 'Odd boxes', files.map(x => ids[path.basename(x.f)]));
+    const pages = await renderPdf(page, 'box', await printSet(page, true), 1.5);
+    assert(pages.length === 3, `printed ${pages.length} pages, expected 3`);
+    for(const [i, {name}] of files.entries()){
+      const m = seen[name], pg = pages[i];
+      if(!near(pg.vw / pg.vh, m.W / m.H, .01)) fails.push(`${name}: printed page is ${pg.vw.toFixed(1)}x${pg.vh.toFixed(1)}pt, the viewer's ${m.W}x${m.H}`);
+      const mk = await boxOf(page, 'box', i, {c: MARKER, aMin: .9, tol: 30});
+      if(!boxNear(mk, m.view.marker, .015)) fails.push(`${name}: marker printed at ${bb(mk)}, viewer shows it at ${bb(m.view.marker)}`);
+      const pen = await boxOf(page, 'box', i, {c: RED, aMin: .5});
+      const tx = m.st.w + .015, ty = m.st.w * m.W / m.H + .015;
+      if(!boxNear(pen, m.view.pen, tx, ty)) fails.push(`${name}: pen stroke printed at ${bb(pen)}, viewer shows it at ${bb(m.view.pen)} (mirrored or shifted)`);
+    }
+    assert(!fails.length, fails.join('; '));
+    noErrors(s);
+  } finally { await s.close(); }
+}},
+
+{name: 'print: a song with no stored PDF and one that cannot be read are named and left out, the rest prints; a mark whose colour is not #rrggbb prints black', async run(ctx){
+  const s = await ctx.session(), page = s.page;
+  try{
+    await s.goto();
+    const files = [];
+    for(const name of ['Keep', 'Gone', 'Garbled']){
+      const doc = await PL.PDFDocument.create(), font = await doc.embedFont(PL.StandardFonts.HelveticaBold);
+      doc.addPage([PW, PH]).drawText(`${name} chart`, {x: 60, y: 740, size: 24, font, color: PL.rgb(0, 0, 0)});
+      const f = path.join(TMP, `print-loop-left-${name}.pdf`);
+      fs.writeFileSync(f, await doc.save());
+      files.push(f);
+    }
+    const ids = await importFiles(page, files), K = ids['print-loop-left-Keep.pdf'], G = ids['print-loop-left-Gone.pdf'], X = ids['print-loop-left-Garbled.pdf'];
+    const songs = await songsById(page), now = Date.now();
+    /* the marks: a colour word (not #rrggbb) and a proper red, written as a damaged backup would leave them */
+    await idbPut(page, 'ink', K + ':1', {updated: now, strokes: [
+      {id: 'odd', t: 'pen', c: 'red', w: .006, p: [[.2, .6], [.7, .6]], updated: now},
+      {id: 'num', t: 'text', x: .2, y: .3, size: .03, c: 7, text: 'Odd note', updated: now},
+      {id: 'ok', t: 'pen', c: RED, w: .006, p: [[.2, .8], [.7, .8]], updated: now}]});
+    await setOf(page, 'Left out', [K, G, X]);
+    await deleteFile(page, G);
+    await idbPut(page, 'files', X, null, Buffer.from('this is not a PDF').toString('base64'));
+    await openSetMenu(page, 'print');
+    const m = page.locator('.modal');
+    await m.waitFor();
+    await m.locator('#pInk').setChecked(true);
+    await m.locator('[data-ok]').click();
+    await page.waitForFunction(() => document.querySelector('.modal #printLocked'), null, {timeout: 30000})
+      .catch(async () => { throw new Error(`the songs left out were not named. Dialog: "${await dialogText(page)}", toast "${await page.locator('#toast').textContent()}"`); });
+    const items = (await page.locator('.modal li').allTextContents()).map(x => x.trim());
+    const want = [`${songs[G].title} has no PDF stored on this tablet, so it can't be printed.`, `${songs[X].title} could not be read, so it can't be printed.`];
+    assert(fmt(items) === fmt(want), `the dialog names ${fmt(items)}, expected ${fmt(want)}`);
+    assert((await page.locator('.modal h2').textContent()) === '2 songs can\'t be printed', 'heading: ' + await page.locator('.modal h2').textContent());
+    const dl = await download(page, () => page.click('.modal [data-without]'));
+    await page.waitForFunction(() => !document.querySelector('.modal #printLocked'));
+    if(await page.locator('.modal').count()){ const x = page.locator('.modal [data-x]'); await x.waitFor({timeout: 5000}); await x.click(); }
+    const pages = await renderPdf(page, 'left', await fsp.readFile(dl.file), 1.5);
+    assert(pages.length === 1 && pages[0].text.includes('Keep chart'), 'the PDF should hold only the readable song: ' + fmt(pages.map(p => p.text)));
+    const odd = await boxOf(page, 'left', 0, {dark: true}, [0, .55, 1, .65]);
+    assert(odd.n > 50 && near(odd.x0, .2, .03) && near(odd.x1, .7, .03), 'the stroke whose colour is "red" (not #rrggbb) did not print black where it was drawn: ' + bb(odd));
+    const note = await boxOf(page, 'left', 0, {dark: true}, [0, .28, 1, .36]);
+    assert(note.n > 20, 'the note whose colour is a number did not print (black): ' + bb(note));
+    const ok = await boxOf(page, 'left', 0, {c: RED, aMin: .5}, [0, .75, 1, .85]);
+    assert(ok.n > 50, 'the proper red stroke did not print red: ' + bb(ok));
     noErrors(s);
   } finally { await s.close(); }
 }},

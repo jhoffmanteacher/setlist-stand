@@ -12,6 +12,12 @@ import {askRestore, restoredText, showRestored} from './restoreask.js';
    per-record checks below (ID_RE, LIMITS, okId, okText, okPage) do not depend on it. */
 export const BACKUP_VERSION = 3;
 export const LAST_BACKUP = 'ss-last-backup';     // localStorage: time (ms) of the last backup that was saved
+/* The file name of a backup made at time t: the LOCAL date and time, "setlist-stand-backup-2026-11-23-2115.zip" (the UTC date
+   named an evening backup in California for tomorrow). Restore takes any .zip, so only people read this name. */
+export function backupName(t){
+  const d = new Date(t), two = n => String(n).padStart(2, '0');
+  return `setlist-stand-backup-${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.zip`;
+}
 /* A backup must always restore. Restore is strict (every live song has its PDF, and the PDF matches the recorded hash), so
    each song's hash is computed here from the PDF actually stored, and a live song with no stored PDF is left out (and counted
    in `skipped`) rather than written as a record without a file. Resolves to {blob, skipped}. */
@@ -53,7 +59,7 @@ export async function backupNow(b){
     const made = await makeBackup(job);
     job.close();
     if(!made) toast('Backup stopped. Nothing was saved.');
-    else if(saveBlob(made.blob, 'setlist-stand-backup-' + new Date().toISOString().slice(0, 10) + '.zip')){
+    else if(saveBlob(made.blob, backupName(Date.now()))){
       const {skipped} = made;
       saved = true;
       toast(skipped ? `Backup saved. ${skipped == 1 ? '1 song had' : skipped + ' songs had'} no PDF and ${skipped == 1 ? 'was' : 'were'} left out.` : 'Backup saved');
@@ -120,6 +126,7 @@ export async function restoreFrom(f, render, {drive = false} = {}){
   if(Number(data.version) > BACKUP_VERSION) return stop('That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.');
   const bad = validateBackup(data);
   if(bad) return stop(`That backup has something the app can't read (${bad}). Nothing was changed.`);
+  const droppedMarks = cleanInk(data);                 // marks that cannot be drawn are left out (counted), the rest of the backup restores as it is
   let n = 0, sets = 0, k = 0, badGig = 0, plan, keep;
   const total = data.songs.filter(s => !s.deleted).length, room0 = room, incoming = new Map();     // incoming: song id -> {blob, hash}
   /* each backup record's own `updated`, read before the upgrade fills a missing one with "now" (missing: 0): the plan compares with it */
@@ -235,7 +242,9 @@ export async function restoreFrom(f, render, {drive = false} = {}){
   /* The backup is written by now: a problem from here on must not say "Nothing was changed". */
   try{
     await load(); await ensureHashes(); job.close(); render();
-    showRestored(restoredText(n, sets, badGig, keep));
+    const shown = restoredText(n, sets, badGig, keep);
+    if(droppedMarks) shown.more.push(`${droppedMarks == 1 ? '1 mark that' : droppedMarks + ' marks that'} could not be read ${droppedMarks == 1 ? 'was' : 'were'} left out.`);
+    showRestored(shown);
   }catch(err){ stop('The backup was restored, but the screen did not update. Reload the app to see it.'); }
   job.close();
 }
@@ -344,4 +353,34 @@ export function inkProblem(k, v){
   if(strokes.length > LIMITS.strokes) return `page ${k} has more than ${LIMITS.strokes} strokes`;
   for(const s of strokes) if(isObj(s) && Array.isArray(s.p) && s.p.length > LIMITS.points) return `page ${k} has a stroke of more than ${LIMITS.points} points`;
   return null;
+}
+
+/* After validateBackup(): the marks on the pages of the backup's live songs that could not be DRAWN are taken out of `data`, and
+   their number is returned (told to the person after the restore; the restore itself is not refused for them). A note needs a text
+   string; a pen or highlighter line needs a list of points that are each two numbers; an erase marker is kept as it is. A colour
+   that is not "#rrggbb" is replaced by black (the mark stays). Works on the page's own list in place, in either form (a bare list or
+   {updated, strokes}). Sync checks the same things its own way (inkShapeProblem in js/syncink.js) and refuses a page instead. */
+const fin = v => typeof v === 'number' && Number.isFinite(v);
+function drawable(s){
+  if(!isObj(s)) return false;
+  if(s.deleted) return true;
+  if(s.t === 'text') return typeof s.text === 'string';
+  return Array.isArray(s.p) && s.p.length > 0 && s.p.every(pt => Array.isArray(pt) && pt.length >= 2 && fin(pt[0]) && fin(pt[1]));
+}
+export function cleanInk(data){
+  const live = new Set(data.songs.filter(s => !s.deleted).map(s => s.id));
+  let dropped = 0;
+  for(const [k, v] of Object.entries(data.ink || {})){
+    if(!live.has(k.split(':')[0])) continue;
+    const list = Array.isArray(v) ? v : isObj(v) && Array.isArray(v.strokes) ? v.strokes : null;
+    if(!list) continue;
+    const kept = [];
+    for(const s of list){
+      if(!isObj(s)){ kept.push(s); continue; }            // not a record: upgradeInk() drops it later, as it always did
+      if(!drawable(s)){ dropped++; continue; }
+      kept.push(!s.deleted && !/^#[0-9a-fA-F]{6}$/.test(String(s.c)) ? {...s, c:'#000000'} : s);
+    }
+    list.splice(0, list.length, ...kept);
+  }
+  return dropped;
 }

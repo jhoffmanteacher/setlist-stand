@@ -14,13 +14,14 @@ LAYOUT: tabs on top, one calm column; viewer full screen with overlay controls
 /* Colours: plain values first (light), then dark by media query, so browsers without light-dark() (iPadOS 16 to
    17.4, Chrome before 123) still get solid dialogs and text. Browsers with light-dark() use it (it follows
    color-scheme, so data-theme=light|dark wins over the system setting). */
-:root{color-scheme:light dark;--bg:#f4f1ea;--ink:#1b1c20;--card:#fff;--line:#dcd6ca;--mute:#66655f;--acc:#d93f34;--brk:#ebe6da}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#17181c;--ink:#eeeae2;--card:#212329;--line:#33363e;--mute:#a19e96;--brk:#1d1f24}}
+:root{color-scheme:light dark;--bg:#f4f1ea;--ink:#1b1c20;--card:#fff;--line:#dcd6ca;--mute:#5c5b55;--acc:#c9372d;--brk:#ebe6da}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#17181c;--ink:#eeeae2;--card:#212329;--line:#33363e;--mute:#a19e96;--acc:#d93f34;--brk:#1d1f24}}
 :root[data-theme=light]{color-scheme:light}
-:root[data-theme=dark]{color-scheme:dark;--bg:#17181c;--ink:#eeeae2;--card:#212329;--line:#33363e;--mute:#a19e96;--brk:#1d1f24}
+:root[data-theme=dark]{color-scheme:dark;--bg:#17181c;--ink:#eeeae2;--card:#212329;--line:#33363e;--mute:#a19e96;--acc:#d93f34;--brk:#1d1f24}
 @supports (color:light-dark(#000,#fff)){
-  :root{--bg:light-dark(#f4f1ea,#17181c);--ink:light-dark(#1b1c20,#eeeae2);--card:light-dark(#fff,#212329);--line:light-dark(#dcd6ca,#33363e);--mute:light-dark(#66655f,#a19e96);--brk:light-dark(#ebe6da,#1d1f24)}
+  :root{--bg:light-dark(#f4f1ea,#17181c);--ink:light-dark(#1b1c20,#eeeae2);--card:light-dark(#fff,#212329);--line:light-dark(#dcd6ca,#33363e);--mute:light-dark(#5c5b55,#a19e96);--acc:light-dark(#c9372d,#d93f34);--brk:light-dark(#ebe6da,#1d1f24)}
 }
+/* Light mode reaches 4.5:1 (2026-11-23): white on the red buttons 5.2, the red A to Z letters on the page 4.6, the grey Archived tag 4.7. */
 *{box-sizing:border-box;min-width:0}
 [hidden]{display:none!important}
 html,body{height:100%}
@@ -149,6 +150,19 @@ fieldset.checks legend{padding:0;margin-bottom:4px}
 .btns{display:flex;justify-content:flex-end;gap:8px}
 #toast{position:fixed;left:16px;right:16px;margin:0 auto;width:fit-content;max-width:calc(100% - 32px);text-align:center;bottom:24px;background:#eeeae2;color:#17181c;padding:10px 16px;border-radius:10px;z-index:40;opacity:0;transition:opacity .2s;pointer-events:none;font-weight:600}
 #toast.on{opacity:1}
+/* a toast with one action (Undo after a setlist Remove): the button is pressable only while the toast shows */
+#toast.act.on{display:flex;align-items:center;gap:12px;padding:6px 6px 6px 16px;text-align:left}
+#toast .toastact{pointer-events:auto;flex:none;min-height:44px;background:#17181c;border-color:#17181c;color:#eeeae2}
+#toast .toastact:focus-visible{outline:3px solid #17181c;outline-offset:2px}
+/* the Tonight line at the top of the Library and the Setlists list (js/gigui.js): one short line, so the first song row stays on a phone's screen */
+.tonight{display:flex;align-items:center;gap:8px 12px;margin:4px 0 8px;padding:4px 4px 4px 12px;border:1px solid var(--line);border-left:6px solid var(--acc);border-radius:10px;background:var(--card)}
+.tonight .tn{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.tonight .tn1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.tonight .tnmore{align-self:flex-start;min-height:32px;padding:0;border:0;background:transparent;color:var(--mute);font-size:14px;font-weight:600;text-decoration:underline;white-space:normal;text-align:left}
+.tonight span.tnmore{text-decoration:none;min-height:0}
+.tonight>.pri{flex:none}
+/* the Delete question's list of setlists (js/songsets.js) */
+.delsets{margin:0;padding-left:20px;overflow-wrap:anywhere}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 @media(max-width:600px){.top h1{font-size:32px}.acts button{padding:0 10px;font-size:14px}}
 #update{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:50;background:var(--acc);color:#fff;border-color:var(--acc);box-shadow:0 4px 18px rgba(0,0,0,.35)}
@@ -165,6 +179,21 @@ fieldset.checks legend{padding:0;margin-bottom:4px}
 .breakpage{flex:1;align-self:stretch;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;color:#eeeae2;text-align:center;padding:0 8vw}
 .breakpage h1{font-size:min(16vw,170px)}
 .breakpage p{margin:0;font-size:min(5.5vw,38px);color:#aeaba3}
+/* a chart that could not be opened, or a page that could not be drawn (js/viewer.js badPage) */
+.badpage{flex:1 1 0;align-self:stretch;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#eeeae2;text-align:center;padding:0 6vw;min-width:0}
+.badpage h2{margin:0;font-size:min(7vw,48px);overflow-wrap:anywhere}
+.badpage p{margin:0;font-size:min(4.5vw,26px);color:#aeaba3}
+/* the song title in the viewer's bar opens "Go to a song" when the viewer was opened from a setlist (js/songjump.js) */
+#vtop .ttl.canjump{cursor:pointer;border-radius:8px}
+#vtop .ttl.canjump b::after{content:" \25BE";color:#aeaba3;font-size:14px}
+#vtop .ttl.canjump:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.jump{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.jump button{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;text-align:left;white-space:normal}
+.jump button[aria-current=true]{border:2px solid var(--acc)}
+.jump .jn{color:var(--mute);min-width:1.6em;text-align:right;flex:none}
+.jump .jt{flex:1;min-width:0;overflow-wrap:anywhere}
+.jump .jnow{flex:none;font-size:13px;color:var(--acc)}
+.jump .jbrk{padding:8px 4px 2px;border-top:1px solid var(--line);color:var(--mute);font-size:14px;font-weight:700}
 
 #cropper{position:fixed;inset:0;background:#0e0f12;z-index:20}
 #cropper[hidden]{display:none}
@@ -313,3 +342,13 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
   #libMenus.bar{margin-top:0}
 }
 @media(max-width:600px){.top h1{font-size:28px}}
+
+/* ---------- ready for the gig (js/readycheck.js, js/boot.js; 2026-11-23) ---------- */
+.readyline{margin:0 0 10px}
+.rclist .row{flex-direction:column;align-items:flex-start;gap:0;padding:8px 0}
+.rclist .row .s{font-size:15px}
+.rclist .rc-missing .s,.rclist .rc-bad .s{color:var(--ink);font-weight:700}
+.rclist .rc-missing .s::before,.rclist .rc-bad .s::before{content:"\26A0\FE0E  "}
+.nostart{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin:8px 0 12px;padding:10px 10px 10px 14px;border:1px solid var(--acc);border-left-width:6px;border-radius:10px;background:var(--card);color:var(--ink);font-weight:600}
+.nostart p{margin:0}
+/* ---------- end of ready for the gig ---------- */

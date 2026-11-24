@@ -354,7 +354,7 @@ export function readDrive(google){
       if(keys(f) !== 'k,t') problems.push(`${where} has the properties ${keys(f)} (k, t expected)`);
       if(!/^\d{10,}$/.test(p.t || '')) problems.push(`${where} has t=${p.t}`);
       if(f.mimeType !== 'application/zip') problems.push(`${where} is stored as ${f.mimeType}`);
-      if(!/^setlist-stand-backup-\d{4}-\d{2}-\d{2}\.zip$/.test(f.name)) problems.push(`${where} is not named like a backup file`);
+      if(!/^setlist-stand-backup-\d{4}-\d{2}-\d{2}(-\d{4})?\.zip$/.test(f.name)) problems.push(`${where} is not named like a backup file`);
       if(inFolder) out.backups.push({id: f.id, name: f.name, createdTime: f.createdTime, bytes: google.fileBytes(f.id), t: Number(p.t)});
     }else problems.push(`a file of an unknown kind k=${k}: "${f.name}"`);
   }

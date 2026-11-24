@@ -15,6 +15,9 @@ import {copySong} from './copysong.js';
 import {renderNudge} from './nudge.js';
 import {commit} from './saving.js';
 import {showPicked, pickerHtml, shownColl, joinColls, inShown, collOptions, applyTicks} from './collections.js';
+import {askDelete, addToSetlist} from './songsets.js';
+import {tonightHtml} from './gigui.js';
+import {readyLineHtml} from './readycheck.js';
 
 let q = '', showArchived = false, newVersionOf = null, nvRunning = false;
 export const newVersionRunning = () => nvRunning;
@@ -38,7 +41,7 @@ const backupItems = () => [
 ];
 
 export function renderLibrary(v){
-  v.innerHTML = `${pickerHtml()}<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button></div>${menusRowHtml()}<div id="libNudge"></div><p id="libCount" class="hint libcount" aria-live="polite"></p><div class="libwrap" id="libWrap"><div id="libList"></div><div id="libStrip"></div></div>
+  v.innerHTML = `${tonightHtml()}${pickerHtml()}<div class="bar"><input type="search" id="q" placeholder="Search songs" value="${esc(q)}" aria-label="Search songs"><button class="pri" data-add>Add PDFs</button></div>${menusRowHtml()}<div id="libNudge"></div>${readyLineHtml()}<p id="libCount" class="hint libcount" aria-live="polite"></p><div class="libwrap" id="libWrap"><div id="libList"></div><div id="libStrip"></div></div>
     <label class="sw-row"><input type="checkbox" id="showArch" ${showArchived ? 'checked' : ''}>Show archived</label>
     <p class="hint" id="libBackupHint">A backup is one .zip file with every PDF, setlist and annotation. Save it to Google Drive to keep it safe or move it to another tablet.</p>
     <div id="libDriveLine"></div>
@@ -58,6 +61,7 @@ const songItems = s => s.archived
   ? [{id: 'restore', label: 'Restore', hint: 'Bring it back into the Library'},
      {id: 'del', label: 'Delete', hint: 'Remove it, its PDF and its marks from this tablet'}]
   : [{id: 'edit', label: 'Edit', hint: 'Change the title, artist, version or collections'},
+     {id: 'addset', label: 'Add to setlist\u2026', hint: 'Put it at the end of a setlist'},
      {id: 'copy', label: 'Copy', hint: 'A second version of this chart, marked up another way'},
      {id: 'newversion', label: 'New version', hint: 'Use a new PDF; the old chart moves to Archived'},
      {id: 'archive', label: 'Archive', hint: 'Hide it from the Library; it still plays in setlists'},
@@ -71,6 +75,8 @@ function renderLib(){
     ? `<div class="empty"><h2>No songs in ${esc(coll.name)} yet</h2><p>Add songs from your library to this collection.</p><button class="pri" data-addcollsongs="${esc(coll.id)}">Add songs to ${esc(coll.name)}</button></div>`
     : live.length
     ? `<ul class="list">${list.map(s => { const id = esc(s.id); return `<li class="row"><button class="main" data-open="${id}"><span class="t">${esc(s.title)}</span><span class="s">${pages(s)}</span></button>${moreBtn(s)}</li>`; }).join('')}</ul>${list.length ? '' : '<p class="empty">No songs match.</p>'}`
+    : arch.length
+    ? `<div class="empty"><h2>All your songs are archived</h2><p>${showArchived ? 'They are listed under Archived below.' : 'Tick Show archived to see them.'}</p></div>`
     : `<div class="empty"><h2>No music yet</h2><p>Add PDF charts from your tablet's files or Drive. They're saved on this device.</p></div>`;
   if(showArchived){
     html += `<h2 style="margin-top:28px;font-size:26px">Archived</h2>` + (alist.length
@@ -219,29 +225,24 @@ function askNewVersion(name, s, keeps){
   });
 }
 
+/* A song needs a title: Save with the Title emptied keeps the box open and says so (nothing else typed is lost). */
 async function editSong(id){
   const s = songById(id); if(!s) return;
   const r = await form('Edit song', [{key:'song', label:'Title', value:s.song}, {key:'artist', label:'Artist', value:s.artist}, {key:'version', label:'Version', value:s.version}],
-    {label:'Collections', options:collOptions(s)});
+    {label:'Collections', options:collOptions(s)}, v => v.song ? null : ['song', 'A song needs a title.']);
   if(r && r.song) await commit(() => saveSong({...s, song:cutName(r.song), artist:cutName(r.artist), version:cutName(r.version), colls:applyTicks(s, r.checks)}), 'Could not save the song. Nothing was changed.');
 }
 async function setArchived(id, on){
   const s = songById(id); if(!s) return;
   await commit(() => saveSong({...s, archived:on}), 'Could not save that. Nothing was changed.');
 }
-/* Delete is the menu item and then this question (the two taps the "Never" list asks for). Cancel changes nothing. */
-function askDelete(s){
-  return new Promise(res => {
-    const m = modal(`<h2>Delete ${esc(cut(s.title))}?</h2><p>Its PDF and its marks are removed from this tablet, and it leaves every setlist it is in.</p>
-      <div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Delete</button></div>`);
-    m.classList.add('delask');
-    const ok = m.querySelector('[data-ok]'); ok.disabled = true; setTimeout(() => { ok.disabled = false; }, 400);      // a quick double tap on the menu's Delete must not land on this one
-    m.querySelector('[data-x]').onclick = () => { m.remove(); res(false); };
-    m.querySelector('[data-ok]').onclick = () => { m.remove(); res(true); };
-  });
-}
+/* Delete is the menu item and then the question (js/songsets.js askDelete: the two taps the "Never" list asks for; it names the setlists
+   the song is in and offers Archive instead). Cancel changes nothing. */
 async function deleteSong(id){
-  const s = songById(id); if(!s || !(await askDelete(s))) return;
+  const s = songById(id); if(!s) return;
+  const a = await askDelete(s);
+  if(a === 'archive') return setArchived(id, true);
+  if(a !== 'del') return;
   /* One transaction: the PDF and ink go, the song becomes a deletion marker and the setlists that had it are updated (js/deleteops.js,
      shared with sync's "Delete here"; each record gets a time later than its own last one, so the deletion beats what it was made from). */
   try{ await putAll(await deleteOps('song', id)); }       // a read that fails is said plainly too, and nothing is written
@@ -281,6 +282,7 @@ export async function onClick(b, d){
     b.focus();                                                  // Safari does not focus a button that was tapped: the box and the dialogs after it give focus back to it
     await menuBox({title: cut(s.title), items: songItems(s), opener: b, run: act => {
       if(act === 'edit') return editSong(id);
+      if(act === 'addset') return addToSetlist(id);
       if(act === 'copy') return copySong(id);
       if(act === 'newversion'){ newVersionOf = id; $('#newVersionFile').click(); return; }    // inside the tap that chose it: a file chooser needs that. Nothing is lost: the confirm after the pick is the check
       if(act === 'archive' || act === 'restore') return setArchived(id, act === 'archive');

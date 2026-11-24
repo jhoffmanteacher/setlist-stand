@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, snapshot, diff, restoreZip, backupNow, wipe, JSZip, PDFDocument, openSetMenu, answerRestore} from './harness.mjs';
+import {FIX, TMP, ROOT, assert, sha256, sleep, idbAll, snapshot, diff, restoreZip, backupNow, wipe, JSZip, PDFDocument, openSetMenu, answerRestore, WEBKIT} from './harness.mjs';
 import {songAct, songActIn, songDelete, answerDelete} from './songrow.mjs';
 import {setDelete} from './setrow.mjs';
 
@@ -761,9 +761,36 @@ async function loopUnknownFields(ctx){
   } finally { await s.close(); }
 }
 
+/* The backup file is named with the LOCAL date and time (HHMM), not the UTC date: an evening backup in California is not named for tomorrow. */
+async function loopBackupName(ctx){
+  const s = await ctx.session();
+  try{
+    await s.goto();
+    await s.page.setInputFiles('#file', path.join(FIX, 'one-page.pdf'));
+    await s.page.waitForFunction(() => document.querySelectorAll('#libList [data-open]').length === 1, null, {timeout: 15000});
+    const tz = WEBKIT ? await s.page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone) : 'America/Los_Angeles';
+    if(!WEBKIT) await (await s.context.newCDPSession(s.page)).send('Emulation.setTimezoneOverride', {timezoneId: tz});
+    /* the expected name, worked out in Node from the zone's own calendar (a path of its own, not the app's) */
+    const local = ms => {
+      const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).formatToParts(new Date(ms)).map(x => [x.type, x.value]));
+      return `setlist-stand-backup-${p.year}-${p.month}-${p.day}-${p.hour}${p.minute}.zip`;
+    };
+    const cases = [['2026-11-24T05:15:30Z', 'setlist-stand-backup-2026-11-23-2115.zip'], ['2026-11-24T08:05:00Z', 'setlist-stand-backup-2026-11-24-0005.zip'], ['2026-07-04T06:59:59Z', 'setlist-stand-backup-2026-07-03-2359.zip']];
+    for(const [iso, la] of cases){
+      await s.page.clock.setFixedTime(new Date(iso));
+      const {name, file} = await backupNow(s.page);
+      assert(name === local(Date.parse(iso)), `at ${iso} in ${tz} the backup is named ${name}, want ${local(Date.parse(iso))}`);
+      if(!WEBKIT) assert(name === la, `at ${iso} (evening in California) the backup is named ${name}, want ${la} (the UTC date would name it for tomorrow)`);
+      assert((await JSZip.loadAsync(await fsp.readFile(file))).file('library.json'), name + ' is not a backup');
+    }
+    assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+  } finally { await s.close(); }
+}
+
 export const loops = [
   {name: 'roundtrip: backup → wipe → restore reproduces every record', run: loopBackupRestore},
   {name: 'roundtrip: second generation backup is identical', run: loopSecondGeneration},
+  {name: 'roundtrip: the backup file is named with the local date and time, not the UTC date', run: loopBackupName},
   {name: 'roundtrip: v1 backup upgrades and survives a round trip', run: loopV1},
   {name: 'roundtrip: real library round trip', needs: ['library'], run: loopRealLibrary},
   {name: 'roundtrip: converter output matches the MobileSheets backup it came from', needs: ['msb', 'library'], run: loopConverter},
