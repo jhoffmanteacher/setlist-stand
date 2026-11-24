@@ -68,6 +68,8 @@ async function loopExport(ctx){
     const dlg = page.locator('.modal [role=dialog]');
     await dlg.waitFor();
     assert(/^Share songs/.test((await dlg.textContent()).trim()) && await page.locator('.modal [data-ok]').textContent() === 'Share', 'the checklist is titled and labelled for sharing: ' + await dlg.textContent());
+    assert(await page.locator('.modal .pick label', {hasText: '(archived)'}).count() === 0, 'an archived song is listed before Show archived is ticked');
+    await page.check('.modal [data-showarch]');
     assert(await page.locator('.modal .pick label', {hasText: '(archived)'}).count() === 1, 'the archived song is not tagged in the checklist');
     assert(await page.locator('.modal [data-ok]').isDisabled(), 'Share is enabled with nothing ticked');
     await page.locator('.modal .pick label', {hasText: 'Fixture Alpha'}).locator('input').check();

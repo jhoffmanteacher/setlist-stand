@@ -142,7 +142,7 @@ export async function onClick(b, d){
   if(d.playat){ openViewer(entriesOf(st), +d.playat); return true; }
   if('addto' in d){
     /* With a collection shown the list holds its songs, and "Show all songs" reaches the rest. */
-    const open = songs.filter(s => !s.archived), c = shownColl();
+    const open = songs, c = shownColl();      // archived songs are in the list too, hidden until "Show archived" is ticked (pick)
     const add = await pick(c ? open.filter(inShown) : open, c ? {all:open, ordered:true} : {ordered:true});
     if(add.length) await saveItems(st, [...items, ...add.map(id => ({type:'song', id}))]);
     return true;

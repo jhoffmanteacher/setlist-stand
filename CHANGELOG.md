@@ -1,8 +1,13 @@
 # Changelog
 
+## 2026-11-23: Archived songs stay out of the song pickers
+- The box where you tick songs (Add songs to a setlist, Add songs to a collection, Share songs) no longer lists archived songs. If you have any, a **Show archived** box appears; tick it to see them (marked "(archived)") and add them. A song you ticked stays ticked if you hide archived again.
+- Setlists could not take archived songs before; now they can, through that box.
+
 ## 2026-11-23: Setlist Stand fits a phone
 - Setlist Stand now fits a phone: every box keeps its heading and buttons on screen (the rest scrolls), the Library's header is shorter, the collections slide sideways with the Collections button always in view, the A to Z strip never crowds its letters (fewer letters with a dot between, or it waits until you scroll), and messages use the whole width.
 - A setlist's row has Play and one ⋯ button (Duplicate, Delete), like a song row. Delete asks "Delete <name>? Its songs stay in your library."
+
 ## 2026-11-23: Restore asks first and keeps what it replaces
 - **Restore from backup** now tells you first, in plain words, what it will change: what it adds, puts back, deletes and leaves alone. Cancel changes nothing. An empty tablet is not asked.
 - **Nothing is thrown away:** any chart or marks the restore would replace or delete go to Archived as "(before restore DATE)", and a setlist you changed since the backup is kept as "<name> (before restore)", still playing what it played.

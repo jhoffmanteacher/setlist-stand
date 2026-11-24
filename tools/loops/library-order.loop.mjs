@@ -88,7 +88,9 @@ async function loopOrder(ctx){
     /* the pickers */
     await openShareMenu(page, 'share');
     await page.locator('.modal .pick').waitFor();
-    same(await pickerLabels(page), SHARE_ALL, 'Share songs picker order');
+    same(await pickerLabels(page), LIVE, 'Share songs picker order (archived songs hidden)');
+    await page.check('.modal [data-showarch]');
+    same(await pickerLabels(page), SHARE_ALL, 'Share songs picker order with Show archived ticked');
     await page.click('.modal [data-x]');
     await page.waitForFunction(() => !document.querySelector('.modal'));
     await page.click('#tSets');
@@ -97,6 +99,8 @@ async function loopOrder(ctx){
     await page.click('#view [data-addto]');
     await page.locator('.modal .pick').waitFor();
     same(await pickerLabels(page), LIVE, 'Add songs (setlist) picker order');
+    await page.check('.modal [data-showarch]');
+    same(await pickerLabels(page), SHARE_ALL, 'Add songs (setlist) picker order with Show archived ticked');
     await page.click('.modal [data-x]');
     await page.waitForFunction(() => !document.querySelector('.modal'));
 
