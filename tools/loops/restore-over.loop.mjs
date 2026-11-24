@@ -50,7 +50,8 @@ const note = (id, text, u = 1000) => ({id, t: 'text', x: .5, y: .6, text, size: 
 /* A session whose puts can be made to fail (window.__fail = {store, key}: that record's put throws "disk full"), whose stored PDFs
    can be made unreadable (window.__failGet = [song ids]: reading that PDF from the files store throws, as a lost blob or Chrome's
    "Failed to read large IndexedDB value" does; window.__failBytes = [song ids]: the PDF read from the files store is a Blob whose
-   bytes cannot be read, nor any slice of it, as Safari's NotReadableError after an update does), and which notes whether the restore question ever appeared (window.__asked). */
+   bytes cannot be read, nor any slice of it, as Safari's NotReadableError after an update does; window.__failFull = [song ids]: its first
+   byte reads but the whole file does not), and which notes whether the restore question ever appeared (window.__asked). */
 async function session(ctx){
   const s = await ctx.session();
   await s.context.addInitScript(() => {
@@ -60,17 +61,18 @@ async function session(ctx){
       if(f && this.name === f.store && String(a[1]) === f.key) throw new DOMException('The disk is full (test)', 'QuotaExceededError');
       return put.apply(this, a);
     };
-    const get = IDBObjectStore.prototype.get, bad = new WeakSet();
+    const get = IDBObjectStore.prototype.get, bad = new WeakSet(), badFull = new WeakSet();
     IDBObjectStore.prototype.get = function(k){
       if(this.name === 'files' && (window.__failGet || []).includes(String(k))) throw new DOMException('Failed to read large IndexedDB value (test)', 'UnknownError');
       const req = get.call(this, k);
       if(this.name === 'files' && (window.__failBytes || []).includes(String(k))) req.addEventListener('success', () => { if(req.result) bad.add(req.result); });
+      if(this.name === 'files' && (window.__failFull || []).includes(String(k))) req.addEventListener('success', () => { if(req.result) badFull.add(req.result); });
       return req;
     };
     const ab = Blob.prototype.arrayBuffer, slice = Blob.prototype.slice;
     Blob.prototype.slice = function(...a){ const r = slice.apply(this, a); if(bad.has(this)) bad.add(r); return r; };
     Blob.prototype.arrayBuffer = function(){
-      if(bad.has(this)) return Promise.reject(new DOMException('The file could not be read (test)', 'NotReadableError'));
+      if(bad.has(this) || badFull.has(this)) return Promise.reject(new DOMException('The file could not be read (test)', 'NotReadableError'));
       return ab.call(this);
     };
     window.__asked = 0;
@@ -88,15 +90,15 @@ async function pick(page, file){
 /* ---------- the model: what a restore of backup F over `before` must leave, written from the rules, not from the app ----------
    keep: tablet song ids whose chart and live marks must be kept as archived copies; keepSets: tablet setlist ids kept as
    "<name> (before restore)". The copies' own ids and times are read from `after` (they are new), everything else is predicted. */
-function model(before, F, after, {keep = [], keepSets = []} = {}){
+function model(before, F, after, {keep = [], keepSets = [], heldBy = {}} = {}){
   const want = normalise(before), errs = [];
   for(const s of F.songs){
     for(const k of Object.keys(want.ink)) if(k.startsWith(s.id + ':')) delete want.ink[k];
     if(s.deleted){ delete want.files[s.id]; want.songs[s.id] = {id: s.id, deleted: true, updated: Number(s.updated) || 0}; continue; }
     want.songs[s.id] = s; want.files[s.id] = s.hash;
   }
-  const deleted = new Set(F.songs.filter(s => s.deleted).map(s => s.id));
-  for(const [k, v] of Object.entries(F.ink || {})) if(!deleted.has(k.split(':')[0])) want.ink[k] = v;
+  const liveF = new Set(F.songs.filter(s => !s.deleted).map(s => s.id));
+  for(const [k, v] of Object.entries(F.ink || {})) if(liveF.has(k.split(':')[0])) want.ink[k] = v;
   for(const st of F.sets) want.sets[st.id] = st;
   for(const c of F.colls || []) want.colls[c.id] = c;
   const newSongs = Object.keys(after.songs).filter(k => !(k in want.songs)), newSets = Object.keys(after.sets).filter(k => !(k in want.sets));
@@ -124,7 +126,7 @@ function model(before, F, after, {keep = [], keepSets = []} = {}){
     const st = before.sets[from], name = st.name + ' (before restore)', id = newSets.find(k => after.sets[k].name === name);
     if(!id){ errs.push(`no setlist "${name}"`); continue; }
     const g = after.sets[id], oldIds = new Set(st.items.filter(it => it.type === 'break').map(it => it.id));
-    want.sets[id] = {...st, id, name, created: g.created, updated: g.updated, items: st.items.map((it, i) => it.type === 'break' ? {...it, id: (g.items[i] || {}).id} : it.type === 'song' && copyOf[it.id] ? {...it, id: copyOf[it.id]} : it)};
+    want.sets[id] = {...st, id, name, created: g.created, updated: g.updated, items: st.items.map((it, i) => it.type === 'break' ? {...it, id: (g.items[i] || {}).id} : it.type === 'song' && copyOf[it.id] ? {...it, id: copyOf[it.id]} : it.type === 'song' && heldBy[it.id] ? {...it, id: heldBy[it.id]} : it)};
     if(!(g.created > 0 && g.updated === g.created)) errs.push(`"${name}": created/updated ${g.created}/${g.updated}`);
     for(const it of g.items) if(it.type === 'break' && (oldIds.has(it.id) || it.id in after.songs || it.id in after.sets)) errs.push(`"${name}": the break keeps an id in use: ${it.id}`);
   }
@@ -154,7 +156,16 @@ async function seedLibrary(page){
     for(const [k, v] of Object.entries(data.ink)) ops.push({store: 'ink', key: k, value: v});
     await S.putAll(ops);
   }, {data, b64});
-  return {file, data};
+  return {file, data, pdfs};
+}
+/* A backup zip built here from `data` (live songs' PDFs from `pdfs`) */
+async function zipOf(data, pdfs, name){
+  const z = new JSZip();
+  for(const s of data.songs) if(!s.deleted) z.file(`files/${s.id}.pdf`, pdfs[s.id]);
+  z.file('library.json', JSON.stringify(data));
+  const f = path.join(TMP, name);
+  await fsp.writeFile(f, await z.generateAsync({type: 'nodebuffer', compression: 'STORE'}));
+  return f;
 }
 /* After the backup: a new mark on rb (page 1) and on rc, and the setlist renamed. A restore then keeps two charts and one setlist. */
 async function changeLibrary(page){
@@ -451,7 +462,7 @@ async function loopTablet(ctx){
   /* (a) a chart this tablet cannot read (the record, or only its bytes) never blocks a restore: the question counts it, the rest is
      kept, the backup restored. A chart that cannot be read only AFTER the question promised to keep it stops the restore before the
      write ("could not be read just now"): what is written is always what the question said. */
-  for(const how of ['get', 'bytes', 'bytes later']){
+  for(const how of ['get', 'bytes', 'full']){
     const {s, file, data} = await seeded(ctx), page = s.page;
     try{
       const b0 = await snapshot(page);
@@ -462,23 +473,25 @@ async function loopTablet(ctx){
       const box = page.locator('.modal.restoreask');
       await box.waitFor({timeout: 60000});
       const q = (await box.locator('.box').innerText()).replace(/\s+/g, ' ');
-      if(how === 'bytes later'){
-        assert(/Charts and marks are kept: 2 charts from this tablet/.test(q) && !/could not be read/.test(q), `(a ${how}) the question: ` + q);
-        await page.evaluate(() => { window.__failBytes = ['rb']; });
+      if(how === 'full'){
+        /* its first byte reads, so the question promises it; the whole file does not: nothing is written and the question comes again,
+           naming it; Restore then goes ahead without it */
+        assert(/Charts and marks are kept: 2 charts from this tablet/.test(q) && !/could not be read/.test(q), `(a ${how}) the first question: ` + q);
+        await page.evaluate(() => { window.__failFull = ['rb']; });
         await box.locator('[data-ok]').click();
-        assert(await waitToast(page, /\S/, 60000) === 'A chart on this tablet could not be read just now. Nothing was changed. Try Restore again.', `(a ${how}): ` + await page.locator('#toast').textContent());
-        await noModal(page, `(a ${how})`);
-        await page.evaluate(() => { window.__failBytes = null; });
-        expectSame(b0, await snapshot(page), `(a ${how}) a chart the question promised to keep could not be read: the library before (left) and after (right)`);
-        assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
-        continue;
+        await page.waitForFunction(() => /could not be read/.test(document.querySelector('.modal.restoreask')?.innerText || ''), null, {timeout: 60000})
+          .catch(async () => { throw new Error(`(a ${how}) the question did not come again naming the chart; toast "${await page.locator('#toast').textContent()}"`); });
+        const q2 = (await box.locator('.box').innerText()).replace(/\s+/g, ' ');
+        assert(/1 chart on this tablet could not be read, so the marks drawn on it here cannot be kept: Over rb\./.test(q2) && /Charts and marks are kept: 1 chart from this tablet/.test(q2), `(a ${how}) the second question: ` + q2);
+        await page.evaluate(() => { window.__failFull = null; });          // (the snapshot reads every stored PDF: rb is not in the keep list any more)
+        expectSame(b0, await snapshot(page), `(a ${how}) before the second answer: the library before (left) and now (right)`);
       }
-      assert(/1 chart on this tablet could not be read, so it cannot be kept\./.test(q) && /Charts and marks are kept: 1 chart from this tablet/.test(q), `(a ${how}) the question: ` + q);
+      else assert(/1 chart on this tablet could not be read, so the marks drawn on it here cannot be kept: Over rb\./.test(q) && /Charts and marks are kept: 1 chart from this tablet/.test(q), `(a ${how}) the question: ` + q);
       await box.locator('[data-ok]').click();
       const msg = await waitToast(page, /^Restored|Nothing was changed/, 60000);
       assert(msg === 'Restored 3 songs and 1 setlist', `(a ${how}) a chart that cannot be read blocked the restore: ` + msg);
       await closeRestored(page);
-      await page.evaluate(() => { window.__failGet = null; window.__failBytes = null; });
+      await page.evaluate(() => { window.__failGet = null; window.__failBytes = null; window.__failFull = null; });
       /* copies were kept (in no backup yet), though nothing else here stays: this restore does not count as a backup */
       assert(await page.evaluate(() => localStorage.getItem('ss-last-backup')) === null, `(a ${how}) a restore that kept copies counted as a backup`);
       const d = model(b0, data, await snapshot(page), {keep: ['rc'], keepSets: ['rs']});
@@ -518,7 +531,7 @@ async function loopTablet(ctx){
     expectSame(s1, s3, '(b) after A (left) vs after A, B, A (right)');
     await inStore(page, async S => { const st = await S.get('sets', 'rs'); st.name = 'Gig changed here'; st.items = st.items.slice().reverse(); await S.saveSet(st); });
     const {q: q4} = await restoreOver(page, file, '(b) A after another change');
-    assert(/A copy of 1 setlist is kept as "Gig changed here \(before restore\) \(2\)"\./.test(q4), '(b) the second setlist copy\'s name:\n' + q4);
+    assert(/A copy of 1 setlist is kept as "Gig changed here \(before restore\) \(2\)"\./.test(q4) && !/Charts and marks are kept/.test(q4), '(b) the second setlist copy\'s name (and no chart said kept):\n' + q4);
     assert(setCopiesOf(await snapshot(page)).map(x => x.name).sort().join('|') === 'Gig changed here (before restore)|Gig changed here (before restore) (2)', '(b) the setlist copies: ' + setCopiesOf(await snapshot(page)).map(x => x.name).join(' | '));
 
     /* (c) a crop made here after the backup, on a chart and marks the backup holds: kept with an archived copy that has the crop */
@@ -560,11 +573,95 @@ async function loopTablet(ctx){
   } finally { await s.close(); }
 }
 
+/* ---------- loop 7 ---------- */
+const b64of = buf => buf.toString('base64');
+const putFile = (page, id, buf) => inStore(page, async (S, {id, b}) => S.putAll([{store: 'files', key: id, value: new Blob([Uint8Array.from(atob(b), c => c.charCodeAt(0))], {type: 'application/pdf'})}]), {id, b: b64of(buf)});
+const songItems = st => st.items.filter(it => it.type === 'song').map(it => it.id);
+async function loopKeptSetlist(ctx){
+  /* (h) a replaced (3a) or deleted (3b) song held by a Copy-song twin that stays: no chart copy is needed, and the kept setlist plays
+     the twin, not the backup's older chart and not a deleted song */
+  for(const how of ['replaced', 'deleted']){
+    const s = await session(ctx), page = s.page;
+    try{
+      const {file, data, pdfs} = await seedLibrary(page);
+      const X = await makePdf('Rb newer ' + how, 1), HX = sha256(X);
+      await putFile(page, 'rb', X); await putFile(page, 'rt', X);
+      await inStore(page, async (S, HX) => {
+        const b = await S.get('songs', 'rb');
+        await S.putAll([{store: 'songs', key: 'rb', value: {...b, pages: 1, hash: HX, updated: Date.now()}}, {store: 'ink', key: 'rb:1', delete: true},
+          {store: 'songs', key: 'rt', value: {...b, id: 'rt', song: 'Over twin', title: 'Over twin', pages: 1, hash: HX, updated: Date.now()}}]);
+        const st = await S.get('sets', 'rs'); st.name = 'Gig changed here'; await S.saveSet(st);
+      }, HX);
+      await s.goto();
+      const F = how === 'replaced' ? data : {...data, songs: data.songs.map(x => x.id === 'rb' ? {id: 'rb', deleted: true, updated: 9e12} : x), ink: {'ra:1': data.ink['ra:1']}};
+      const f = how === 'replaced' ? file : await zipOf(F, pdfs, `over-del-${Date.now()}.zip`);
+      const b0 = await snapshot(page);
+      const {q} = await restoreOver(page, f, `(h ${how})`);
+      assert(!/Charts and marks are kept/.test(q) && /A copy of 1 setlist is kept as "Gig changed here \(before restore\)"\./.test(q), `(h ${how}) the question:\n` + q);
+      const after = await snapshot(page), [kept] = setCopiesOf(after);
+      assert(kept && JSON.stringify(songItems(kept)) === JSON.stringify(['ra', 'rt', 'rc']), `(h ${how}) the kept setlist plays ${JSON.stringify(kept && songItems(kept))}, expected ["ra","rt","rc"] (rb's chart is held by its twin rt)`);
+      const d = model(b0, F, after, {keepSets: ['rs'], heldBy: {rb: 'rt'}});
+      assert(!d.length, `(h ${how}) the library differs from the model:\n    ` + d.slice(0, 12).join('\n    '));
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); }
+  }
+
+  /* (i) a version 1 backup (records with no `updated`, created 0): a crop and a break added here after it are newer than the backup */
+  { const s = await session(ctx), page = s.page;
+    try{
+      const buf = await makePdf('Old one', 1), id = 'v1o' + Date.now().toString(36), sid = 'v1s' + Date.now().toString(36);
+      const F = {app: 'setlist-stand', version: 1, saved: new Date(1700000000000).toISOString(), songs: [{id, title: 'Old Song - Some Artist', pages: 1}],
+        sets: [{id: sid, name: 'Old Gig', songs: [id], created: 0}], ink: {}};
+      const f = await zipOf(F, {[id]: buf}, `over-v1-${Date.now()}.zip`);
+      await pick(page, f);
+      assert(/^Restored 1 song and 1 setlist/.test(await waitToast(page, /^Restored|Nothing was changed|not a/, 60000)), '(i) the first restore');
+      await inStore(page, async (S, {id, sid}) => {
+        const a = await S.get('songs', id); a.crop = {all: {x: .1, y: .1, w: .8, h: .8}, pages: {}}; await S.saveSong(a);
+        const st = await S.get('sets', sid); st.items = [...st.items, {type: 'break', id: 'v1brk', name: 'Encore'}]; await S.saveSet(st);
+      }, {id, sid});
+      await s.goto();
+      const b0 = await snapshot(page);
+      const {q} = await restoreOver(page, f, '(i) again');
+      assert(/Charts and marks are kept: 1 chart from this tablet/.test(q) && /A copy of 1 setlist is kept as "Old Gig \(before restore\)"\./.test(q), '(i) the crop and the break made here are not kept:\n' + q);
+      const after = await snapshot(page), [c] = copiesOf(after), [k] = setCopiesOf(after);
+      assert(c && JSON.stringify(c.crop) === JSON.stringify(b0.songs[id].crop) && after.files[c.id] === sha256(buf), '(i) the archived copy does not carry the crop made here: ' + JSON.stringify(c));
+      assert(k && k.items.some(it => it.type === 'break' && it.name === 'Encore') && songItems(k)[0] === c.id, '(i) the kept setlist: ' + JSON.stringify(k && k.items));
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); } }
+
+  /* (j) a page in a (hand-made) backup for a song the backup does not list is not written over the marks of that song here, which
+     the question says stays as it is; (k) a kept setlist's name stays within 200 characters with " (before restore) (2)" */
+  { const s = await session(ctx), page = s.page;
+    try{
+      const {data, pdfs} = await seedLibrary(page);
+      const Q = await makePdf('Rq mine', 1), LONG = 'L'.repeat(200), mine = pen('mine', .4);
+      await putFile(page, 'rq', Q);
+      await inStore(page, async (S, {HQ, mine, LONG}) => {
+        const a = await S.get('songs', 'ra');
+        await S.putAll([{store: 'songs', key: 'rq', value: {...a, id: 'rq', song: 'Over rq', title: 'Over rq', hash: HQ, updated: Date.now()}}, {store: 'ink', key: 'rq:1', value: {updated: mine.updated, strokes: [mine]}},
+          {store: 'sets', key: 'rlong', value: {id: 'rlong', name: 'L'.repeat(183) + ' (before restore)', items: [], colls: [], created: 1, updated: 1}}]);
+        const st = await S.get('sets', 'rs'); st.name = LONG; await S.saveSet(st);
+      }, {HQ: sha256(Q), mine, LONG});
+      await s.goto();
+      const F = {...data, ink: {...data.ink, 'rq:1': {updated: 9e12, strokes: [pen('theirs', .7, 9e12)]}}};
+      const f = await zipOf(F, pdfs, `over-rq-${Date.now()}.zip`);
+      const b0 = await snapshot(page);
+      const {q} = await restoreOver(page, f, '(j)');
+      assert(/1 song and 1 setlist on this tablet are not in the backup\. They stay as they are\./.test(q), '(j) the question:\n' + q);
+      const after = await snapshot(page);
+      expectSame(b0.ink['rq:1'], after.ink['rq:1'], '(j) the marks of a song that stays (left: before, right: after)');
+      const names = setCopiesOf(after).map(x => x.name).filter(n => n.startsWith('LL') && n !== 'L'.repeat(183) + ' (before restore)');
+      assert(names.length === 1 && names[0].length <= 200 && names[0].endsWith(' (before restore) (2)'), '(k) the kept setlist with a 200-character name: ' + JSON.stringify(names.map(n => [n.length, n.slice(-24)])));
+      assert(!s.errors.length, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); } }
+}
+
 export const loops = [
   {name: 'roundtrip over 1: a backup restored over a library changed since it was made asks first, then gives back the backup plus exactly the copies a hand-written model expects (reload, backup, the same backup again)', run: loopModel},
   {name: 'roundtrip over 2: Cancel, Escape and Stop (while comparing, while keeping a chart) change nothing', run: loopNothing},
   {name: 'roundtrip over 3: an empty tablet (or one holding only deletion markers) restores without a question', run: loopEmpty},
   {name: 'roundtrip over 4: all or nothing with copies: a full tablet, a stroke or an edit in a second tab while asked, the size cap', run: loopAllOrNothing},
   {name: 'roundtrip over 6: the tablet\'s own state never blocks or multiplies: an unreadable chart, copies already held, a second setlist copy, a crop made here, an odd `updated`, "last backup" with records that stay', run: loopTablet},
+  {name: 'roundtrip over 7: the kept setlist plays what it played (a twin holds the chart), a version 1 backup counts as older, a backup page for a song it does not list, a long setlist name', run: loopKeptSetlist},
   {name: 'roundtrip over 5: a reload at any moment after Restore leaves the library as it was or whole, copies included', run: loopReload},
 ];

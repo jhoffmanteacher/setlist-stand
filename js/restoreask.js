@@ -48,9 +48,13 @@ export function askRestore(plan, saved, drive){
     if(ks == 1) parts.push(`A copy of 1 setlist is kept as "${esc(cut(plan.keepSets[0].name))}".`);
     else if(ks) parts.push(`Copies of ${ks} setlists are kept, each named "… (before restore)".`);
     if(plan.keepBytes > 50e6) parts.push(`Keeping them takes about ${Math.round(plan.keepBytes / 1e6)} MB on this tablet.`);
-    after.push('Charts and marks are kept: ' + parts.join(' '));
+    after.push((kc ? 'Charts and marks are kept: ' : '') + parts.join(' '));
   }
-  if(S.unreadable) after.push(`${S.unreadable == 1 ? '1 chart on this tablet could not be read, so it cannot be kept' : S.unreadable + ' charts on this tablet could not be read, so they cannot be kept'}.`);
+  /* charts this tablet cannot read, by name: the chart itself is lost, or (the backup puts the same chart back) only the marks drawn on it here */
+  const unr = (list, one, many) => { if(!list.length) return; const names = list.slice(0, 8).map(x => esc(cut(x.title))).join(', ') + (list.length > 8 ? ` and ${list.length - 8} more` : '');
+    after.push(`${list.length == 1 ? '1 chart on this tablet could not be read, so ' + one : list.length + ' charts on this tablet could not be read, so ' + many}: ${names}.`); };
+  unr(S.unreadable.filter(x => !x.marksOnly), 'it cannot be kept', 'they cannot be kept');
+  unr(S.unreadable.filter(x => x.marksOnly), 'the marks drawn on it here cannot be kept', 'the marks drawn on them here cannot be kept');
   if(S.noPdf) after.push(`${S.noPdf == 1 ? '1 song on this tablet has' : S.noPdf + ' songs on this tablet have'} no chart stored here, so ${S.noPdf == 1 ? 'its' : 'their'} marks cannot be kept.`);
   const stay = counts(S.stay, T.stay, C.stay), one = S.stay + T.stay + C.stay == 1;
   if(stay) after.push(`${stay} on this tablet ${one ? 'is' : 'are'} not in the backup. ${one ? 'It stays as it is' : 'They stay as they are'}.`);

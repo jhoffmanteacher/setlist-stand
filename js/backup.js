@@ -122,6 +122,9 @@ export async function restoreFrom(f, render, {drive = false} = {}){
   if(bad) return stop(`That backup has something the app can't read (${bad}). Nothing was changed.`);
   let n = 0, sets = 0, k = 0, badGig = 0, plan, keep;
   const total = data.songs.filter(s => !s.deleted).length, room0 = room, incoming = new Map();     // incoming: song id -> {blob, hash}
+  /* each backup record's own `updated`, read before the upgrade fills a missing one with "now" (missing: 0): the plan compares with it */
+  const raw = {songs:new Map(), sets:new Map(), colls:new Map()};
+  for(const [store, list] of [['songs', data.songs], ['sets', data.sets], ['colls', data.colls || []]]) for(const r of list) raw[store].set(r.id, Number(r.updated) || 0);
   try{
     for(const s of data.songs){
       if(wasStopped()) return;
@@ -149,23 +152,35 @@ export async function restoreFrom(f, render, {drive = false} = {}){
     }
     if(wasStopped()) return;
     job.say('Comparing with this tablet…');
-    plan = await planRestore(data, incoming);
+    plan = await planRestore(data, incoming, {raw});
   }catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
   if(wasStopped()) return;
   /* An empty tablet (nothing live on it: deletion markers do not count) has nothing to lose, so it is not asked. Otherwise the box
-     closes while the question is open (nothing has been written; an update reload there loses nothing) and a new one opens after. */
+     closes while the question is open (nothing has been written; an update reload there loses nothing) and a new one opens after.
+     A chart the question promised to keep whose whole file cannot be read at the keep step: nothing is written, and the question
+     comes again with that chart counted and named as one that cannot be kept. */
   let answer = 'keep';
-  if(!plan.empty){
-    job.close();
-    answer = await askRestore(plan, data.saved, drive);
-    if(!answer){ toast('Restore cancelled. Nothing was changed.'); return; }
-    job = busy('Restoring a backup', 'Getting ready…');
+  const unreadable = new Set();
+  for(;;){
+    if(!plan.empty){
+      job.close();
+      answer = await askRestore(plan, data.saved, drive);
+      if(!answer){ toast('Restore cancelled. Nothing was changed.'); return; }
+      job = busy('Restoring a backup', 'Getting ready…');
+    }
+    try{ keep = await buildKeeps(plan, job, {copies:answer !== 'nokeep'}); break; }
+    catch(err){
+      if(!(err && err.unreadable) || unreadable.has(err.unreadable)) return stop(explainError(err, 'Could not restore that backup. Nothing was changed.'));
+      unreadable.add(err.unreadable);
+      job.say('Comparing with this tablet…');
+      try{ plan = await planRestore(data, incoming, {raw, unreadable}); }
+      catch(e){ return stop(explainError(e, 'Could not restore that backup. Nothing was changed.')); }
+      if(wasStopped()) return;
+    }
   }
-  try{ keep = await buildKeeps(plan, job, {copies:answer !== 'nokeep'}); }
-  catch(err){ return stop(explainError(err, 'Could not restore that backup. Nothing was changed.')); }
   if(wasStopped() || !keep) return;
   try{
-    const ops = [], skip = new Set(), here = plan.here;
+    const ops = [], here = plan.here;
     /* Every op that writes over or removes a record here carries the `updated` the plan read (null: there was none), so a change
        made while the question was open (another tab) refuses the whole write instead of being lost. A deletion marker only wins
        over a record here that is not newer than it. */
@@ -187,7 +202,6 @@ export async function restoreFrom(f, render, {drive = false} = {}){
     };
     for(const s of data.songs){
       if(s.deleted){
-        skip.add(s.id);                 // the backup has no annotations for a deleted song: any it lists are left out
         if(newerHere('songs', s)) continue;           // keep the newer song here, with its PDF and annotations
         /* a deleted song: its PDF and annotations on this tablet go too, in the same transaction (a copy is kept when they would be lost) */
         ops.push(...inkGuards(s.id), {store:'files', key:s.id, delete:true}, {deleteInkFor:s.id}, {store:'songs', key:s.id, value:marker(s), ...guard('songs', s.id)});
@@ -204,7 +218,9 @@ export async function restoreFrom(f, render, {drive = false} = {}){
       if(c.deleted){ if(!newerHere('colls', c)) ops.push({store:'colls', key:c.id, value:marker(c), ...guard('colls', c.id)}); continue; }
       ops.push({store:'colls', key:c.id, value:c, ...guard('colls', c.id)});
     }
-    for(const [k, v] of Object.entries(data.ink || {})) if(!skip.has(k.split(':')[0])) ops.push({store:'ink', key:k, value:upgradeInk(v).record});
+    /* only pages of the backup's live songs (a page for a song the backup does not list, or deletes, is left out: the page here of a
+       song that "stays as it is" is not written over) */
+    for(const [k, v] of Object.entries(data.ink || {})) if(incoming.has(k.split(':')[0])) ops.push({store:'ink', key:k, value:upgradeInk(v).record});
     if(wasStopped()) return;
     job.lock('Saving to this tablet…');                 // the one write: from here Stop is gone, and Escape does nothing
     await putAll([...keep.ops, ...ops]);
