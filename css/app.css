@@ -283,8 +283,8 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
 .cu-b{display:flex;flex-direction:column;gap:2px;min-width:0}
 .cu-n{font-size:14px;color:var(--mute)}
 
-/* Phone-size layout (Jonathan, 2026-11-23). Keyed on the WINDOW (an iPad in Split View gets it too); nothing here changes a window 820 px wide
-   and 600 px high or more. A dialog fits any screen: the box scrolls as a whole while its heading and its buttons stay on screen. */
+/* Phone-size layout (Jonathan, 2026-11-23). Keyed on the WINDOW (an iPad in Split View gets it too); the header and Library rules apply only
+   under 600 px wide or 500 px high, the dialog rules under 640 px high. A dialog fits any screen: the box scrolls as a whole while its heading and its buttons stay on screen. */
 @supports (height:100dvh){.box{max-height:85dvh}}                   /* Chrome 100 to 107 and iPadOS 16.0 to 16.3: vh above */
 @media(max-height:640px){
   .box fieldset.checks{max-height:none;overflow:visible}      /* the box scrolls as a whole (a scrolling fieldset hides its last tick box under its legend in Safari) */
@@ -292,7 +292,8 @@ body.playing #update,body.splitting #update,body.busy #update{display:none}   /*
   @supports (height:100dvh){.box{max-height:calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}}
 }
 .box>h1,.box>h2{position:sticky;top:-20px;z-index:1;background:var(--card);padding-top:20px;margin-top:-20px}
-.box>.btns{position:sticky;bottom:-20px;z-index:1;background:var(--card);padding-bottom:20px;margin-bottom:-20px;flex-wrap:wrap}
+.box>.btns:last-child{position:sticky;bottom:-20px;z-index:1;background:var(--card);padding-bottom:20px;margin-bottom:-20px;flex-wrap:wrap}
+.box{scroll-padding:72px 0 76px}                                   /* Tab to a field: it scrolls clear of the sticky heading and buttons */
 .pick,.mgr,.tlines{min-height:96px;flex:0 1 auto}
 .pick,.tlines{flex-shrink:1}
 @media(max-width:600px),(max-height:500px){

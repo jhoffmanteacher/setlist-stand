@@ -96,7 +96,7 @@ const saveItems = (st, next) => commit(() => saveSet({...st, items:next}), 'Coul
 
 const menuTitle = st => st.name.length > 40 ? st.name.slice(0, 40) + '\u2026' : st.name;
 async function changeGig(st){
-  const r = await gigDialog('Gig date of ' + st.name, st.gig);
+  const r = await gigDialog('Gig date of ' + cut(st.name), st.gig);
   if(r && (r.gig || undefined) !== st.gig){
     const next = {...st}; if(r.gig) next.gig = r.gig; else delete next.gig;
     await commit(() => saveSet(next), 'Could not save the gig date. Nothing was changed.');
@@ -104,7 +104,7 @@ async function changeGig(st){
 }
 async function renameSet(st){ const n = await ask('Rename setlist', st.name); if(n) await commit(() => saveSet({...st, name:n}), 'Could not rename the setlist. Nothing was changed.'); }
 async function setColls(st){
-  const r = await form('Collections of ' + st.name, [], {label:'Collections', options:collOptions(st)});
+  const r = await form('Collections of ' + cut(st.name), [], {label:'Collections', options:collOptions(st)});
   if(r) await commit(() => saveSet({...st, colls:applyTicks(st, r.checks)}), 'Could not save the collections. Nothing was changed.');
 }
 

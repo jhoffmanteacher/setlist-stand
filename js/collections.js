@@ -69,7 +69,7 @@ export function pickerHtml(){
 /* The picker scrolls sideways on a narrow window: the collection shown is brought into view (the page itself is never scrolled). */
 export function showPicked(){
   const bar = document.querySelector('.collchips'), on = bar && bar.querySelector('[aria-pressed=true]');
-  if(on && bar.scrollWidth > bar.clientWidth) bar.scrollLeft = Math.max(0, on.offsetLeft - (bar.clientWidth - on.offsetWidth) / 2);
+  if(on && bar.scrollWidth > bar.clientWidth) bar.scrollLeft = Math.max(0, on.offsetLeft - bar.offsetLeft - (bar.clientWidth - on.offsetWidth) / 2);
 }
 
 /* ---------- names ---------- */

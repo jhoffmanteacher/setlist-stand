@@ -84,13 +84,15 @@ document.addEventListener('pointerdown', e => {
   const b = e.target.closest && e.target.closest('#azStrip [data-az]'); if(!b) return;
   e.preventDefault();
   try{ document.getElementById('azStrip').setPointerCapture(e.pointerId); }catch(err){}
-  dragging = {id: e.pointerId, last: b.dataset.az};
+  dragging = {id: e.pointerId, last: b.dataset.az, y0: e.clientY};
   jumpTo(dragging.last, drawn);
 });
 document.addEventListener('pointermove', e => {
   if(!dragging || e.pointerId !== dragging.id) return;
   const strip = document.getElementById('azStrip'); if(!strip){ dragging = null; return; }
   const r = strip.getBoundingClientRect();
+  if(strip.classList.contains('thin') && Math.abs(e.clientY - dragging.y0) < 12 && !dragging.moved) return;     // a finger's wobble on a short strip's letter stays on that letter
+  dragging.moved = true;
   const L = letterAt(r.left + r.width / 2, Math.min(Math.max(e.clientY, r.top + 1), r.bottom - 1));
   if(L && L !== dragging.last){ dragging.last = L; jumpTo(L, drawn); }
 });
