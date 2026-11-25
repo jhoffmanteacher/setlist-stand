@@ -217,17 +217,21 @@ async function look(cache, key) {
     const bytes = await hit.arrayBuffer();
     return { hit, bytes, ok: (await sha256(bytes)) === HASHES[key] };
   } catch {
-    return { hit, bytes: null, ok: false };      // stored, but unreadable: it is not the file
+    return { hit, bytes: null, ok: false, unreadable: true };      // stored, but it cannot be read now: not used, and not deleted (a good file must not be lost to one failed read; heal() writes over it)
   }
 }
 
-/* A stored file that is not the file: every entry for that path (a ?query variant too) is deleted, so heal() sees it as
-   missing, and the page is told (best effort: no page may be listening yet, or the worker may stop first; the file is
-   never used either way). */
-async function dropBad(cache, key) {
+/* Every entry stored for that path (a ?query variant, and one stored with a Vary header, too). */
+async function drop(cache, key) {
   try {
     for (const k of await cache.keys(urlOf(key), { ignoreSearch: true, ignoreVary: true })) await cache.delete(k, { ignoreVary: true });
   } catch { /* nothing more can be done here; the entry is still never used */ }
+}
+
+/* A stored file that is not the file: every entry for that path is deleted, so heal() sees it as missing, and the page is
+   told (best effort: no page may be listening yet, or the worker may stop first; the file is never used either way). */
+async function dropBad(cache, key) {
+  await drop(cache, key);
   try {
     for (const c of await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })) {
       if (c.url.startsWith(BASE.href)) c.postMessage({ type: 'ss-bad-file', file: key });      // this app's pages only, not the other sites on the address
@@ -242,7 +246,7 @@ async function fromCache(key) {
     const cache = await caches.open(CACHE);
     const got = await look(cache, key);
     if (got.bytes && got.ok) return new Response(got.bytes, { status: 200, headers: { 'Content-Type': typeOf(key) } });
-    if (got.hit) await dropBad(cache, key);
+    if (got.hit && !got.unreadable) await dropBad(cache, key);
   } catch { /* the cache cannot be read at all: the network answers */ }
   return null;
 }
@@ -261,7 +265,12 @@ self.addEventListener('install', (event) => {
       const got = await look(cache, key);
       if (!got.bytes || !got.ok) wrong.push(key);
     }
-    if (wrong.length) throw new Error(`stored files do not match the table: ${wrong.join(', ')}`);
+    if (wrong.length) {
+      /* what failed goes, so the next try starts clean: another page can write into the cache of the NEXT version (its name is a date)
+         an entry that addAll() does not replace (one stored with a Vary header, in Safari's engine), and every later try would fail */
+      for (const key of wrong) await drop(cache, key);
+      throw new Error(`stored files do not match the table: ${wrong.join(', ')}`);
+    }
   })());
 });
 
@@ -284,7 +293,7 @@ async function heal() {
   for (let i = 0; i < PRECACHE.length; i++) {
     const got = looks[i] || {};
     if (got.bytes && got.ok) continue;
-    if (got.hit) await dropBad(have, PRECACHE[i]);
+    if (got.hit && !got.unreadable) await dropBad(have, PRECACHE[i]);
     missing.push(PRECACHE[i]);
   }
   if (!missing.length) return 'whole';

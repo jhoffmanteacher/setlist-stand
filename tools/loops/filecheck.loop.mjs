@@ -18,6 +18,9 @@
  *   f  other bytes stored under js/main.js?x=1 are never served, with the real file stored or not
  *   g  the server sends other bytes for one file (right type, same VERSION): the refill stores nothing and says 'refused'
  *   h  a deploy in which one file does not match its table: the install fails and the old version keeps working
+ *   i  another page fills the NEXT version's cache with an entry stored under a Vary header (a name it can guess: VERSION is a
+ *      date; in Safari's engine the install's own write does not replace it): the update still installs within a few tries
+ *   (j, the checks run in a Windows-style git checkout, is tools/loops/filecheck-git.loop.mjs)
  *
  * No Chromium-only tool (CDP) is used, so all of them run under WebKit too (SS_BROWSER=webkit).
  */
@@ -353,6 +356,29 @@ export const loops = [
       assert(await page.evaluate(() => document.querySelector('meta[name=ss-marker]')?.content || null) === null, 'offline, the page shows version 2');
       assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
     } finally { if(online) await online(); ctx.server.root = ctx.root; await s.close(); removeCopy(v2); }
+  }
+},
+{
+  name: 'filecheck i: another page fills the NEXT version\'s cache with an entry stored under a Vary header: the update still installs',
+  async run(ctx){
+    const v2 = makeSiteCopy(ctx.root, {marker: 'v2-squatted'});
+    const s = await installed(ctx);
+    try{
+      const {page} = s, v2Name = cacheName(v2);
+      /* the cache of the version that is NOT out yet; the entry is not the file, and carries a Vary header and the request header it names */
+      await put(page, v2Name, 'js/nudge.js', EVIL, {'Content-Type': 'text/javascript', 'Vary': 'X-Foo'}, {'X-Foo': 'a'});
+      ctx.server.root = v2;
+      let tries = 0, waiting = false;
+      for(; tries < 4 && !waiting; ){
+        tries++;
+        await askUpdate(page);
+        waiting = await until(async () => (await swState(page)).waiting, null, 8000).then(() => true, () => false);
+      }
+      assert(waiting, `version 2 never installed in ${tries} tries: an entry another page stored in its cache keeps every update from installing`);
+      assert(await page.evaluate(() => { const b = document.querySelector('#update'); return !!b && !b.hidden; }), '#update is not offered although version 2 is waiting');
+      assert(await marker(page) === 0, 'the planted marker ran');
+      console.log(`  info: version 2 installed after ${tries} update() call(s)`);
+    } finally { ctx.server.root = ctx.root; await s.close(); removeCopy(v2); }
   }
 },
 ];

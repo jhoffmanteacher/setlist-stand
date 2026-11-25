@@ -115,6 +115,23 @@ function hashRows(list) {
     return [u, sha256Hex(fs.readFileSync(f))];
   });
 }
+// Files (repo paths) whose copy on disk differs from the copy git holds ONLY in line endings: CRLF on disk, LF in git. This is what a
+// checkout made while core.autocrlf was on leaves behind when .gitattributes (`* -text`) arrives later: git status stays clean (it does
+// not read a file again while its size and time are unchanged), but a table made from these files is wrong for the bytes a commit holds
+// and GitHub Pages serves. A file git has not seen, or no git at all, is not reported.
+function crlfOnly(files) {
+  const out = [];
+  for (const f of files) {
+    let work, blob;
+    try { work = fs.readFileSync(path.join(ROOT, f)); } catch { continue; }
+    if (!work.includes('\r\n')) continue;
+    try { blob = execFileSync('git', ['cat-file', 'blob', `:${f}`], { cwd: ROOT, maxBuffer: 1 << 26, stdio: ['ignore', 'pipe', 'ignore'] }); } catch { continue; }
+    if (!blob.equals(work) && blob.equals(Buffer.from(work.toString('latin1').replace(/\r\n/g, '\n'), 'latin1'))) out.push(f);
+  }
+  return out;
+}
+const crlfFix = (list) => `${list.slice(0, 6).join(', ')}${list.length > 6 ? ` and ${list.length - 6} more` : ''} have Windows line endings (CRLF) on disk but LF in git (a checkout made while core.autocrlf was on, before .gitattributes said "* -text"), so a hash table made from them would be wrong for what git commits and GitHub Pages serves. Fix: git config core.autocrlf false, then git checkout HEAD -- ${list.length > 6 ? '. (or a fresh clone)' : list.join(' ')}, then node tools/checks.mjs --bump`;
+
 // sw.js text with its HASHES table replaced by `rows`, one entry per line, sorted (the one format; the check compares text).
 const withTable = (src, rows) => src.replace(HASHES_RE, () => `const HASHES = {\n${rows.map(([k, h]) => `  '${k}': '${h}',`).join('\n')}\n}`);
 
@@ -269,6 +286,8 @@ if (process.argv.includes('--bump') || process.argv.includes('--rehash')) {
   let out;
   try { out = withTable(src, hashRows(list)); } catch (e) { console.error(e.message); process.exit(1); }
   if (process.argv.includes('--bump')) {
+    const crlf = crlfOnly([...new Set(list.map(toRepoPath))]);
+    if (crlf.length) { console.error(`not bumped: ${crlfFix(crlf)}`); process.exit(1); }
     const cur = parseVersion(src);
     const d = new Date();
     const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -502,7 +521,8 @@ const precache = parsePrecache(swSrc);
   if (!precache) fail(name, 'cannot read PRECACHE from sw.js');
   else if (!types) fail(name, 'could not find `const TYPES = {...}` in sw.js');
   else {
-    const exts = [...new Set(precache.map((u) => path.extname(toRepoPath(u)).slice(1).toLowerCase()))];
+    // the way sw.js's typeOf() reads it: the letters after the last dot, as written (a .JS would not be found there either)
+    const exts = [...new Set(precache.map((u) => (/\.([a-z0-9]+)$/i.exec(toRepoPath(u)) || [])[1] || ''))];
     const none = exts.filter((e) => !types.get(e));
     none.length ? fail(name, `PRECACHE holds file(s) of kind ${none.map((e) => `.${e || '(none)'}`).join(', ')} with no Content-Type in TYPES`) : pass(`${name} (${exts.length} kinds)`);
   }
@@ -526,7 +546,9 @@ const precache = parsePrecache(swSrc);
       const withFilters = hashAll([]), raw = hashAll(['--no-filters']);
       converted = files.length === withFilters.length && files.length === raw.length ? files.filter((f, i) => withFilters[i] !== raw[i]) : null;
     } catch { converted = null; }
+    const crlf = converted === null ? [] : crlfOnly(files);
     if (converted === null) note(name, 'git could not be asked here (not a git checkout)');
+    else if (crlf.length) fail(name, crlfFix(crlf));
     else if (converted.length) fail(name, `git would change the line endings of ${converted.slice(0, 6).join(', ')}${converted.length > 6 ? ` and ${converted.length - 6} more` : ''} when it commits them, so the bytes GitHub Pages serves would not be the bytes the hash table in sw.js was made from. .gitattributes has "* -text" for this; check "git config core.autocrlf" (want false) and check the files out again`);
     else pass(name);
   }
