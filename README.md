@@ -3,7 +3,7 @@
 A music stand for your tablet. Keep your PDF charts in one library, build setlists for a gig, and play them full screen with page turns, pen and highlighter marks, and two pages side by side in landscape.
 
 - **Works offline.** The app and all your charts are stored on the device, so it works with no WiFi.
-- **Your music stays on your device.** Nothing is uploaded anywhere.
+- **Your music stays on your device.** Nothing is uploaded unless you connect your own Google Drive.
 - **No music is stored in this repo.** It holds code only.
 
 ## Install
