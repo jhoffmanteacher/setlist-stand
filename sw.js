@@ -226,7 +226,7 @@ async function look(cache, key) {
    never used either way). */
 async function dropBad(cache, key) {
   try {
-    for (const k of await cache.keys(urlOf(key), { ignoreSearch: true })) await cache.delete(k, { ignoreVary: true });
+    for (const k of await cache.keys(urlOf(key), { ignoreSearch: true, ignoreVary: true })) await cache.delete(k, { ignoreVary: true });
   } catch { /* nothing more can be done here; the entry is still never used */ }
   try {
     for (const c of await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })) {

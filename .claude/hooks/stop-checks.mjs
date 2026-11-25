@@ -27,7 +27,8 @@ const MAX_BLOCKS = 3;
 const CHECK_TIMEOUT_MS = 60000;
 const CODE = /\.(js|mjs|cjs|css|html|json|webmanifest)$/i;
 const SKIP = /^(\.claude\/|node_modules\/|docs\/|Claude outputs\/)/;
-const EXPECTED = /^FAIL (?:VERSION bumped vs origin\/main|sw\.js hash table):/;
+// The hash-table line is expected only when the table is STALE (wrong hash, missing or extra entry, not written the way --bump writes it); a table that cannot be read at all is a real failure.
+const EXPECTED = /^FAIL (?:VERSION bumped vs origin\/main:|sw\.js hash table: (?!could not find|cannot read|an entry appears twice))/;
 
 const done = (obj) => { if (obj) console.log(JSON.stringify(obj)); process.exit(0); };
 const note = (msg) => done({ systemMessage: msg });

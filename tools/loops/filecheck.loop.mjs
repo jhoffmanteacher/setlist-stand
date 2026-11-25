@@ -33,10 +33,10 @@ const fileOf = (ctx, rel) => fs.readFileSync(path.join(ctx.root, toRepoPath(rel)
 const hex = buf => sha256(buf);
 
 /* Another site's write into the cache: `rel` is resolved against the page ('./' is the folder itself). */
-const put = (page, name, rel, body, headers = {}) => page.evaluate(async ([name, rel, b64, headers]) => {
+const put = (page, name, rel, body, headers = {}, reqHeaders = {}) => page.evaluate(async ([name, rel, b64, headers, reqHeaders]) => {
   const c = await caches.open(name);
-  await c.put(new URL(rel, document.baseURI).href, new Response(Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)), {status: 200, headers}));
-}, [name, rel, Buffer.from(body).toString('base64'), headers]);
+  await c.put(new Request(new URL(rel, document.baseURI).href, {headers: reqHeaders}), new Response(Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)), {status: 200, headers}));
+}, [name, rel, Buffer.from(body).toString('base64'), headers, reqHeaders]);
 const del = (page, name, rel) => page.evaluate(async ([name, rel]) => (await caches.open(name)).delete(new URL(rel, document.baseURI).href), [name, rel]);
 /* SHA-256 of what is stored under `rel` (null when nothing). */
 const stored = (page, name, rel) => page.evaluate(async ([name, rel]) => {
@@ -104,14 +104,17 @@ export const loops = [
       /* a working copy of the file with a marker added: with no check the app starts AND the marker is set */
       await put(page, name, 'js/googleauth.js', Buffer.concat([real, Buffer.from('\n' + EVIL + '\n')]), {'Content-Type': 'text/javascript'});
       assert(await stored(page, name, 'js/googleauth.js') !== hex(real), 'test setup: the replacement was not stored');
-      /* and a file the page does not ask for at start (the refill's own look at the cache must find it) */
-      await put(page, name, 'icons/icon-512.png', 'this is not a PNG', {'Content-Type': 'image/png'});
+      /* and a file the page does not ask for at start (the refill's own look at the cache must find it), stored with a Vary header
+         and the request header it names: a plain lookup does not match it, so deleting it must not depend on the request's headers */
+      await put(page, name, 'icons/icon-512.png', 'this is not a PNG', {'Content-Type': 'image/png', 'Vary': 'X-Foo'}, {'X-Foo': 'a'});
       await page.reload();
       assert(await libShown(page), 'the app did not start after a stored js/googleauth.js was replaced');
       assert(await marker(page) === 0, 'the replaced js/googleauth.js RAN (its marker is set): another site can put its own code in the app');
       const said = await healAnswer(page, 'the worker never answered the refill request');
       assert(said === 'healed', `the worker answered "${said}" to the refill, want "healed"`);
       await refilled(ctx, page, name, 'after the refill');
+      const keys = await cacheKeys(page, name) || [], want = precachePaths(ctx.root);
+      assert(keys.length === want.length, `the cache holds ${keys.length} entries after the refill, want ${want.length} (one per PRECACHE entry): ${keys.filter((k, i) => keys.indexOf(k) !== i).map(k => k || './').join(', ') || 'no duplicate named'}`);
       const log = (await problems(page)).filter(p => p.kind === 'offline copy');
       for(const f of ['js/googleauth.js', 'icons/icon-512.png']) assert(log.some(p => p.msg.includes(f)), `the Problem log has no line naming ${f}: ` + JSON.stringify((await problems(page)).map(p => p.kind + ': ' + p.msg)));
       assert(!(await page.locator('.modal').count()), 'a dialog opened');

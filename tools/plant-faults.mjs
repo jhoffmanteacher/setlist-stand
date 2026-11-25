@@ -202,6 +202,8 @@ const FAULTS = [
     loop: 'filecheck g', why: 'the refill stores whatever the server sent with the right type: a wrong file lands in the offline copy'},
   {id: 'filecheck-install-unchecked', file: 'sw.js', find: '      if (!got.bytes || !got.ok) wrong.push(key);', replace: '      if (!got.bytes) wrong.push(key);',
     loop: 'filecheck h', why: 'a deploy that is only half out (a stale file at the server\'s edge) installs: the new version runs with a file of the old one'},
+  {id: 'filecheck-drop-ignores-vary-not', file: 'sw.js', webkitOnly: true, find: 'await cache.keys(urlOf(key), { ignoreSearch: true, ignoreVary: true })', replace: 'await cache.keys(urlOf(key), { ignoreSearch: true })',
+    loop: 'filecheck a', why: 'a replaced file stored with a Vary header is not deleted (the plain lookup does not list it), so the cache keeps a second, wrong entry for that path until the next refill'},
   {id: 'filecheck-no-log-line', file: 'sw.js', find: "c.postMessage({ type: 'ss-bad-file', file: key });", replace: 'void c;',
     loop: 'filecheck a', why: 'a stored file that fails the check is dropped without a word: the Problem log never shows it'},
   {id: 'page-turn-mid-stroke', file: 'js/viewer.js', find: 'export async function next(){\n  if(V.busy || inkBusy() ||', replace: 'export async function next(){\n  if(V.busy ||',
@@ -1349,7 +1351,9 @@ const opt = n => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null
 if(opt('--jobs') && opt('--jobs') !== '1') console.log('plant-faults: --jobs is always 1 (one browser run at a time)');
 const onlyIds = opt('--only') ? opt('--only').split(',').map(s => s.trim()) : null;
 if(onlyIds){ const bad = onlyIds.filter(id => !FAULTS.some(f => f.id === id)); if(bad.length){ console.error('unknown fault id: ' + bad.join(', ')); process.exit(2); } }
-const chosen = FAULTS.filter(f => !onlyIds || onlyIds.includes(f.id));
+/* `webkitOnly: true`: a mistake only Safari's engine shows (Chromium lists a cache entry the other one hides): it is planted under SS_BROWSER=webkit and left out of a Chromium run. */
+const WEBKIT_RUN = (process.env.SS_BROWSER || '').toLowerCase() === 'webkit';
+const chosen = FAULTS.filter(f => (!onlyIds || onlyIds.includes(f.id)) && (!f.webkitOnly || WEBKIT_RUN));
 
 const count = (hay, needle) => { let n = 0, i = -1; while((i = hay.indexOf(needle, i + 1)) >= 0) n++; return n; };
 const occurrences = f => { try{ return count(fs.readFileSync(path.join(ROOT, f.file), 'utf8'), f.find); }catch(e){ return 0; } };
