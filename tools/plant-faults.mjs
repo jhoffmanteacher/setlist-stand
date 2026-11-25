@@ -21,7 +21,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -176,12 +176,34 @@ const FAULTS = [
     loop: 'offline l', why: 'an offline copy wiped while the app stays open is refilled only on a reload or an hourly check: switched back to within the hour, then reopened at the gig, the app does not open'},
   {id: 'banner-over-dialog', file: 'js/boot.js', find: "if(b) b.style.display = dialogOpen() ? 'none' : '';", replace: "if(b) b.style.display = '';",
     loop: 'update j', why: 'the "Tap to reload" banner shows over Edit song or an import review, and a tap reloads the app and throws the dialog away'},
-  {id: 'heal-stores-login-page', file: 'sw.js', find: "const bad = !res.ok || res.redirected || (/\\.(js|css)$/.test(u) && /text\\/html/i.test(type));", replace: 'const bad = !res.ok;',
+  /* 2026-11-24: the refill also checks every fetched file's SHA-256, which stops a login page by itself. So these two remove the old guard AND the byte check together (either one alone is no longer a mistake: the other still refuses the page). */
+  {id: 'heal-stores-login-page', file: 'sw.js',
+    find: "      const bad = !res.ok || res.redirected || (/\\.(js|css)$/.test(u) && /text\\/html/i.test(type));\n      if (bad) return null;\n      const bytes = await res.arrayBuffer();\n      return (await sha256(bytes)) === HASHES[u] ? [u, bytes] : null;",
+    replace: "      const bad = !res.ok;\n      if (bad) return null;\n      return [u, await res.arrayBuffer()];",
     loop: 'offline m', why: 'a hotel Wi-Fi login page that answers in place of a file is stored in the offline copy, and stays there'},
-  {id: 'heal-html-as-script', file: 'sw.js', find: "const bad = !res.ok || res.redirected || (/\\.(js|css)$/.test(u) && /text\\/html/i.test(type));", replace: 'const bad = !res.ok || res.redirected;',
+  {id: 'heal-html-as-script', file: 'sw.js',
+    find: "      const bad = !res.ok || res.redirected || (/\\.(js|css)$/.test(u) && /text\\/html/i.test(type));\n      if (bad) return null;\n      const bytes = await res.arrayBuffer();\n      return (await sha256(bytes)) === HASHES[u] ? [u, bytes] : null;",
+    replace: "      const bad = !res.ok || res.redirected;\n      if (bad) return null;\n      return [u, await res.arrayBuffer()];",
     loop: 'offline m', why: 'a login page answered with status 200 in place of a script is stored as that script'},
-  {id: 'miss-stored-under-old-version', file: 'sw.js', find: '      return await fetch(req);\n', replace: "      const res = await fetch(req);\n      if (res.status === 200 && !req.headers.has('range')) cache.put(req, res.clone());\n      return res;\n",
+  {id: 'miss-stored-under-old-version', file: 'sw.js', find: '      return await fetch(req);\n', replace: "      const res = await fetch(req);\n      if (res.status === 200 && !req.headers.has('range')) (await caches.open(CACHE)).put(req, res.clone());\n      return res;\n",
     loop: 'offline k', why: 'after a wipe, every file the page asks for is stored under the old version\'s name even when the server already has a newer version'},
+  /* The file check (2026-11-24): a stored app file is used only when its bytes are the file (sw.js HASHES). Another site on the same address can write into this app's cache. */
+  {id: 'filecheck-fetch-no-byte-compare', file: 'sw.js', find: 'if (got.bytes && got.ok) return new Response(', replace: 'if (got.bytes) return new Response(',
+    loop: 'filecheck a', why: 'a script another site put in the cache runs in the app (it can take the Google Drive token at the next sign-in)'},
+  {id: 'filecheck-stored-headers-passed-on', file: 'sw.js', find: "return new Response(got.bytes, { status: 200, headers: { 'Content-Type': typeOf(key) } });", replace: 'return new Response(got.bytes, got.hit);',
+    loop: 'filecheck d', why: 'a stored file with correct bytes but a Refresh or Content-Security-Policy header sends the page away or breaks it'},
+  {id: 'filecheck-unlisted-path-from-cache', file: 'sw.js', find: '    const key = fileKey(req.url);\n', replace: '    const key = fileKey(req.url);\n    if (!key) { const old = await (await caches.open(CACHE)).match(req, { ignoreSearch: true }); if (old) return old; }\n',
+    loop: 'filecheck e', why: 'a file another site stored under a path the app does not use (a new script, privacy.html) is served from the cache'},
+  {id: 'filecheck-offline-fallback-unchecked', file: 'sw.js', find: "const shell = await fromCache('index.html');", replace: "const shell = await (await caches.open(CACHE)).match('index.html');",
+    loop: 'filecheck c', why: 'with no network the replaced page another site stored is shown in place of the app'},
+  {id: 'filecheck-heal-stored-unchecked', file: 'sw.js', find: '    if (got.bytes && got.ok) continue;\n', replace: '    if (got.bytes) continue;\n',
+    loop: 'filecheck a', why: 'the refill counts a replaced file as present, so a file the page has not asked for yet stays replaced until it is used'},
+  {id: 'filecheck-heal-fetched-unchecked', file: 'sw.js', find: '      return (await sha256(bytes)) === HASHES[u] ? [u, bytes] : null;', replace: '      return [u, bytes];',
+    loop: 'filecheck g', why: 'the refill stores whatever the server sent with the right type: a wrong file lands in the offline copy'},
+  {id: 'filecheck-install-unchecked', file: 'sw.js', find: '      if (!got.bytes || !got.ok) wrong.push(key);', replace: '      if (!got.bytes) wrong.push(key);',
+    loop: 'filecheck h', why: 'a deploy that is only half out (a stale file at the server\'s edge) installs: the new version runs with a file of the old one'},
+  {id: 'filecheck-no-log-line', file: 'sw.js', find: "c.postMessage({ type: 'ss-bad-file', file: key });", replace: 'void c;',
+    loop: 'filecheck a', why: 'a stored file that fails the check is dropped without a word: the Problem log never shows it'},
   {id: 'page-turn-mid-stroke', file: 'js/viewer.js', find: 'export async function next(){\n  if(V.busy || inkBusy() ||', replace: 'export async function next(){\n  if(V.busy ||',
     loop: 'viewer-hardening 1a', why: 'a page turn while the pen is down moves the stroke to another song'},
   {id: 'stroke-during-song-change', file: 'js/ink.js', find: '    if(cv._ink !== V.ink) return true;', replace: '',
@@ -1364,6 +1386,10 @@ const LOOP_TIMEOUT = 30 * 60e3;
 const loopRun = (text, file = '') => run(process.execPath, [path.join(file.startsWith('tools/') ? scratch : ROOT, 'tools', 'loops.mjs'), '--root', scratch, '--only', text], LOOP_TIMEOUT);
 const failLines = out => out.split('\n').filter(l => l.startsWith('FAIL'));
 const trunc = (s, n = 160) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+/* The worker checks every stored file against the SHA-256 table in ITS sw.js, so a changed file in the scratch copy needs the table written again
+   (the copy's own `checks.mjs --rehash`), or the worker would refuse the planted file and every loop would go red for that reason. A fault in a file
+   under tools/ changes nothing the worker serves. */
+const rehash = file => { if(!file.startsWith('tools/')) spawnSync(process.execPath, [path.join(scratch, 'tools', 'checks.mjs'), '--rehash'], {cwd: scratch, stdio: 'ignore'}); };
 const ALSO = {checks: () => run(process.execPath, [path.join(scratch, 'tools', 'checks.mjs')], 5 * 60e3)};
 
 let planted = 0, caught = 0, through = [], stale = [];
@@ -1397,6 +1423,7 @@ try{
     const dst = path.join(scratch, f.file), src = fs.readFileSync(path.join(ROOT, f.file), 'utf8');
     fs.writeFileSync(dst, src.replace(f.find, () => f.replace));
     try{
+      rehash(f.file);
       /* A planted mistake that does not even parse makes the app fail to load, so every loop "catches" it by timing out
          (and slowly). That says nothing about the tests: refuse it and fix the table entry. */
       if(/\.m?js$/.test(f.file) && (await run(process.execPath, ['--check', dst], 60e3)).code !== 0){
@@ -1424,6 +1451,7 @@ try{
       }
     } finally {
       fs.writeFileSync(dst, src);            // put the file back from the repo
+      rehash(f.file);
     }
   }
   console.log(`plant-faults: ${planted} planted, ${caught} caught, ${through.length} got through, ${stale.length} stale`);

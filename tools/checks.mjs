@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Setlist Stand pre-ship checks. Zero dependencies.
 //   node tools/checks.mjs          run all checks (exit 1 on any FAIL)
-//   node tools/checks.mjs --bump   write a new VERSION (YYYY-MM-DD-N) into sw.js
+//   node tools/checks.mjs --bump   write a new VERSION (YYYY-MM-DD-N) AND the SHA-256 table (HASHES) into sw.js
+//   node tools/checks.mjs --rehash write the SHA-256 table only (for the loops and plant-faults, which change files in a scratch copy)
 // Paths resolve from this file's location, so it works from any cwd/worktree.
 
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -86,6 +88,35 @@ function parsePrecache(src) {
 
 // Normalise a PRECACHE URL to a repo path ('./' -> index.html).
 const toRepoPath = (u) => (u === './' || u === '' ? 'index.html' : u.replace(/^\.\//, ''));
+
+// ---- the SHA-256 table in sw.js (HASHES) and the Content-Type table (TYPES) ----
+const sha256Hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const HASHES_RE = /const\s+HASHES\s*=\s*\{[^}]*\}/;
+// The table as written in sw.js: {path -> hash} (entries in order), or null when it is not there. Reads the text with comments stripped.
+function parseHashes(src) {
+  const [text, why] = tryStrip(stripJsComments, src);
+  if (why) return null;
+  const m = /const\s+HASHES\s*=\s*\{([^}]*)\}/.exec(text);
+  if (!m) return null;
+  return [...m[1].matchAll(/(['"])([^'"]*)\1\s*:\s*(['"])([^'"]*)\3/g)].map((x) => [x[2], x[4]]);
+}
+function parseTypes(src) {
+  const [text, why] = tryStrip(stripJsComments, src);
+  if (why) return null;
+  const m = /const\s+TYPES\s*=\s*\{([^}]*)\}/.exec(text);
+  if (!m) return null;
+  return new Map([...m[1].matchAll(/([A-Za-z0-9_]+)\s*:\s*(['"])([^'"]*)\2/g)].map((x) => [x[1], x[3]]));
+}
+// The table every PRECACHE file should have, from the files as they are on disk now: [[path as written in PRECACHE, sha256]], sorted.
+function hashRows(list) {
+  return [...new Set(list)].sort().map((u) => {
+    const f = path.join(ROOT, toRepoPath(u));
+    if (!fs.existsSync(f)) throw new Error(`PRECACHE lists ${u} but ${toRepoPath(u)} is not on disk`);
+    return [u, sha256Hex(fs.readFileSync(f))];
+  });
+}
+// sw.js text with its HASHES table replaced by `rows`, one entry per line, sorted (the one format; the check compares text).
+const withTable = (src, rows) => src.replace(HASHES_RE, () => `const HASHES = {\n${rows.map(([k, h]) => `  '${k}': '${h}',`).join('\n')}\n}`);
 
 // Remove // and /* */ comments (blanked to spaces, newlines kept, so length and line numbers stay) while leaving
 // string, template and regular-expression contents intact, so 'https://x' is never mistaken for a line comment and
@@ -226,16 +257,28 @@ function walkRepo(rel = '') {
 // "line mark" for every line of text holding one of the marks.
 const marksIn = (text, marks) => text.split('\n').flatMap((ln, i) => marks.filter((m) => ln.includes(m)).map((m) => `${i + 1} ${m}`));
 
-// ---------------------------------------------------------------- --bump
-if (process.argv.includes('--bump')) {
+// ---------------------------------------------------------------- --bump, --rehash
+/* --bump writes the new VERSION and the SHA-256 of every PRECACHE file into sw.js together (nobody writes the table by hand).
+   --rehash writes the table only: the loops and plant-faults use it after they change a file in a scratch copy of the site, so
+   the copy's worker still matches its own files. Neither writes anything when a PRECACHE file is missing. */
+if (process.argv.includes('--bump') || process.argv.includes('--rehash')) {
   const src = fs.readFileSync(SW, 'utf8');
-  const cur = parseVersion(src);
-  const d = new Date();
-  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const m = cur && /^(\d{4}-\d{2}-\d{2})-(\d+)$/.exec(cur);
-  const next = `${today}-${m && m[1] === today ? Number(m[2]) + 1 : 1}`;
-  fs.writeFileSync(SW, src.replace(/(const\s+VERSION\s*=\s*)(['"])[^'"]*\2/, `$1'${next}'`));
-  console.log(`VERSION ${cur} -> ${next}`);
+  const list = parsePrecache(src);
+  if (!list) { console.error('could not read PRECACHE from sw.js'); process.exit(1); }
+  if (!HASHES_RE.test(src)) { console.error('could not find `const HASHES = {...}` in sw.js'); process.exit(1); }
+  let out;
+  try { out = withTable(src, hashRows(list)); } catch (e) { console.error(e.message); process.exit(1); }
+  if (process.argv.includes('--bump')) {
+    const cur = parseVersion(src);
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const m = cur && /^(\d{4}-\d{2}-\d{2})-(\d+)$/.exec(cur);
+    const next = `${today}-${m && m[1] === today ? Number(m[2]) + 1 : 1}`;
+    out = out.replace(/(const\s+VERSION\s*=\s*)(['"])[^'"]*\2/, `$1'${next}'`);
+    console.log(`VERSION ${cur} -> ${next}`);
+  }
+  fs.writeFileSync(SW, out);
+  console.log(`HASHES: ${new Set(list).size} entries`);
   process.exit(0);
 }
 
@@ -412,6 +455,80 @@ const precache = parsePrecache(swSrc);
     if (!hit.length) pass(`${name} (no precached files changed)`);
     else if (cur === old) fail(name, `VERSION still '${cur}' but changed: ${hit.join(', ')} (run: node tools/checks.mjs --bump)`);
     else pass(`${name} (${old} -> ${cur})`);
+  }
+}
+
+// ---------------------------------------------------------------- (e2) the SHA-256 table in sw.js
+/* The worker answers from its cache only when a stored file has the SHA-256 written in HASHES (sw.js), because another site on the
+   same github.io address can write into Cache Storage. So the table must be exactly right for the files as committed: an entry for
+   every PRECACHE file, none for anything else, each hash equal to the file's bytes, written the way `--bump` writes it. A stale
+   table is EXPECTED while you work (the Stop hook lets it through; run `node tools/checks.mjs --bump` in the part's last commit)
+   and is REFUSED at a push to main (.githooks/pre-push). */
+{
+  const name = 'sw.js hash table';
+  if (!precache) {
+    fail(name, 'cannot read PRECACHE from sw.js');
+  } else {
+    const table = parseHashes(swSrc);
+    if (!table) fail(name, 'could not find `const HASHES = {...}` in sw.js (run: node tools/checks.mjs --bump)');
+    else {
+      const bad = [];
+      const have = new Map(table);
+      if (have.size !== table.length) bad.push('an entry appears twice');
+      const listed = [...new Set(precache)];
+      for (const u of listed) {
+        if (!have.has(u)) { bad.push(`no entry for ${u}`); continue; }
+        const f = path.join(ROOT, toRepoPath(u));
+        if (!fs.existsSync(f)) continue;               // 'precache files exist' says so
+        if (sha256Hex(fs.readFileSync(f)) !== have.get(u)) bad.push(`wrong hash for ${u}`);
+      }
+      for (const k of have.keys()) if (!listed.includes(k)) bad.push(`entry for ${k} is not in PRECACHE`);
+      if (!bad.length) {
+        let exact = null;
+        try { exact = withTable(swSrc, hashRows(listed)) === swSrc; } catch { exact = true; }
+        if (!exact) bad.push('the table is not written the way --bump writes it (one entry per line, sorted)');
+      }
+      bad.length ? fail(name, `${bad.slice(0, 8).join('; ')}${bad.length > 8 ? `; and ${bad.length - 8} more` : ''} (run: node tools/checks.mjs --bump)`) : pass(`${name} (${table.length} entries)`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- (e3) a Content-Type for every kind of file
+/* The worker sends a stored file with a Content-Type of its own (the TYPES table in sw.js), never one from the stored entry. A new
+   kind of file in PRECACHE without a line there would be sent as application/octet-stream: caught here, not on a tablet. */
+{
+  const name = 'sw.js Content-Type table';
+  const types = parseTypes(swSrc);
+  if (!precache) fail(name, 'cannot read PRECACHE from sw.js');
+  else if (!types) fail(name, 'could not find `const TYPES = {...}` in sw.js');
+  else {
+    const exts = [...new Set(precache.map((u) => path.extname(toRepoPath(u)).slice(1).toLowerCase()))];
+    const none = exts.filter((e) => !types.get(e));
+    none.length ? fail(name, `PRECACHE holds file(s) of kind ${none.map((e) => `.${e || '(none)'}`).join(', ')} with no Content-Type in TYPES`) : pass(`${name} (${exts.length} kinds)`);
+  }
+}
+
+// ---------------------------------------------------------------- (e4) git commits the served files as they are
+/* The table holds the hash of the bytes GitHub Pages will serve, which are the COMMITTED bytes. A checkout that converts line endings
+   (core.autocrlf, a text attribute: Jonathan also works from Windows) makes the working files differ from what a commit would
+   store, and the table (made from the working files) would then be wrong for what is deployed. .gitattributes turns the conversion
+   off; this asks git what it WOULD commit and fails if it differs from the file on disk. */
+{
+  const name = 'git commits the served files as they are (no line-ending conversion)';
+  if (!precache) {
+    note(name, 'PRECACHE could not be read');
+  } else {
+    const files = [...new Set(precache.map(toRepoPath))].sort();
+    const hashAll = (extra) => execFileSync('git', ['hash-object', ...extra, '--stdin-paths'], { cwd: ROOT, input: files.join('\n') + '\n', encoding: 'utf8', maxBuffer: 1 << 24, stdio: ['pipe', 'pipe', 'ignore'] }).split('\n').filter(Boolean);
+    let converted = null;
+    try {
+      git('rev-parse', '--is-inside-work-tree');
+      const withFilters = hashAll([]), raw = hashAll(['--no-filters']);
+      converted = files.length === withFilters.length && files.length === raw.length ? files.filter((f, i) => withFilters[i] !== raw[i]) : null;
+    } catch { converted = null; }
+    if (converted === null) note(name, 'git could not be asked here (not a git checkout)');
+    else if (converted.length) fail(name, `git would change the line endings of ${converted.slice(0, 6).join(', ')}${converted.length > 6 ? ` and ${converted.length - 6} more` : ''} when it commits them, so the bytes GitHub Pages serves would not be the bytes the hash table in sw.js was made from. .gitattributes has "* -text" for this; check "git config core.autocrlf" (want false) and check the files out again`);
+    else pass(name);
   }
 }
 

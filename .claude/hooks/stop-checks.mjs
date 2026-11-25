@@ -8,8 +8,9 @@
    Built so that it can never trap a session:
    - It only runs when the set of changed code files (and their sizes and times) differs from the last state it
      checked; a read-only or chat-only turn costs nothing.
-   - "FAIL VERSION bumped vs origin/main" is EXPECTED, not a failure: CLAUDE.md bumps VERSION last, in a part's
-     last commit (node tools/checks.mjs --bump). .githooks/pre-push enforces it before a push to main.
+   - "FAIL VERSION bumped vs origin/main" and "FAIL sw.js hash table" are EXPECTED, not failures: CLAUDE.md bumps VERSION
+     (and writes the SHA-256 table of sw.js with it) last, in a part's last commit (node tools/checks.mjs --bump).
+     .githooks/pre-push enforces both before a push to main.
    - It blocks at most MAX_BLOCKS times per turn (prompt_id), and never twice for the identical file state.
      Claude Code also caps consecutive stop-hook continuations itself.
    - Every internal problem (no git, no tools/checks.mjs, a crash, a timeout) fails OPEN: the stop is allowed
@@ -26,7 +27,7 @@ const MAX_BLOCKS = 3;
 const CHECK_TIMEOUT_MS = 60000;
 const CODE = /\.(js|mjs|cjs|css|html|json|webmanifest)$/i;
 const SKIP = /^(\.claude\/|node_modules\/|docs\/|Claude outputs\/)/;
-const EXPECTED = /^FAIL VERSION bumped vs origin\/main:/;
+const EXPECTED = /^FAIL (?:VERSION bumped vs origin\/main|sw\.js hash table):/;
 
 const done = (obj) => { if (obj) console.log(JSON.stringify(obj)); process.exit(0); };
 const note = (msg) => done({ systemMessage: msg });
@@ -98,7 +99,7 @@ try {
     decision: 'block',
     reason: [
       `node tools/checks.mjs fails after your edits (${files.slice(0, 8).join(', ')}${files.length > 8 ? ', ...' : ''}).`,
-      'Fix the cause; do not loosen a check. The "VERSION bumped" line is expected until the part\'s last commit (node tools/checks.mjs --bump) and is not a failure here.',
+      'Fix the cause; do not loosen a check. The "VERSION bumped" and "sw.js hash table" lines are expected until the part\'s last commit (node tools/checks.mjs --bump) and are not failures here.',
       `Re-run: node tools/checks.mjs   (attempt ${blocks} of ${MAX_BLOCKS}; off switch: SS_STOP_CHECKS=0)`,
       '',
       ...failing.slice(0, 40),

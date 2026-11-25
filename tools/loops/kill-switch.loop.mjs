@@ -88,7 +88,7 @@ export const loops = [
     const t0 = Date.now();
     const killSrc = [path.join(ctx.root, 'tools', 'kill-switch', 'kill-sw.js'), path.join(ROOT, 'tools', 'kill-switch', 'kill-sw.js')].find(f => fs.existsSync(f));
     assert(killSrc, 'tools/kill-switch/kill-sw.js not found');
-    const killed = makeSiteCopy(ctx.root, {marker: 'killed', mutate: dir => fs.copyFileSync(killSrc, path.join(dir, 'sw.js'))});
+    const killed = makeSiteCopy(ctx.root, {marker: 'killed', rehash: false, mutate: dir => fs.copyFileSync(killSrc, path.join(dir, 'sw.js'))});
     const back = makeSiteCopy(ctx.root, {marker: 'back'});
     const s = await ctx.session();
     const {page, context} = s;

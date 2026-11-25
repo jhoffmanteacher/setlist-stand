@@ -12,6 +12,8 @@
 # The "VERSION bumped vs origin/main" FAIL is let through ONLY when none of the precached files it names is
 # changed by the commits being pushed (git diff <remote sha> <local sha>), i.e. the push itself changes no
 # precached file. checks.mjs decides which files those are; this hook does not re-decide it.
+# A stale "sw.js hash table" (the SHA-256 of every precached file, written with VERSION by --bump) is never let
+# through: it is an "other" FAIL below, so a push to main with one is refused.
 #
 # What it cannot do: it compares with origin/main as this clone last fetched it (git fetch first, as CLAUDE.md
 # says); it does not run when the push uses --no-verify, when core.hooksPath is not .githooks (enable once per

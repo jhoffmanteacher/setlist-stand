@@ -2,11 +2,15 @@
  * Shared pieces for the service-worker loops (update.loop.mjs, offline.loop.mjs, live.loop.mjs).
  *
  *  - parsePrecache / parseVersion / toRepoPath: read sw.js the way tools/checks.mjs does.
- *  - makeSiteCopy(from, {marker, mutate, bumps}): "version 2" of the site = a copy of the served folder (no node_modules,
- *    no .git) with <meta name="ss-marker" content="..."> in index.html and `node tools/checks.mjs --bump` run IN THE
- *    COPY (only --bump: the full checks compare with origin/main). `mutate(dir)` can then plant a fault. `bumps: 2`
- *    makes a "version 3": two copies of one folder bumped once each would have the SAME VERSION and the same sw.js
- *    bytes, so the browser would see no update from one to the other.
+ *  - makeSiteCopy(from, {marker, mutate, bumps, rehash}): "version 2" of the site = a copy of the served folder (no
+ *    node_modules, no .git) with <meta name="ss-marker" content="..."> in index.html and `node tools/checks.mjs --bump`
+ *    run IN THE COPY (only --bump: the full checks compare with origin/main). `mutate(dir)` can then plant a fault; the
+ *    copy's worker checks every stored file against the SHA-256 table in ITS sw.js (HASHES), so after `mutate` the table
+ *    is written again (`--rehash`, the table only: VERSION unchanged) and the changed file is a valid deploy. `rehash:
+ *    false` leaves the table as `--bump` wrote it: a file that `mutate` changed then does NOT match its table (a deploy
+ *    that is only half out), and a `mutate` that removes a file or replaces sw.js must say so. `bumps: 2` makes a
+ *    "version 3": two copies of one folder bumped once each would have the SAME VERSION and the same sw.js bytes, so the
+ *    browser would see no update from one to the other.
  *  - navCounter(page): reloads counted by the browser, several ways (see the comment there).
  *  - waitInstalled(page): the worker is active, controls the page, and its cache holds every PRECACHE entry.
  *  - throttleProxy(target, {kbps, latency}): a local HTTP proxy that slows EVERYTHING down, service worker included.
@@ -37,6 +41,12 @@ export function parsePrecache(src){
   if(!m) throw new Error('could not find `const PRECACHE = [...]` in sw.js');
   return [...stripJsComments(m[1]).matchAll(/(['"`])([^'"`]*)\1/g)].map(x => x[2]);
 }
+/* The SHA-256 table of sw.js (HASHES): Map of PRECACHE entry -> hex. */
+export function parseHashes(src){
+  const m = /const\s+HASHES\s*=\s*\{([^}]*)\}/.exec(stripJsComments(src));
+  if(!m) throw new Error('could not find `const HASHES = {...}` in sw.js');
+  return new Map([...m[1].matchAll(/(['"])([^'"]*)\1\s*:\s*(['"])([^'"]*)\3/g)].map(x => [x[2], x[4]]));
+}
 export function parseVersion(src){
   const m = /const\s+VERSION\s*=\s*['"]([^'"]+)['"]/.exec(src);
   if(!m) throw new Error('could not find `const VERSION = ...` in sw.js');
@@ -50,7 +60,7 @@ export const precachePaths = root => parsePrecache(swOf(root)).map(u => (u === '
 
 /* ---------- version 2 ---------- */
 let copies = 0;
-export function makeSiteCopy(from, {marker = 'v2', mutate, bumps = 1} = {}){
+export function makeSiteCopy(from, {marker = 'v2', mutate, bumps = 1, rehash = true} = {}){
   const dir = path.join(TMP, `site-${marker}-${process.pid}-${++copies}`);
   const skip = new Set(['node_modules', '.git', 'Claude outputs']);
   fs.cpSync(from, dir, {recursive: true, filter: src => !skip.has(path.basename(src))});
@@ -62,7 +72,10 @@ export function makeSiteCopy(from, {marker = 'v2', mutate, bumps = 1} = {}){
   for(let i = 0; i < bumps; i++) execFileSync(process.execPath, [path.join(dir, 'tools', 'checks.mjs'), '--bump'], {cwd: dir, stdio: 'ignore'});
   const after = parseVersion(swOf(dir));
   assert(after !== before, `checks.mjs --bump did not change VERSION in the copy (${before})`);
-  if(mutate) mutate(dir);
+  if(mutate){
+    mutate(dir);
+    if(rehash) execFileSync(process.execPath, [path.join(dir, 'tools', 'checks.mjs'), '--rehash'], {cwd: dir, stdio: 'ignore'});
+  }
   return dir;
 }
 export const removeCopy = dir => { try{ fs.rmSync(dir, {recursive: true, force: true}); }catch(e){} };

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-24: The app checks its own stored files
+- Setlist Stand now checks every file of its offline copy before it uses it. Other websites on the same address (the guitar and English Intensive sites) share the place where the offline copy is kept, so a mistake in one of them could have put its own code into this app. A changed or damaged file is now thrown out and never run; the real one is fetched again the next time the app is online. Nothing new appears on screen. Library → Problem log (it shows once it has a line) names a file that was thrown out.
+- With no internet, a file that fails the check is missing until the app has been online once, so the app may not open until then. Open it with internet and leave it on the Library for a minute. This is the same fix as when another site deletes the offline copy.
+- Safety checks: the list of correct fingerprints is made together with the version number (`node tools/checks.mjs --bump`) and checked on every push; eight new tests change the offline copy the way another site could and watch what the app does, in Chrome and Safari's engine.
+
 ## 2026-11-23: Review fixes and gig helpers
 - **A chart that will not open no longer blocks the setlist.** It shows "This chart could not be opened. Your music is safe." and the page turns move past it, both ways.
 - **Remove in a setlist has Undo** for 6 seconds. A quick double tap on Add no longer removes a song behind the box.

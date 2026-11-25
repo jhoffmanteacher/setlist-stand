@@ -3,7 +3,8 @@
  * Only GET requests; nothing is written anywhere. The sub-path comes from the URL, never from a constant.
  *
  *   j  every file sw.js precaches, as the live site serves it, has the SHA-256 of the source of truth, and the live
- *      sw.js has the source's VERSION. Source of truth: `--live-compare=git` (default) = origin/main (git show, run in
+ *      sw.js has the source's VERSION. The HASHES table in the LIVE sw.js (what the worker checks every stored file
+ *      against, 2026-11-24) equals the SHA-256 of each live file, entry by entry: "N of N". Source of truth: `--live-compare=git` (default) = origin/main (git show, run in
  *      the repo); `--live-compare=tree` (or SS_LIVE_COMPARE=tree) = the folder the loops serve (ctx.root), which is
  *      what a local validation against a local server needs. `--wait <s>` (or ctx.opts.wait, SS_LIVE_WAIT) retries a
  *      mismatch for that long, so a CI run can wait for the Pages deploy; default 0.
@@ -16,7 +17,7 @@ import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {ROOT, assert, sleep, sha256} from './harness.mjs';
-import {parsePrecache, parseVersion, toRepoPath, until} from './site-copy.mjs';
+import {parsePrecache, parseVersion, parseHashes, toRepoPath, until} from './site-copy.mjs';
 
 const argv = process.argv.slice(2);
 const argOf = name => { const eq = argv.find(a => a.startsWith(name + '=')); if(eq) return eq.slice(name.length + 1); const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : null; };
@@ -57,14 +58,25 @@ export const loops = [
         if(lv !== version) bad.push(`sw.js VERSION live ${lv}, ${src.mode} ${version}`);
         if(sha256(swLive.body) !== sha256(Buffer.from(swSrc))) bad.push('sw.js: bytes differ');
       }
+      /* the table the live worker checks against: read from the live sw.js, compared with each live file's own bytes */
+      let table = null;
+      if(swLive.status === 200){
+        try{ table = parseHashes(swLive.body.toString('utf8')); }catch(e){ bad.push('live sw.js: ' + e.message); }
+        if(table && table.size !== new Set(entries).size) bad.push(`live sw.js HASHES holds ${table.size} entries, PRECACHE ${new Set(entries).size}`);
+      }
+      let tableOk = 0;
       for(const e of entries){
         const repo = toRepoPath(e), url = new URL(e, ctx.live).href;
         const r = await get(url);
         if(r.status !== 200){ bad.push(`${e}: HTTP ${r.status}`); continue; }
         const want = sha256(src.read(repo)), got = sha256(r.body);
         if(want !== got) bad.push(`${e}: live sha256 ${got.slice(0, 12)} (${r.body.length} B) != ${src.mode} ${want.slice(0, 12)}`);
+        if(table){
+          if(table.get(e) === got) tableOk++;
+          else bad.push(`${e}: the live sw.js table says ${String(table.get(e)).slice(0, 12)}, the live file is ${got.slice(0, 12)}`);
+        }
       }
-      if(!bad.length){ console.log(`  info: ${entries.length} precached files + sw.js equal ${src.mode} (VERSION ${version}) after ${round} round(s)`); return; }
+      if(!bad.length){ console.log(`  info: ${entries.length} precached files + sw.js equal ${src.mode} (VERSION ${version}) after ${round} round(s); the live sw.js table matches the live files: ${tableOk} of ${entries.length}`); return; }
       if(Date.now() + 15000 > deadline) throw new Error(`live ${ctx.live} differs from ${src.mode} (${bad.length}): ${bad.slice(0, 12).join('; ')}`);
       console.log(`  waiting for the deploy (${bad.length} differences, round ${round}): ${bad.slice(0, 3).join('; ')}`);
       await sleep(15000);

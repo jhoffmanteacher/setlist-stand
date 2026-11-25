@@ -1,0 +1,5 @@
+# Never convert line endings (2026-11-24). GitHub Pages serves the committed bytes, and sw.js holds the SHA-256 of each of them
+# (the HASHES table, written by node tools/checks.mjs --bump). A checkout that turned LF into CRLF (core.autocrlf on a Windows
+# machine) would make the files on disk differ from what is deployed. tools/checks.mjs asks git and fails if it would convert
+# anything the app serves.
+* -text

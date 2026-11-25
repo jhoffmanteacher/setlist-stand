@@ -93,3 +93,10 @@ refills its offline copy by itself (no message, nothing to tap; the refill is al
 store nothing yet). Then try again without internet. If a new version is waiting ("Updated. Tap to reload"),
 tap it, then leave the app open with internet for a minute: the new version fills its offline copy while
 it is open (a short visit may not finish it; open it again with internet and wait another minute).
+
+The same sign has a second cause (since 2026-11-24): Setlist Stand checks every file of its offline copy against a list
+of fingerprints before it uses it, so a file that another website put in the copy, or that was damaged, is thrown out and
+fetched again, never run. With internet this happens by itself and nothing shows. Without internet the thrown-out file
+is missing, so the app may not open until it has been online once. The fix is the same: open it WITH internet and wait a
+minute on the Library. The Library's "Problem log" button (it shows once the log has a line) names the file: a line
+"offline copy: js/....js: the stored file did not match and was not used". The line is a best effort and can be missing.

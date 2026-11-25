@@ -274,7 +274,7 @@ export const loops = [
   name: 'update d: a broken deploy keeps the old version working',
   async run(ctx){
     const gone = 'js/crop.js';
-    const v2 = makeSiteCopy(ctx.root, {marker: 'v2-broken', mutate: dir => fs.rmSync(path.join(dir, gone))});
+    const v2 = makeSiteCopy(ctx.root, {marker: 'v2-broken', rehash: false, mutate: dir => fs.rmSync(path.join(dir, gone))});
     const {s, nav} = await firstVisit(ctx);
     const {page, context} = s;
     let restore404 = null;

@@ -1,4 +1,4 @@
-import {initErrors, explainError} from './errors.js';
+import {initErrors, explainError, logProblem} from './errors.js';
 import {$, esc, hooks} from './util.js';
 import {openStore, load, ensureHashes, initChanged, songById} from './store.js';
 import {renderLibrary, onClick as libraryClick, addFiles, newVersion} from './library.js';
@@ -20,6 +20,13 @@ import {onClick as collClick, initShown} from './collections.js';
    `#` part (it holds the token) off the address. Nothing else in the app reads the address. */
 const signIn = takeReturn();
 initErrors();      // first: the private problem log (Library → Problem log) catches anything that goes wrong after this
+
+/* The worker checks every stored app file against the SHA-256 it was made with (sw.js); one that does not match is deleted,
+   fetched again from the server and never run. It says so here: one quiet line in the Problem log (no toast, no dialog). */
+if('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => {
+  const d = e.data;
+  if(d && d.type === 'ss-bad-file' && typeof d.file === 'string') logProblem('offline copy', `${d.file.slice(0, 80)}: the stored file did not match and was not used`, {quiet: true});
+});
 
 /* Updates (service worker, "Updated. Tap to reload", update checks, the kill switch's reload) are js/boot.js, a separate
    classic script that runs even when a module here fails to load. This file only leaves the "back to the song" note
