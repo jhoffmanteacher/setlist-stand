@@ -805,7 +805,7 @@ async function setMenuLoop(ctx){
       await page.locator('.modal fieldset.checks').waitFor();
       await escapeBack(page, more, `${at} Collections from the box`);
       const sharePk = await download(page, () => viaKeys(page, more, 'share'));
-      assert(/Setlist Stand share\.zip$/.test(sharePk.name), `${at}: Share saved ${sharePk.name}`);
+      assert(/ChartShark share\.zip$/.test(sharePk.name), `${at}: Share saved ${sharePk.name}`);
       await page.locator('.modal h2', {hasText: 'Package saved'}).waitFor({timeout: 8000});
       await page.keyboard.press('Escape'); await noModal(page);
       await backOnMore('Share from the box, after Done');

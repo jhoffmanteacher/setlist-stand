@@ -88,7 +88,7 @@ async function run(list, coll){
     const blob = await zip.generateAsync({type:'blob', compression:'STORE'}, m => { if(!job.stopped) job.say(`Making the zip file… ${Math.round(m.percent)}%`); });
     if(job.stopped) return stopped();                                      // pressed during the last step, which cannot be interrupted: the file is thrown away
     job.close();
-    const name = fileName(coll ? `Setlists - ${coll.name} - Setlist Stand` : 'Setlists - Setlist Stand') + '.zip';
+    const name = fileName(coll ? `Setlists - ${coll.name} - ChartShark` : 'Setlists - ChartShark') + '.zip';
     saveBlob(blob, name);
     finish(blob, name, fileOf.size, list.length, left);
   }catch(err){ job.close(); toast(explainError(err, 'Could not make the zip. Nothing was downloaded.')); }

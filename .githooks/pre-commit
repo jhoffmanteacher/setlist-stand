@@ -1,5 +1,5 @@
 #!/bin/sh
-# Setlist Stand: pre-commit guard (fast, offline, read-only; ported from guitar-class).
+# ChartShark: pre-commit guard (fast, offline, read-only; ported from guitar-class).
 #
 # Refuses a commit that stages:
 #   (a) private or copyrighted files (CLAUDE.md "Never": no music, no PDFs outside tests/fixtures/, no .msb):

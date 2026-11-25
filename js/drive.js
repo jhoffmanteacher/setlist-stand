@@ -2,7 +2,7 @@
    never in an address. Every call can be aborted (signal). Failures become a DriveError that carries one plain sentence
    (`plain`, read by explainError() in errors.js), so a screen never shows a stack trace.
 
-   The app sees only the files it made itself (the drive.file permission). Its home is one folder named "Setlist Stand",
+   The app sees only the files it made itself (the drive.file permission). Its home is one folder named "ChartShark",
    found by name AND a private property AND its type, so a second tablet finds the same folder instead of making another. */
 import {DRIVE_API, UPLOAD_API, FOLDER_NAME} from './driveconfig.js';
 import {getToken, forgetToken} from './googleauth.js';

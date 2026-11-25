@@ -1,6 +1,6 @@
-# Moving your MobileSheets library into Setlist Stand
+# Moving your MobileSheets library into ChartShark
 
-`msb_convert.py` turns a MobileSheets backup (`.msb` file) into a backup zip that Setlist Stand can restore. Your songs, setlists and pen/highlighter marks come across.
+`msb_convert.py` turns a MobileSheets backup (`.msb` file) into a backup zip that ChartShark can restore. Your songs, setlists and pen/highlighter marks come across.
 
 ## Run it
 
@@ -25,7 +25,7 @@ A short report when it finishes:
 ## Load it into the app
 
 1. Get `setlist-stand-from-mobilesheets.zip` onto your tablet (Drive, AirDrop, email, USB).
-2. Open Setlist Stand, go to the Library, tap **Back up / Sync**, then **Restore from backup**, and pick the zip.
+2. Open ChartShark, go to the Library, tap **Back up / Sync**, then **Restore from backup**, and pick the zip.
 
 ## Keep your music private
 

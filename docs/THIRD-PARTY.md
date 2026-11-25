@@ -1,4 +1,4 @@
-# Third-party software in Setlist Stand
+# Third-party software in ChartShark
 
 Everything below is copied into `vendor/` so the app works with no network. Nothing is loaded from another host at runtime.
 The full license texts are in `docs/licenses/`; each library's own license notice is also kept in its minified file.

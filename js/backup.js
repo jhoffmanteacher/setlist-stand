@@ -102,7 +102,7 @@ export async function restoreFrom(f, render, {drive = false} = {}){
        against its recorded SHA-256 (or its CRC-32 when the backup has no hash, as a version 1 backup may not). */
     const dir = await directoryProblem(f, restoreLimits.maxDirectory);
     if(dir === TOO_MANY) return stop('That backup has too many files in it. Nothing was changed.');
-    if(dir === NOT_PACKAGE) return stop('That file is not a Setlist Stand backup');
+    if(dir === NOT_PACKAGE) return stop('That file is not a ChartShark backup');
     zip = await JSZip.loadAsync(f);
     const entry = zip.file('library.json');
     if(!entry) throw new Error('not a backup');
@@ -120,10 +120,10 @@ export async function restoreFrom(f, render, {drive = false} = {}){
     if(data.app !== 'setlist-stand' || !Array.isArray(data.songs) || !Array.isArray(data.sets)) throw new Error('not a backup');
   }catch(err){
     if(zip && zip.file('share.json')) return stop('That is a share package, not a backup. Use Import a share package. Nothing was changed.');
-    return stop(/crc|corrupt/i.test(String(err && err.message)) ? 'That backup is damaged. Nothing was changed.' : 'That file is not a Setlist Stand backup');
+    return stop(/crc|corrupt/i.test(String(err && err.message)) ? 'That backup is damaged. Nothing was changed.' : 'That file is not a ChartShark backup');
   }
   if(wasStopped()) return;
-  if(Number(data.version) > BACKUP_VERSION) return stop('That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.');
+  if(Number(data.version) > BACKUP_VERSION) return stop('That backup was made by a newer version of ChartShark. Update the app, then try again. Nothing was changed.');
   const bad = validateBackup(data);
   if(bad) return stop(`That backup has something the app can't read (${bad}). Nothing was changed.`);
   const droppedMarks = cleanInk(data);                 // marks that cannot be drawn are left out (counted), the rest of the backup restores as it is

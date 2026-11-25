@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-25: Setlist Stand is now ChartShark
+- **New name.** The app is called ChartShark everywhere you see it: the home screen, the page title, the messages, the privacy page and the files it saves ("... - ChartShark share.zip", "Setlists - ChartShark.zip").
+- **New icon.** A chord chart page with a red shark fin rising through it.
+- **Nothing moves.** The web address is the same, your library is untouched, and backups, share packages and chart update files made before today still open. Backup files keep their old file name (`setlist-stand-backup-...`).
+- **Google Drive.** A new Drive folder is named "ChartShark". A folder made before today keeps the name "Setlist Stand" until you rename it in Drive; the app finds it either way, because it looks for its hidden mark and not its name.
+- An app already on a home screen may keep the old name and icon until it is removed and added again (iPad), or until the tablet refreshes it by itself (Android).
+
 ## 2026-11-25: Play a setlist, and every page is ready
 - When you tap Play on a setlist the first song opens at once, and the app draws every other page of the setlist in the background (one page at a time, only while you are not touching the screen), so a turn onto a big scanned chart no longer waits. A small "Ready 7 of 25" shows beside the page line while it works and "All ready" when it is done. It stops for the pen, a box, a page turn or when the app is in the background, keeps nothing on disk, and a song opened on its own is left as it was.
 

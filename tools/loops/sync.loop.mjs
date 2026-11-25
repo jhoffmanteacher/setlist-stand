@@ -374,7 +374,7 @@ async function loopTokenLife(ctx){
 }
 
 /* ---------- 1d: the folder is made once and found again; every page of a listing is read ----------
-   (Test connection used to show this through "Folder 'Setlist Stand' is ready (N files)". Sync does the same finding and listing as its first
+   (Test connection used to show this through "Folder 'ChartShark' is ready (N files)". Sync does the same finding and listing as its first
    steps, so the loop reads the stand-in's own files and the requests the app sent: the home folder, the sub-folders made inside it, which
    folders were listed, and the "files in your Drive folder did not come from this app" line, which counts what Sync listed that it did not make.) */
 const SUB = {charts: 'Charts', data: 'Library data (do not edit)'};
@@ -391,18 +391,18 @@ async function loopFolder(ctx){
     const posts = () => google.requests.filter(r => r.method === 'POST').length;
     const r1 = await runSync(page);
     assert(FINISHED.test(r1) && /Everything is up to date/.test(r1), 'first Sync: ' + r1);
-    made = google.folders('Setlist Stand');
+    made = google.folders('ChartShark');
     assert(made.length === 1 && made[0].mimeType === FOLDER && Object.keys(made[0].appProperties).length > 0, 'the first Sync did not make exactly one marked folder: ' + JSON.stringify(made));
     assert(subOf(google, made[0].id, 'charts').length === 1 && subOf(google, made[0].id, 'data').length === 1, 'the first Sync did not make one Charts and one Library data folder inside it');
     assert(posts() === 3, 'folders created by the first Sync (home, Charts, Library data): ' + posts());
     const r2 = await runSync(page);
     assert(FINISHED.test(r2), 'second Sync: ' + r2);
-    assert(google.folders('Setlist Stand').length === 1 && homesIn(google).length === 1, 'the second Sync made a second folder');
+    assert(google.folders('ChartShark').length === 1 && homesIn(google).length === 1, 'the second Sync made a second folder');
     assert(posts() === 3, 'the second Sync made something new in an empty Drive: ' + (posts() - 3) + ' more');
     const queries = driveCalls(google).filter(r => r.method === 'GET').map(r => r.query.q || '');
     const folderQ = queries.find(x => /appProperties has/.test(x) && !/in parents/.test(x)) || '', listQ = queries.find(x => /in parents/.test(x) && !/mimeType/.test(x)) || '';
     for(const part of [`mimeType = '${FOLDER}'`, 'trashed = false', 'appProperties has']) assert(folderQ.includes(part), `the query that finds the folder lacks "${part}": ${folderQ}`);
-    assert(!/name\s*(=|contains)/.test(folderQ) && !folderQ.includes('Setlist Stand'), `the query that finds the folder uses its name, so a folder renamed in Drive is lost: ${folderQ}`);
+    assert(!/name\s*(=|contains)/.test(folderQ) && !folderQ.includes('ChartShark'), `the query that finds the folder uses its name, so a folder renamed in Drive is lost: ${folderQ}`);
     assert(!queries.some(x => /name\s*(=|contains)/.test(x)), 'a query looks for a folder by name: ' + queries.join(' | '));
     assert(listQ.includes('trashed = false'), 'the listing of a folder counts trashed files: ' + listQ);
     /* 250 files in the library-data folder, Drive answers 100 at a time: all three pages are read (the 250 are not the app's, so Sync counts them) */
@@ -422,39 +422,39 @@ async function loopFolder(ctx){
   /* another tablet's folder is found, not copied; the oldest of two wins; a look-alike without the mark is ignored; the mark alone decides, not the name */
   const o = await open(ctx), g = o.google;
   try{
-    const mk = (created, props = made[0].appProperties) => { const id = g.addFile({name: 'Setlist Stand', mimeType: FOLDER, appProperties: props}); g.files.get(id).createdTime = created; return id; };
+    const mk = (created, props = made[0].appProperties) => { const id = g.addFile({name: 'ChartShark', mimeType: FOLDER, appProperties: props}); g.files.get(id).createdTime = created; return id; };
     const newer = mk('2026-03-02T10:00:00.000Z'), older = mk('2026-03-01T10:00:00.000Z'), alike = mk('2026-01-01T10:00:00.000Z', {});
     const gone = mk('2026-01-02T10:00:00.000Z'); g.files.get(gone).trashed = true;                 // the oldest marked folder, but in the Drive trash
-    const notDir = g.addFile({name: 'Setlist Stand', mimeType: 'application/json', appProperties: made[0].appProperties}); g.files.get(notDir).createdTime = '2026-01-03T10:00:00.000Z';   // marked, oldest, not a folder
+    const notDir = g.addFile({name: 'ChartShark', mimeType: 'application/json', appProperties: made[0].appProperties}); g.files.get(notDir).createdTime = '2026-01-03T10:00:00.000Z';   // marked, oldest, not a folder
     seedSub(g, older, 'charts', 1);                                      // the folder Sync should use already holds a Charts folder with one file the app did not make
     await connectOk(o);
     const r = await runSync(o.page);
     assert(FINISHED.test(r) && strayLine(1).test(r), 'the other tablet\'s folder was not used (its Charts folder holds one file Sync should have counted): ' + r);
-    assert(g.folders('Setlist Stand').length === 3 && homesIn(g).length === 2, 'a second folder was made although one was there');
+    assert(g.folders('ChartShark').length === 3 && homesIn(g).length === 2, 'a second folder was made although one was there');
     assert(subOf(g, older, 'data').length === 1 && g.requests.filter(x => x.method === 'POST').length === 1, 'the Library data folder was not made once, inside the oldest marked folder');
     assert(driveCalls(g).some(r => (r.query.q || '').includes(`'${older}' in parents`)) && ![newer, alike, gone, notDir].some(id => driveCalls(g).some(r => (r.query.q || '').includes(`'${id}' in parents`))), 'not the oldest marked, live folder');
   } finally { await o.s.close(); }
   const p = await open(ctx), g2 = p.google;
   try{
-    const only = g2.addFile({name: 'Setlist Stand', mimeType: FOLDER});            // a look-alike with no mark
+    const only = g2.addFile({name: 'ChartShark', mimeType: FOLDER});            // a look-alike with no mark
     await connectOk(p);
-    const said = await runSync(p.page), now = g2.folders('Setlist Stand');
+    const said = await runSync(p.page), now = g2.folders('ChartShark');
     assert(FINISHED.test(said), 'Sync with a look-alike folder in Drive: ' + said);
     assert(now.length === 2 && homesIn(g2).length === 1 && now.some(f => f.id === only && !Object.keys(f.appProperties).length), `a look-alike folder without the mark was used instead of making the app's own, or was changed (${now.length} folders)`);
     assert(driveCalls(g2).some(r => r.method === 'POST'), 'the app\'s own marked folder was not made');
     assert(driveCalls(g2).filter(r => (r.query.q || '').includes('in parents')).every(r => !(r.query.q || '').includes(`'${only}' in parents`)) && g2.list(only).length === 0, 'the look-alike folder was listed or written to');
   } finally { await p.s.close(); }
 
-  /* the app's folder renamed in Drive (it still has the mark): found, used, and no second one made; an unmarked "Setlist Stand" beside it is never taken */
+  /* the app's folder renamed in Drive (it still has the mark): found, used, and no second one made; an unmarked "ChartShark" beside it is never taken */
   const r = await open(ctx), g3 = r.google;
   try{
-    const lookalike = g3.addFile({name: 'Setlist Stand', mimeType: FOLDER}); g3.files.get(lookalike).createdTime = '2026-01-01T10:00:00.000Z';        // oldest of all, but no mark
+    const lookalike = g3.addFile({name: 'ChartShark', mimeType: FOLDER}); g3.files.get(lookalike).createdTime = '2026-01-01T10:00:00.000Z';        // oldest of all, but no mark
     const renamed = g3.addFile({name: 'My gig charts', mimeType: FOLDER, appProperties: made[0].appProperties}); g3.files.get(renamed).createdTime = '2026-03-01T10:00:00.000Z';
     seedSub(g3, renamed, 'charts', 1);
     await connectOk(r);
     const said = await runSync(r.page);
     assert(FINISHED.test(said) && strayLine(1).test(said), 'a folder renamed in Drive was not found: ' + said);
-    assert(homesIn(g3).length === 1 && g3.list().filter(f => f.mimeType === FOLDER && f.name === 'Setlist Stand').length === 1 && g3.list(lookalike).length === 0, 'a second folder was made although the renamed one was there, or the look-alike was written to');
+    assert(homesIn(g3).length === 1 && g3.list().filter(f => f.mimeType === FOLDER && f.name === 'ChartShark').length === 1 && g3.list(lookalike).length === 0, 'a second folder was made although the renamed one was there, or the look-alike was written to');
     assert(subOf(g3, renamed, 'data').length === 1, 'the Library data folder was not made inside the renamed folder');
     const lists = driveCalls(g3).filter(x => (x.query.q || '').includes('in parents') && (x.query.q || '').includes(FOLDER)).map(x => x.query.q);
     assert(lists.length >= 1 && lists.every(q => q.includes(`'${renamed}' in parents`)), 'the renamed folder was not the one searched: ' + lists.join(' | '));
@@ -496,7 +496,7 @@ async function loopFailures(ctx){
     await stillConnected('offline');
     /* Drive full */
     google.quotaFull = true; plain(await say(), /Drive is full/, 'full'); google.quotaFull = false;
-    assert(google.folders('Setlist Stand').length === 0, 'a failed folder creation left a folder');
+    assert(google.folders('ChartShark').length === 0, 'a failed folder creation left a folder');
     /* the Drive API switched off for the project */
     google.apiEnabled = false; plain(await say(), /not switched on/, 'api off'); google.apiEnabled = true;
     const log = await problems(page);
@@ -578,14 +578,14 @@ async function loopFailures(ctx){
 
     /* the folder IS made, but the answer is lost on the way back: the app must not send the creation again (that would make a
        second folder), and the next Sync finds the one that was made */
-    for(const f of google.folders('Setlist Stand')) google.files.delete(f.id);
+    for(const f of google.folders('ChartShark')) google.files.delete(f.id);
     const posts = () => google.requests.filter(r => r.method === 'POST').length;
     const homes = () => google.list().filter(f => f.mimeType === FOLDER && f.appProperties.setlistStand === 'home').length;
     google.clearLog(); google.loseAnswerNext({match: r => r.method === 'POST'});
     plain(await say(), /connection to Google was lost/, 'a lost answer');
     assert(posts() === 1, `a folder creation whose answer was lost was sent ${posts()} times`);
-    assert(google.folders('Setlist Stand').length === 1, `${google.folders('Setlist Stand').length} folders after a lost answer`);
-    assert(FINISHED.test(await say()) && google.folders('Setlist Stand').length === 1 && homes() === 1, 'the next Sync made another folder instead of finding the one that was made');
+    assert(google.folders('ChartShark').length === 1, `${google.folders('ChartShark').length} folders after a lost answer`);
+    assert(FINISHED.test(await say()) && google.folders('ChartShark').length === 1 && homes() === 1, 'the next Sync made another folder instead of finding the one that was made');
     assert(pageErrors(s).length === 0, 'page errors: ' + s.errors.join(' | '));
   } finally { await s.close(); }
 }

@@ -192,12 +192,12 @@ const named = buf => ({name: 'package.zip', mimeType: 'application/zip', buffer:
 
 async function loopHostile(ctx){
   const REFUSED = [
-    ['not our app', async () => zipOf({...base(), app: 'other'}), /not a Setlist Stand share package/],
-    ['kind backup', async () => zipOf({...base(), kind: 'backup'}), /not a Setlist Stand share package/],
+    ['not our app', async () => zipOf({...base(), app: 'other'}), /not a ChartShark share package/],
+    ['kind backup', async () => zipOf({...base(), kind: 'backup'}), /not a ChartShark share package/],
     ['a real backup', async () => { const z = new JSZip(); z.file('library.json', JSON.stringify({app: 'setlist-stand', version: 2, songs: [], sets: [], ink: {}})); return Buffer.from(await z.generateAsync({type: 'nodebuffer'})); }, /That is a backup, not a share package/],
-    ['no share.json', async () => { const z = new JSZip(); z.file('hello.txt', 'hi'); return Buffer.from(await z.generateAsync({type: 'nodebuffer'})); }, /not a Setlist Stand share package/],
-    ['share.json that is not JSON', async () => zipOf('{ nope'), /not a Setlist Stand share package/],
-    ['a newer version', async () => zipOf({...base(), version: 99}), /newer version of Setlist Stand/],
+    ['no share.json', async () => { const z = new JSZip(); z.file('hello.txt', 'hi'); return Buffer.from(await z.generateAsync({type: 'nodebuffer'})); }, /not a ChartShark share package/],
+    ['share.json that is not JSON', async () => zipOf('{ nope'), /not a ChartShark share package/],
+    ['a newer version', async () => zipOf({...base(), version: 99}), /newer version of ChartShark/],
     ['an empty package', async () => zipOf({...base(), songs: [], setlist: null}), /package is empty/],
     ['a missing PDF', async () => zipOf(base(), {}), /missing the PDF for "Hostile Test"/],
     ['a hash that does not match', async () => zipOf(withSong({hash: 'f'.repeat(64)})), /damaged \("Hostile Test" does not match\)/],
@@ -212,14 +212,14 @@ async function loopHostile(ctx){
     ['a title of 5000 characters', async () => zipOf(withSong({song: 'x'.repeat(5000)})), /no usable title/],
     ['more songs than the limit', async () => { const d = base(); d.songs = Array.from({length: 5001}, (_, i) => ({id: 'a' + i, song: 'S' + i})); d.setlist = null; return zipOf(d, {}); }, /more than 5000 songs/],
     ['a zip with a damaged PDF inside (CRC)', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}, 'STORE'); const at = buf.indexOf(PDF.subarray(200, 216)); assert(at > 0, 'test setup'); buf[at + 4] ^= 0xff; return buf; }, /damaged/],
-    ['a truncated zip', async () => { const buf = await zipOf(base()); return buf.subarray(0, buf.length - 40); }, /not a Setlist Stand share package|damaged/],
+    ['a truncated zip', async () => { const buf = await zipOf(base()); return buf.subarray(0, buf.length - 40); }, /not a ChartShark share package|damaged/],
     ['a small zip that inflates past the cap', async () => zipOf(withSong({hash: 'a'.repeat(64)}), {'files/s1.pdf': Buffer.alloc(30e6)}), /too big/],
     /* everything the import would read is small and valid; only an entry it never reads makes the FILE big, so only the early size check can refuse it */
     ['share.json with one byte changed (CRC)', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}, 'STORE'); const at = buf.indexOf('Hostile Test'); assert(at > 0, 'test setup'); buf[at + 8] = 'X'.charCodeAt(0); return buf; }, /damaged/],
     ['share.json bigger than the cap', async () => zipOf(' '.repeat(2e6) + JSON.stringify({...base(), app: 'other'})), /too big to read/],
     ['a zip with a huge list of files', hugeList, /too many files/],
     /* JSZip finds the end record anywhere in the file, past padding too: a guard that looked only at the last 64 KB would let this open (and all 40000 records are valid) */
-    ['a huge list of files with 70 KB of padding after the end record', async () => Buffer.concat([await hugeList(), Buffer.alloc(70000)]), /not a Setlist Stand share package/],
+    ['a huge list of files with 70 KB of padding after the end record', async () => Buffer.concat([await hugeList(), Buffer.alloc(70000)]), /not a ChartShark share package/],
     /* a zip64 marker makes JSZip read the 64-bit fields, not the 32-bit ones the guard measures */
     ['a zip64 marker in the end record (entry count)', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}); const at = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); assert(at > 0, 'test setup'); buf.writeUInt16LE(0xFFFF, at + 10); return buf; }, /too many files/],
     ['a zip64 marker in the end record (directory size)', async () => { const buf = await zipOf(base(), {'files/s1.pdf': PDF}); const at = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); assert(at > 0, 'test setup'); buf.writeUInt32LE(0xFFFFFFFF, at + 12); return buf; }, /too many files/],

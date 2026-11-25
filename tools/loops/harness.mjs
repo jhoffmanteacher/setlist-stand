@@ -186,7 +186,7 @@ export async function closeRestored(page){
   await page.waitForFunction(() => !document.querySelector('.modal.restoredone'), null, {timeout: 5000});
   return text;
 }
-/* Restore a Setlist Stand zip through the real Restore button, pressing Restore in the question when it comes (a library that is not
+/* Restore a ChartShark zip through the real Restore button, pressing Restore in the question when it comes (a library that is not
    empty), and wait for the toast; a "Backup restored" box is closed. Resolves to the toast; restoreZip.last holds {asked, kept}
    (the question's text and the result box's text, or null). */
 export async function restoreZip(page, file, timeout = 180000){
@@ -194,7 +194,7 @@ export async function restoreZip(page, file, timeout = 180000){
   await page.click('#tLib');
   await page.setInputFiles('#restoreFile', file);
   const asked = await answerRestore(page, 'ok', timeout);
-  await page.waitForFunction(() => /Restored \d+ song|not a Setlist Stand backup|Nothing was changed/.test(document.querySelector('#toast').textContent), null, {timeout});
+  await page.waitForFunction(() => /Restored \d+ song|not a ChartShark backup|Nothing was changed/.test(document.querySelector('#toast').textContent), null, {timeout});
   const msg = await page.locator('#toast').textContent();
   assert(/Restored/.test(msg), 'restore failed: ' + msg);
   const kept = await closeRestored(page);

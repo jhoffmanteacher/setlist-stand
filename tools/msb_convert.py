@@ -1,4 +1,4 @@
-"""Convert a MobileSheets backup (.msb) into a Setlist Stand backup (.zip).
+"""Convert a MobileSheets backup (.msb) into a ChartShark backup (.zip).
 Usage: python3 msb_convert.py MobileSheets_YYYY-MM-DD.msb out.zip
 Format notes (MobileSheets backup v33, worked out 2026-11-19):
 - After an 8-byte header: named settings blocks [u16 name len][name][u64 len][data],

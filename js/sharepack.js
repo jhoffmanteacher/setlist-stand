@@ -1,4 +1,4 @@
-/* Share packages: chosen songs, or a whole setlist, as one zip for another person's Setlist Stand.
+/* Share packages: chosen songs, or a whole setlist, as one zip for another person's ChartShark.
    The zip holds share.json and files/<id>.pdf. The PDFs are the stored bytes, copied as they are (never saved again), so a
    song's SHA-256 is the same on both tablets: that is how the receiver spots songs they already have. A package carries
    each song's title parts, page count and crop, and for a setlist its order and breaks. It never carries annotations,

@@ -48,7 +48,7 @@ async function loopExport(ctx){
     await page.waitForSelector('#view [data-setmenu]');
     const pk = await readPackage((await download(page, () => openSetMenu(page, 'share'))).file);
     const done = await closeDone(page);
-    assert(/3 songs are in/.test(done) && /Gig Friday - Setlist Stand share\.zip/.test(done), 'done dialog: ' + done);
+    assert(/3 songs are in/.test(done) && /Gig Friday - ChartShark share\.zip/.test(done), 'done dialog: ' + done);
     checkClean(pk, 'setlist package');
     assert(pk.share.songs.length === 3, `the setlist uses 3 songs (one twice, one archived): the package has ${pk.share.songs.length}`);
     assert(pk.share.songs.map(x => x.id).join() === 's1,s2,s3', 'package ids ' + pk.share.songs.map(x => x.id));

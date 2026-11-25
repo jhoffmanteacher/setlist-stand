@@ -97,7 +97,7 @@ function leaveDialog(m, then){
   addEventListener('pageshow', e => { if(e.persisted && m.isConnected){ ok.disabled = false; leaving = false; } }, {once:true});   // came back with the Back button
 }
 function connectDialog(then = 'connect'){
-  leaveDialog(modal(`<h2>Connect Google Drive</h2><p>Google will ask you to sign in and to let Setlist Stand use its own folder in your Drive. The app can see only the files it makes itself. You come back to this app afterwards.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Continue</button></div>`), then);
+  leaveDialog(modal(`<h2>Connect Google Drive</h2><p>Google will ask you to sign in and to let ChartShark use its own folder in your Drive. The app can see only the files it makes itself. You come back to this app afterwards.</p><div class="btns"><button data-x>Cancel</button><button class="pri" data-ok>Continue</button></div>`), then);
 }
 
 /* The sign-in ran out (or was taken back): say so, and offer to sign in again for what the person was doing. */

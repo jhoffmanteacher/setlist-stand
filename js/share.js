@@ -21,7 +21,7 @@ export async function shareSet(set){
 }
 
 async function sharePackage(ids, set, label){
-  const name = fileName(label) + ' - Setlist Stand share.zip';
+  const name = fileName(label) + ' - ChartShark share.zip';
   let stopped = false;
   const m = modal(`<h2>Making the package</h2><p class="hint" role="status">${esc(plural(ids.length, 'song'))}…</p><div class="btns"><button data-x>Cancel</button></div>`);
   m.querySelector('[data-x]').onclick = () => { stopped = true; m.remove(); };

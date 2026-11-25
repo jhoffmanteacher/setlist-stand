@@ -630,7 +630,7 @@ async function loopHostile(ctx){
     await clearToast(page);
     await page.click('#tLib');
     await page.setInputFiles('#restoreFile', file);
-    await waitToast(page, /Restored|Nothing was changed|not a Setlist Stand backup/, 60000);
+    await waitToast(page, /Restored|Nothing was changed|not a ChartShark backup/, 60000);
     const msg = (await page.locator('#toast').textContent()).trim();
     /* NOT pending: a bad gig never refuses the backup */
     assert(/^Restored 1 song and 6 setlists\b/.test(msg), 'a backup with bad gig dates was not restored: ' + msg);

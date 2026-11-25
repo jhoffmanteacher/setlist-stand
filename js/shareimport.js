@@ -1,4 +1,4 @@
-/* Import a share package: songs (and maybe a setlist) from another person's Setlist Stand.
+/* Import a share package: songs (and maybe a setlist) from another person's ChartShark.
    The file comes from somebody else, so everything in it is untrusted. It is read and checked completely BEFORE anything is
    written: the file (its size, and its zip directory: size, padding, zip64), share.json (against the CRC-32 the zip records for it; ours,
    not from a newer version, plain ids, short text, a required hash, a setlist that only
@@ -70,10 +70,10 @@ export async function readPackage(file, isStopped = () => false){
   /* No checkCRC32: with it JSZip inflates every entry completely just to open the zip, which would defeat the cap in readCapped.
      A damaged PDF is caught anyway: every song's recorded SHA-256 is required and compared below. */
   try{ zip = await JSZip.loadAsync(file); }
-  catch(err){ return bad(damaged(err) ? 'That package is damaged.' : 'That file is not a Setlist Stand share package.'); }
+  catch(err){ return bad(damaged(err) ? 'That package is damaged.' : 'That file is not a ChartShark share package.'); }
   const entry = zip.file('share.json');
   if(!entry) return bad(zip.file('library.json') ? 'That is a backup, not a share package. Use Restore from backup.'
-    : zip.file('update.json') ? 'That is a chart update file, not a share package. Use Import chart updates.' : 'That file is not a Setlist Stand share package.');
+    : zip.file('update.json') ? 'That is a chart update file, not a share package. Use Import chart updates.' : 'That file is not a ChartShark share package.');
   try{
     let data;
     try{
@@ -83,9 +83,9 @@ export async function readPackage(file, isStopped = () => false){
       const want = entry._data && entry._data.crc32;
       if(typeof want !== 'number' || crc32(raw) !== want >>> 0) return bad('That package is damaged.');
       data = JSON.parse(new TextDecoder().decode(raw));
-    }catch(err){ return bad(damaged(err) ? 'That package is damaged.' : 'That file is not a Setlist Stand share package.'); }
-    if(!isObj(data) || data.app !== 'setlist-stand' || data.kind !== 'share' || !Array.isArray(data.songs)) return bad('That file is not a Setlist Stand share package.');
-    if(Number(data.version) > SHARE_VERSION) return bad('That package was made by a newer version of Setlist Stand. Update the app, then try again.');
+    }catch(err){ return bad(damaged(err) ? 'That package is damaged.' : 'That file is not a ChartShark share package.'); }
+    if(!isObj(data) || data.app !== 'setlist-stand' || data.kind !== 'share' || !Array.isArray(data.songs)) return bad('That file is not a ChartShark share package.');
+    if(Number(data.version) > SHARE_VERSION) return bad('That package was made by a newer version of ChartShark. Update the app, then try again.');
     const problem = checkShare(data);
     if(problem) return bad(`That package has something the app can't read (${problem}).`);
     if(!data.songs.length && !data.setlist) return bad('That package is empty.');

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Setlist Stand pre-ship checks. Zero dependencies.
+// ChartShark pre-ship checks. Zero dependencies.
 //   node tools/checks.mjs          run all checks (exit 1 on any FAIL)
 //   node tools/checks.mjs --bump   write a new VERSION (YYYY-MM-DD-N) AND the SHA-256 table (HASHES) into sw.js
 //   node tools/checks.mjs --rehash write the SHA-256 table only (for the loops and plant-faults, which change files in a scratch copy)

@@ -199,7 +199,7 @@ export const loops = [
     await clearToast(page);
     await page.setInputFiles('#restoreFile', f3);
     const msg = await waitToast(page, /\S/);
-    assert(msg === 'That backup was made by a newer version of Setlist Stand. Update the app, then try again. Nothing was changed.', 'v4 restore toast: ' + JSON.stringify(msg));
+    assert(msg === 'That backup was made by a newer version of ChartShark. Update the app, then try again. Nothing was changed.', 'v4 restore toast: ' + JSON.stringify(msg));
     await sleep(500);
     expectSame(before, await snapshot(page), 'library after refusing a version-4 backup');
     assert(await songCount(page) === 2, 'song count changed after refusing a version-4 backup');

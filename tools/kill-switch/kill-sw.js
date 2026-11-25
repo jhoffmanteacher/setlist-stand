@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════
-   Setlist Stand — KILL-SWITCH service worker (break glass; NOT live)
+   ChartShark — KILL-SWITCH service worker (break glass; NOT live)
 
    WHAT IT IS. A complete service worker that switches the app's offline
    copy off. It is kept here, ready and tested, and nothing loads it from

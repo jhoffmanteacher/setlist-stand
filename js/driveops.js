@@ -2,7 +2,7 @@
    Built on the thin client in js/drive.js (token, retries, plain errors). Nothing here decides anything about the library:
    js/syncmerge.js decides, js/sync.js carries it out (js/syncplan.js reads both sides, js/syncapply.js does the work).
 
-   Layout, inside the home folder "Setlist Stand" (found by its private mark, see drive.js):
+   Layout, inside the home folder "ChartShark" (found by its private mark, see drive.js):
      Charts                          one PDF per song: name "<title>.pdf", properties {k:'pdf', id:<song id>, h:<sha-256 hex>}
      Library data (do not edit)      one JSON file per record: name "<kind>-<id>.json", the record itself as the content,
                                      properties {k:<kind>, id, u:<updated>, c:<canonical hash>, d:'1' for a deletion marker}

@@ -23,7 +23,7 @@
    'ss-offline-state' fires on window when it changes (js/readycheck.js readyLine() turns it into the Library's line).
    Did not start (2026-11-23): js/main.js calls ssBoot.started() once all its modules loaded and ran. If that has not
    happened STARTED_MS after this file ran, a plain box (#nostart, plain DOM: no module of the app is there to draw a
-   dialog) says "Setlist Stand did not start. Your music is safe." with a Reload button; it goes away by itself if the
+   dialog) says "ChartShark did not start. Your music is safe." with a Reload button; it goes away by itself if the
    app starts after all (a slow network). It sits in the page, not over it: the "Updated. Tap to reload" banner for the
    fix stays on top and tappable. This part works even without a service worker. */
 (function(){
@@ -34,7 +34,7 @@
     let b = document.getElementById('nostart');
     if(!b){
       b = document.createElement('div'); b.id = 'nostart'; b.className = 'nostart'; b.setAttribute('role', 'alert'); b.hidden = true;
-      b.innerHTML = '<p>Setlist Stand did not start. Your music is safe.</p><button type="button" id="nostartReload">Reload</button>';
+      b.innerHTML = '<p>ChartShark did not start. Your music is safe.</p><button type="button" id="nostartReload">Reload</button>';
       document.body.prepend(b);
     }
     return b;

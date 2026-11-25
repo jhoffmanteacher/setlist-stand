@@ -105,7 +105,7 @@ async function loopBlocked(ctx){
     await b.goto(s.base + 'index.html', {waitUntil: 'domcontentloaded'});
     await b.waitForSelector('[data-dbblocked]', {timeout: 10000}).catch(() => { throw new Error('the page did not say that another tab is blocking the update'); });
     const msg = await b.locator('[data-dbblocked]').textContent();
-    assert(/Close the other Setlist Stand tab/.test(msg), 'the blocked message: ' + msg);
+    assert(/Close the other ChartShark tab/.test(msg), 'the blocked message: ' + msg);
     assert(await b.locator('#libList').count() === 0 && await b.locator('[data-add]').count() === 0, 'the library is drawn while the upgrade is blocked');
     assert((await old.evaluate(() => window.__old.version)) === 1, 'the old tab\'s database is not at version 1');
     await old.evaluate(() => window.__old.close());                // the old tab lets go (or is closed)
@@ -168,7 +168,7 @@ async function loopStartup(ctx){
     await page.goto(s.base + 'index.html', {waitUntil: 'domcontentloaded'});
     await page.waitForSelector('#warn .warn', {timeout: 10000});
     const msg = await page.locator('#warn').innerText();
-    assert(/newer version of Setlist Stand/.test(msg) && !/blocked on-device storage/.test(msg), 'the message for a newer library: ' + msg);
+    assert(/newer version of ChartShark/.test(msg) && !/blocked on-device storage/.test(msg), 'the message for a newer library: ' + msg);
     assert(await page.locator('[data-add]').count() === 0, 'the app drew a library over a database it cannot open');
     const info = await dbInfo(page);
     assert(info.version === 3, 'the newer database was changed: ' + JSON.stringify(info));

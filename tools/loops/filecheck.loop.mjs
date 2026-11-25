@@ -69,7 +69,7 @@ const problems = page => page.evaluate(() => { try{ return JSON.parse(localStora
 const listenHeal = context => context.addInitScript(() => {
   if(navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', e => { if(e.data && e.data.type === 'ss-heal') window.__ssHeal = e.data.result; });
 });
-/* The app comes back on screen (no reload): what a tablet does when Setlist Stand is switched back to. */
+/* The app comes back on screen (no reload): what a tablet does when ChartShark is switched back to. */
 const backOnScreen = page => page.evaluate(() => { window.__ssHeal = null; Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); document.dispatchEvent(new Event('visibilitychange')); });
 const healAnswer = (page, what) => until(() => page.evaluate(() => window.__ssHeal), what, 15000);
 const libShown = (page, ms = 15000) => page.waitForSelector('#libList', {timeout: ms}).then(() => true, () => false);

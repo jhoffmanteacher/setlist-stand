@@ -16,7 +16,7 @@ import {ID_RE, LIMITS, okText as okName} from './backup.js';
 import {limits, isObj, short, mb, crc32, readCapped, directoryProblem, NOT_PACKAGE, TOO_MANY} from './shareimport.js';
 
 export const CHART_UPDATE_VERSION = 1;
-const NOT_UPDATE = 'That file is not a Setlist Stand chart update file.';
+const NOT_UPDATE = 'That file is not a ChartShark chart update file.';
 
 function checkCharts(d){
   if(d.charts.length > limits.maxSongs) return `more than ${limits.maxSongs} charts`;
@@ -61,7 +61,7 @@ export async function readChartFile(file, opts = {}){
     }catch(err){ return bad(damaged(err) ? 'That file is damaged.' : NOT_UPDATE); }
     if(!isObj(data) || data.app !== 'setlist-stand' || data.kind !== 'chart-update' || !Array.isArray(data.charts)) return bad(NOT_UPDATE);
     if(!(Number(data.version) >= 1)) return bad(NOT_UPDATE);
-    if(Number(data.version) > CHART_UPDATE_VERSION) return bad('That file was made by a newer version of Setlist Stand. Update the app, then try again.');
+    if(Number(data.version) > CHART_UPDATE_VERSION) return bad('That file was made by a newer version of ChartShark. Update the app, then try again.');
     const problem = checkCharts(data);
     if(problem) return bad(`That file has something the app can't read (${problem}).`);
     if(!data.charts.length) return bad('That file is empty.');

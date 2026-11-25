@@ -1,5 +1,5 @@
 /*
- * Setlist Stand smoke test: node tools/smoke.mjs
+ * ChartShark smoke test: node tools/smoke.mjs
  *
  * Serves the repo root on a free localhost port, drives headless Chromium
  * (Playwright) at 1280x800 and prints one line per step:
@@ -1666,7 +1666,7 @@ async function stepShare(t){
   await page.locator('.modal .pick input[type=checkbox]').first().waitFor();
   await tick('Three-page', 'Two-page');
   const a = await download(page, () => page.click('.modal [data-ok]'));
-  assert(/Setlist Stand share\.zip$/.test(a.name), 'package name ' + a.name);
+  assert(/ChartShark share\.zip$/.test(a.name), 'package name ' + a.name);
   const pa = await read(a);
   assert(pa.names.join() === 'files/s1.pdf,files/s2.pdf,share.json', 'songs package entries: ' + pa.names);
   assert(pa.share.kind === 'share' && pa.share.songs.length === 2 && pa.share.setlist === null, 'songs package: ' + JSON.stringify(pa.share).slice(0, 200));
@@ -2115,7 +2115,7 @@ async function stepDownloads(t){
   before = await snap();
   await openDlAll();
   const z = await download(page, () => page.click('.modal [data-ok]'));
-  assert(z.name === 'Setlists - Setlist Stand.zip', 'zip name: ' + z.name);
+  assert(z.name === 'Setlists - ChartShark.zip', 'zip name: ' + z.name);
   if(await page.locator('.modal h2', {hasText: 'Zip saved'}).count()) await page.click('.modal [data-x]');
   else {
     const want = `Saved ${charts.length} chart${charts.length == 1 ? '' : 's'} and ${full} setlist${full == 1 ? '' : 's'}`;

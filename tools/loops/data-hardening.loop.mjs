@@ -717,9 +717,9 @@ print(json.dumps(out))`;
     assert(at > 0, 'test setup: no end record');
     const z64 = Buffer.from(good); z64.writeUInt16LE(0xFFFF, at + 10);
     for(const [what, buf, re] of [
-      ['bytes after the end record', Buffer.concat([good, Buffer.alloc(70000)]), /^That file is not a Setlist Stand backup$/],
+      ['bytes after the end record', Buffer.concat([good, Buffer.alloc(70000)]), /^That file is not a ChartShark backup$/],
       ['a zip64 marker', z64, /^That backup has too many files in it\. Nothing was changed\.$/],
-      ['not a zip', Buffer.from('hello, this is not a zip'), /^That file is not a Setlist Stand backup$/],
+      ['not a zip', Buffer.from('hello, this is not a zip'), /^That file is not a ChartShark backup$/],
     ]){
       const msg = await restore(page, await write(buf));
       assert(re.test(msg), `(c) ${what}: toast ${JSON.stringify(msg)}`);

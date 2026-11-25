@@ -299,7 +299,7 @@ export const loops = [
       assert(!(await boxShown(page)), 'the box showed before about 8 s');
       await until(() => boxShown(page), 'the "did not start" box did not show within 12 s of a broken js/main.js', 12000);
       const t = await textOf(page);
-      assert(t.includes('Setlist Stand did not start. Your music is safe.'), 'box text: ' + t);
+      assert(t.includes('ChartShark did not start. Your music is safe.'), 'box text: ' + t);
       /* the update banner, when it shows, stays on top and tappable */
       const top = await page.evaluate(() => {
         const u = document.querySelector('#update'); u.hidden = false;

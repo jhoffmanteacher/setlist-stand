@@ -1,4 +1,4 @@
-/* Builds a chart update file (see js/chartfile.js) from a Setlist Stand backup and a folder of cleaned-up PDFs:
+/* Builds a chart update file (see js/chartfile.js) from a ChartShark backup and a folder of cleaned-up PDFs:
      node tools/make-chart-update.mjs --backup <backup.zip> --out <file.zip> [--add-new] <pdf>...
    Each PDF is matched to ONE song in the backup by its file name ("Song (version) - Artist.pdf", read with js/importname.js and
    compared like the library's order compares names: case and accents ignored). The song's id in the backup becomes the chart's
@@ -41,9 +41,9 @@ if(!backup || !out || !pdfs.length){
 
 const zipIn = await JSZip.loadAsync(fs.readFileSync(backup));
 const libFile = zipIn.file('library.json');
-if(!libFile){ console.error('That is not a Setlist Stand backup (no library.json).'); process.exit(2); }
+if(!libFile){ console.error('That is not a ChartShark backup (no library.json).'); process.exit(2); }
 const lib = JSON.parse(await libFile.async('string'));
-if(!lib || lib.app !== 'setlist-stand' || !Array.isArray(lib.songs)){ console.error('That is not a Setlist Stand backup.'); process.exit(2); }
+if(!lib || lib.app !== 'setlist-stand' || !Array.isArray(lib.songs)){ console.error('That is not a ChartShark backup.'); process.exit(2); }
 const songs = lib.songs.filter(s => s && !s.deleted && !s.archived && typeof s.id === 'string');   // archived charts are never updated
 const trim = s => ({song:cutName(String(s.song || '').trim()), artist:cutName(String(s.artist || '').trim()), version:cutName(String(s.version || '').trim())});      // cut as the app cuts a name it makes, so a long file name still matches its own song
 const same = (a, b) => compareSongs({...a, id:''}, {...b, id:''}) === 0;

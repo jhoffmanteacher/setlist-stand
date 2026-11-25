@@ -12,7 +12,7 @@ const isPrivateWindow = err => !!err && err.name === 'UnknownError' && /blob|fil
 export function explainError(err, fallback = 'Something went wrong. Nothing was lost.'){
   if(err && typeof err.plain === 'string') return err.plain;       // an error that carries its own plain sentence (a DriveError, js/drive.js)
   if(isQuota(err)) return 'The tablet is full. Free up some space, then try again. Nothing was changed.';
-  if(isPrivateWindow(err)) return "This window can't save files (is it a private window?). Open Setlist Stand in a normal tab or from the home screen. Nothing was changed.";
+  if(isPrivateWindow(err)) return "This window can't save files (is it a private window?). Open ChartShark in a normal tab or from the home screen. Nothing was changed.";
   return fallback;
 }
 

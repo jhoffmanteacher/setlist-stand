@@ -40,12 +40,12 @@ else if('serviceWorker' in navigator) addEventListener('load', () => { navigator
    version lets go at once when a newer one asks (js/store.js). */
 addEventListener('ss-db-blocked', () => {
   const w = $('#warn'); if(!w || w.querySelector('[data-dbblocked]')) return;
-  w.insertAdjacentHTML('beforeend', '<p class="warn" role="alert" data-dbblocked>Setlist Stand is open in another tab or window, and it needs to be closed before this one can update your library. Close the other Setlist Stand tab; this one carries on by itself.</p>');
+  w.insertAdjacentHTML('beforeend', '<p class="warn" role="alert" data-dbblocked>ChartShark is open in another tab or window, and it needs to be closed before this one can update your library. Close the other ChartShark tab; this one carries on by itself.</p>');
 });
 addEventListener('ss-db-open', () => { const m = document.querySelector('[data-dbblocked]'); if(m) m.remove(); });
 addEventListener('ss-db-changed', () => {
   const w = $('#warn'); if(!w || w.querySelector('[data-dbchanged]')) return;
-  w.insertAdjacentHTML('beforeend', '<p class="warn" role="alert" data-dbchanged>Setlist Stand was updated in another tab. Reload this page before you change anything here.</p>');
+  w.insertAdjacentHTML('beforeend', '<p class="warn" role="alert" data-dbchanged>ChartShark was updated in another tab. Reload this page before you change anything here.</p>');
 });
 
 /* Nothing on the screen works until the library has been read: while the upgrade is blocked, or the database cannot be opened, a tap
@@ -107,7 +107,7 @@ if(window.ssBoot && window.ssBoot.started) window.ssBoot.started();      // ever
   catch(e){      // nothing is read or written: either the library was made by a newer version (this copy was rolled back), or the upgrade could not be saved
     const newer = e && e.name === 'VersionError';
     $('#warn').innerHTML = '<p class="warn" role="alert">' + (newer
-      ? 'Your library was saved by a newer version of Setlist Stand than this copy. It was left alone. Do not add or restore anything here: see BREAK-GLASS.md, situation (a).'
+      ? 'Your library was saved by a newer version of ChartShark than this copy. It was left alone. Do not add or restore anything here: see BREAK-GLASS.md, situation (a).'
       : esc(explainError(e, 'The library could not be updated.')) + ' Nothing was changed. Free some space on the tablet, then reload this page.') + '</p>';
     return;
   }

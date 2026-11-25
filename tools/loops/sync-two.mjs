@@ -32,7 +32,7 @@ import {KINDS, canonHash, pdfName, titleOf} from './sync-model.mjs';
 const FOLDER = 'application/vnd.google-apps.folder';
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 const authCount = g => g.requests.filter(r => r.kind === 'auth').length;
-export const HOME_NAME = 'Setlist Stand', CHARTS_NAME = 'Charts', DATA_NAME = 'Library data (do not edit)', MARKS_NAME = 'Marks (do not edit)', BACKUPS_NAME = 'Backups';
+export const HOME_NAME = 'ChartShark', CHARTS_NAME = 'Charts', DATA_NAME = 'Library data (do not edit)', MARKS_NAME = 'Marks (do not edit)', BACKUPS_NAME = 'Backups';
 export const REPORT_TITLES = /^Sync (finished|stopped|could not finish)/;
 
 export async function openTablet(ctx, {name = 'A', share = null, fixtures = false, device = {}} = {}){
@@ -298,7 +298,7 @@ export function readDrive(google){
   const parents = new Set([...charts, ...data, ...marks, ...backupDirs].flatMap(f => f.parents));
   if(parents.size !== 1) problems.push('the sub-folders are not in one folder');
   out.home = google.files.get([...parents][0]) || null;
-  if(!out.home || out.home.mimeType !== FOLDER || out.home.name !== HOME_NAME || !Object.keys(out.home.appProperties).length) problems.push('the sub-folders are not in the marked "Setlist Stand" folder');
+  if(!out.home || out.home.mimeType !== FOLDER || out.home.name !== HOME_NAME || !Object.keys(out.home.appProperties).length) problems.push('the sub-folders are not in the marked "ChartShark" folder');
   const ours = new Set([out.home && out.home.id, out.charts && out.charts.id, out.data && out.data.id, out.marks && out.marks.id, ...backupDirs.map(f => f.id)].filter(Boolean));
   const keys = f => Object.keys(f.appProperties).sort().join(',');
   for(const f of live){

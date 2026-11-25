@@ -1,5 +1,5 @@
 #!/bin/sh
-# Setlist Stand: pre-push guard (offline; ported from guitar-class).
+# ChartShark: pre-push guard (offline; ported from guitar-class).
 #
 # A push to main runs `node tools/checks.mjs` first and is refused if any check fails. Git hands this hook one
 # line per ref on stdin: <local ref> <local sha> <remote ref> <remote sha>. Only lines whose remote ref is

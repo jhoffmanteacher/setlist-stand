@@ -67,34 +67,34 @@ above, goes back, then starts with no network).
 
 ## (d) A tablet lost its data
 - Library → "Back up / Sync" → "Restore from backup", pick the latest backup zip. It is all or nothing: a damaged zip changes nothing.
-- If you use Sync, Google Drive also holds weekly copies: Drive → "Setlist Stand" → "Backups". Download the newest zip to the tablet first (the Drive picker inside Restore has failed before), then Restore from backup and pick it from Downloads.
+- If you use Sync, Google Drive also holds weekly copies: Drive → "ChartShark" (or "Setlist Stand", its name before 2026-11-25) → "Backups". Download the newest zip to the tablet first (the Drive picker inside Restore has failed before), then Restore from backup and pick it from Downloads.
 - Without a backup nothing can be recovered: the songs lived only on that tablet. That is why the Library
   nags about backups; back up after every change to the library.
 
-## (e) After an update the page says to close the other Setlist Stand tab
-The update from 2026-11-21 (Collections) changes how the library is stored (database version 2). If Setlist Stand is also open
-in another tab or window that is still running the old version, the new one waits for it and says "Close the other Setlist Stand
+## (e) After an update the page says to close the other ChartShark tab
+The update from 2026-11-21 (Collections) changes how the library is stored (database version 2). If ChartShark is also open
+in another tab or window that is still running the old version, the new one waits for it and says "Close the other ChartShark
 tab". Close that tab (or the other window); the page carries on by itself and nothing is lost. If it never goes: close every
-Setlist Stand tab and the Home Screen app, then open it once. A tab left open on the new version says "Reload this page" when
+ChartShark tab and the Home Screen app, then open it once. A tab left open on the new version says "Reload this page" when
 a still newer update is installed elsewhere: reload it before changing anything.
 
 ## (f) Sync did something wrong
 Sync copies a change on one tablet to the other, so a mistake can be copied too (a song deleted by accident, a library restored from an old backup).
 1. On the tablet that still has the good library: Library → "Back up / Sync" → "Back up everything". Keep that file safe.
 2. Stop it spreading: on both tablets, Library → "Back up / Sync" → "Google Drive settings" → "Disconnect". Nothing is sent to Google after that, and nothing on the tablet changes.
-3. To start clean: in Google Drive on a computer, delete the folder "Setlist Stand" (this loses nothing on the tablets: every tablet keeps its own copy). On BOTH tablets restore the same good backup (Library → "Back up / Sync" → "Restore from backup"), then on one tablet connect and tap Sync, then on the other.
+3. To start clean: in Google Drive on a computer, delete the folder "ChartShark" (or "Setlist Stand", its name before 2026-11-25) (this loses nothing on the tablets: every tablet keeps its own copy). On BOTH tablets restore the same good backup (Library → "Back up / Sync" → "Restore from backup"), then on one tablet connect and tap Sync, then on the other.
 4. Restoring an OLDER backup while Sync is still connected does not hold: the next Sync brings back whatever the other tablet changed since, because the newer change wins. Disconnect first (step 2).
 5. Keep the clock of both tablets on "automatic": the newer change wins, and the tablet's clock says which is newer.
 
 ## (g) The app does not open without internet although it did before
 Another website on the same address (jhoffmanteacher.github.io, for example the guitar-class site) can delete Setlist
-Stand's offline copy on a tablet. Open Setlist Stand WITH internet and leave it open on the Library for a minute: it
+Stand's offline copy on a tablet. Open ChartShark WITH internet and leave it open on the Library for a minute: it
 refills its offline copy by itself (no message, nothing to tap; the refill is all or nothing, so a short visit may
 store nothing yet). Then try again without internet. If a new version is waiting ("Updated. Tap to reload"),
 tap it, then leave the app open with internet for a minute: the new version fills its offline copy while
 it is open (a short visit may not finish it; open it again with internet and wait another minute).
 
-The same sign has a second cause (since 2026-11-24): Setlist Stand checks every file of its offline copy against a list
+The same sign has a second cause (since 2026-11-24): ChartShark checks every file of its offline copy against a list
 of fingerprints before it uses it, so a file that another website put in the copy, or that was damaged, is thrown out and
 fetched again, never run. With internet this happens by itself and nothing shows. Without internet the thrown-out file
 is missing, so the app may not open until it has been online once. The fix is the same: open it WITH internet and wait a

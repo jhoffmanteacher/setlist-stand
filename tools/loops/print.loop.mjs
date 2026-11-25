@@ -967,12 +967,12 @@ export const loops = [
     if(r.end !== 'Zip saved') fails.push(`a chart without a PDF: ended on "${r.end}" (toast "${r.toast}"), expected the "Zip saved" box naming it`);
     else {
       if(fmt(r.items) !== fmt([leftItem])) fails.push(`the final box lists ${fmt(r.items)}, expected ${fmt([leftItem])}`);
-      if(!r.text.includes(`${charts.length} charts and ${full.length} setlists in Setlists - Setlist Stand.zip, in your downloads.`)) fails.push('the final box reads ' + r.text);
+      if(!r.text.includes(`${charts.length} charts and ${full.length} setlists in Setlists - ChartShark.zip, in your downloads.`)) fails.push('the final box reads ' + r.text);
     }
     if(r.dls.length !== 1) fails.push(`${r.dls.length} downloads, expected one zip`);
     else {
       const dl = r.dls[0];
-      if(dl.suggestedFilename() !== 'Setlists - Setlist Stand.zip') fails.push(`the zip is called "${dl.suggestedFilename()}"`);
+      if(dl.suggestedFilename() !== 'Setlists - ChartShark.zip') fails.push(`the zip is called "${dl.suggestedFilename()}"`);
       const z = await readZip(dl);
       const bad = notStored(z.dir); if(bad.length) fails.push('zip entries not stored: ' + bad.join('; '));
       const stray = strayDirs(z.dir); if(stray.length) fails.push('stray folders in the zip: ' + fmt(stray));
@@ -1092,7 +1092,7 @@ export const loops = [
     const r3 = await downloadAllRun(page);
     if(r3.dls.length !== 1) fails.push(`with a collection shown: ${r3.dls.length} downloads, ended on "${r3.end}" ${r3.text} (toast "${r3.toast}")`);
     else {
-      if(r3.dls[0].suggestedFilename() !== 'Setlists - Band A-B - Setlist Stand.zip') fails.push(`with a collection shown the zip is called "${r3.dls[0].suggestedFilename()}"`);
+      if(r3.dls[0].suggestedFilename() !== 'Setlists - Band A-B - ChartShark.zip') fails.push(`with a collection shown the zip is called "${r3.dls[0].suggestedFilename()}"`);
       const z = await readZip(r3.dls[0]);
       const want = ['Setlists/Y.txt', ...['B', 'C'].map(k => `Songs/${fileNameOk(songs[id[k]].title)}.pdf`)].sort();
       if(fmt(Object.keys(z.files)) !== fmt(want)) fails.push(`with a collection shown the zip holds ${fmt(Object.keys(z.files))}, expected ${fmt(want)}`);

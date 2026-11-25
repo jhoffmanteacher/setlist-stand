@@ -1,6 +1,6 @@
 ---
 name: setlist-runner
-description: Cheap runner for Setlist Stand: run a named tool (checks, one loop, names-parity, lint), take screenshots from a written list, copy or move files, an inventory with counts, a rebase. Use it when the work is mechanical, fully specified, and a tool proves the result. Never for design, restore/service-worker/print changes, or a fix whose cause is unknown.
+description: Cheap runner for ChartShark: run a named tool (checks, one loop, names-parity, lint), take screenshots from a written list, copy or move files, an inventory with counts, a rebase. Use it when the work is mechanical, fully specified, and a tool proves the result. Never for design, restore/service-worker/print changes, or a fix whose cause is unknown.
 model: sonnet
 effort: low
 ---

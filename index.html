@@ -14,11 +14,11 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: data: https://www.googleapis.com/drive/v3/ https://www.googleapis.com/upload/drive/v3/; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Setlist Stand</title>
+<title>ChartShark</title>
 <meta name="theme-color" content="#17181c">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Setlist Stand">
+<meta name="apple-mobile-web-app-title" content="ChartShark">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icons/icon-192.png">
@@ -32,14 +32,14 @@
 <body>
 <div class="app">
   <header class="top">
-    <h1>Setlist Stand</h1>
+    <h1>ChartShark</h1>
     <div class="tabs" role="tablist">
       <button role="tab" id="tLib" aria-selected="true">Library</button>
       <button role="tab" id="tSets" aria-selected="false">Setlists</button>
     </div>
   </header>
   <div id="warn"></div>
-  <div id="nostart" class="nostart" role="alert" hidden><p>Setlist Stand did not start. Your music is safe.</p><button type="button" id="nostartReload">Reload</button></div>
+  <div id="nostart" class="nostart" role="alert" hidden><p>ChartShark did not start. Your music is safe.</p><button type="button" id="nostartReload">Reload</button></div>
   <main id="view"></main>
 </div>
 <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>

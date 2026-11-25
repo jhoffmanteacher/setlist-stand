@@ -97,7 +97,7 @@ async function installedWithSong(ctx){
   return s;
 }
 const sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
-/* The app comes back on screen (no reload): what a tablet does when Setlist Stand is switched back to. */
+/* The app comes back on screen (no reload): what a tablet does when ChartShark is switched back to. */
 const backOnScreen = page => page.evaluate(() => { window.__ssHeal = null; Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); document.dispatchEvent(new Event('visibilitychange')); });
 /* SHA-256 of every entry of cache `name`, read in the page (null when missing). */
 const cachedHashes = (page, name, want) => page.evaluate(async ([name, want]) => {

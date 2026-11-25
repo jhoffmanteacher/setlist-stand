@@ -1,4 +1,6 @@
-# Setlist Stand
+# ChartShark
+
+Renamed from Setlist Stand (Jonathan, 2026-11-25). Only the name people see changed. These keep the old name ON PURPOSE, do not rename them: the address `/setlist-stand/` and the repo, IndexedDB `setlist-stand`, the `app:'setlist-stand'` field in backups, share packages and chart update files, backup file names `setlist-stand-backup-...`, the cache prefix `setlist-stand-` and the Drive folder's `setlistStand` mark. New Drive folders are named "ChartShark" (`FOLDER_NAME`); one made before the rename is still "Setlist Stand" until the person renames it, and is found by its mark either way.
 
 An installable web app (PWA) for a teacher and gigging musician who plays PDF charts from an Android or iPad tablet. Library of PDF charts, setlists, a full-screen viewer with page turns, pen/highlighter annotation, print and backup. It must work fully offline at a gig. One person per library, no sharing. Scope and settled decisions: `docs/DECISIONS.md`. Detail per area is in `.claude/rules/` (loads when you touch matching files).
 

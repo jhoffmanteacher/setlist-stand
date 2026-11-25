@@ -11,7 +11,7 @@ export const SCOPE = 'https://www.googleapis.com/auth/drive.file';        // the
 export const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 export const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
-export const FOLDER_NAME = 'Setlist Stand';
+export const FOLDER_NAME = 'ChartShark';
 
 /* Where Google sends the person back to: the app's own start address ('../' from this file, so it is
    https://jhoffmanteacher.github.io/setlist-stand/ there and the loops' own server here), never typed. It has to equal
