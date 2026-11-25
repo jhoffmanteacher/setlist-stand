@@ -64,6 +64,23 @@ async function cspLoop(ctx){
   try{
     const {page} = s;
     await watchCsp(page);
+    /* pdf.js 3.11.174 is older than CVE-2024-4367, so every PDF must reach it with isEvalSupported:false (js/util.js's stand-in). The vendored
+       library is wrapped, from before any page script, by a spy that records what each getDocument call RECEIVES: the stand-in then wraps the
+       spy, so a stand-in that passes true, one that is missing, or a call that goes round it (through the prototype) shows up here. */
+    await page.addInitScript(() => {
+      let lib; window.__pdfOpens = [];
+      Object.defineProperty(window, 'pdfjsLib', {configurable: true, get(){ return lib; }, set(v){
+        if(!v || v.noEval || typeof v.getDocument !== 'function'){ lib = v; return; }      // the stand-in (js/util.js), or something that is not the library
+        const real = v.getDocument;
+        lib = Object.create(v, {getDocument: {value: src => { window.__pdfOpens.push({isEvalSupported: src ? src.isEvalSupported : undefined}); return real.call(v, src); }}});
+      }});
+    });
+    const guarded = async what => {
+      const opens = await page.evaluate(() => window.__pdfOpens || []);
+      assert(opens.length > 0, `${what}: no PDF reached pdfjsLib.getDocument (the guard cannot be checked)`);
+      const bad = opens.filter(o => o.isEvalSupported !== false);
+      assert(!bad.length, `${what}: ${bad.length} of ${opens.length} PDF opens reached pdf.js without isEvalSupported:false (CVE-2024-4367 is blocked by this and by the page policy)`);
+    };
     await s.goto();
     await s.swReady();
 
@@ -126,6 +143,7 @@ async function cspLoop(ctx){
     await noModal(page);
     const doc = await PDFDocument.load(await fsp.readFile(pdf.file));
     assert(doc.getPageCount() === 4, 'printed PDF has ' + doc.getPageCount() + ' pages, expected 4');
+    await guarded('after importing, viewing, cropping and printing');
 
     /* backup, wipe, restore, reload through the service worker */
     const zip = await backupNow(page);
@@ -138,6 +156,7 @@ async function cspLoop(ctx){
     await page.waitForSelector('#libList [data-open]');
     assert(await page.evaluate(() => !!navigator.serviceWorker.controller), 'the reload is not controlled by the service worker');
     await openSong(page, 'Three-page');
+    await guarded('after the reload through the service worker');
     await page.click('#vBack');
 
     /* fonts are the bundled ones */

@@ -406,6 +406,51 @@ const precache = parsePrecache(swSrc);
   }
 }
 
+// ---------------------------------------------------------------- (c4) pdf.js eval guard
+/* The vendored pdf.js (3.11.174) is older than CVE-2024-4367 (fixed in 4.2.67): a hostile PDF could run code when pdf.js is allowed to
+   compile code. Two things block it here: the page's CSP has no 'unsafe-eval' (pinned above), and js/util.js replaces window.pdfjsLib
+   with a stand-in whose getDocument adds isEvalSupported:false AFTER the caller's options (so a caller cannot turn it back on). This
+   pins the second: the stand-in is there and passes false on every call; no app file sets isEvalSupported to anything else; every
+   file that calls pdfjsLib.getDocument( imports ./util.js (which installs the stand-in before any PDF opens); nothing calls
+   getDocument on another object (the real library under the stand-in, reached through its prototype, or a saved copy). */
+{
+  const name = 'pdf.js eval guard';
+  const bad = [], text = new Map();
+  for (const f of jsFiles()) {
+    const [t, why] = tryStrip(stripJsComments, read(f));
+    why ? bad.push(`cannot parse ${f} (${why})`) : text.set(f, t);
+  }
+  const STAND_IN_CALL = /getDocument\s*:\s*\{\s*value\s*:[^}]*?=>\s*getDocument\(\s*\{\s*\.\.\.[^{}]*?,\s*isEvalSupported\s*:\s*false\s*\}\s*\)/;
+  const CAPTURE = /getDocument\s*=\s*lib\.getDocument\b/;
+  const util = text.get('js/util.js');
+  if (!util) bad.push('js/util.js is missing');
+  else {
+    if (!/window\.pdfjsLib\s*=\s*Object\.create\(\s*lib\b/.test(util)) bad.push('js/util.js no longer replaces window.pdfjsLib with the stand-in');
+    if (!STAND_IN_CALL.test(util)) bad.push("the stand-in in js/util.js does not call getDocument with isEvalSupported:false after the caller's options");
+    if (!CAPTURE.test(util)) bad.push('js/util.js does not keep the real getDocument for the stand-in to call');
+    if (!/noEval\s*:\s*\{\s*value\s*:\s*true\s*\}/.test(util)) bad.push('the stand-in in js/util.js does not set noEval');
+  }
+  let callers = 0;
+  for (const [f, t0] of text) {
+    for (const m of t0.matchAll(/isEvalSupported\b(?!\s*:\s*false\b)/g)) bad.push(`${f}:${lineOf(t0, m.index)} isEvalSupported is set to something other than false`);
+    // the stand-in's own two uses of the word are the only ones allowed to be anything but pdfjsLib.getDocument(
+    const t = f === 'js/util.js' ? t0.replace(STAND_IN_CALL, '').replace(CAPTURE, '') : t0;
+    for (const m of t.matchAll(/\bgetDocument\b/g)) {
+      const before = t.slice(0, m.index), after = t.slice(m.index + 11);
+      if (!(/\bpdfjsLib\s*\.\s*$/.test(before) && /^\s*\(/.test(after))) bad.push(`${f}:${lineOf(t, m.index)} getDocument is used other than as pdfjsLib.getDocument(`);
+    }
+    if (f !== 'js/util.js') {
+      for (const m of t.matchAll(/\bpdfjsLib\s*=(?!=)/g)) bad.push(`${f}:${lineOf(t, m.index)} pdfjsLib is assigned outside js/util.js`);
+      for (const m of t.matchAll(/getPrototypeOf\s*\(\s*(?:window\s*\.\s*)?pdfjsLib\b|pdfjsLib\s*\.\s*__proto__/g)) bad.push(`${f}:${lineOf(t, m.index)} reaches the real pdf.js under the stand-in`);
+    }
+    if (/\bpdfjsLib\s*\.\s*getDocument\s*\(/.test(t)) {
+      callers++;
+      if (f !== 'js/util.js' && !/\bfrom\s*['"]\.\/util\.js['"]/.test(t)) bad.push(`${f} calls pdfjsLib.getDocument( but does not import ./util.js (which installs the stand-in)`);
+    }
+  }
+  bad.length ? fail(name, `${bad.slice(0, 6).join('; ')}${bad.length > 6 ? `; and ${bad.length - 6} more` : ''}`) : pass(`${name} (${callers} files call getDocument, all through the stand-in)`);
+}
+
 // ---------------------------------------------------------------- (g) boot script
 /* js/boot.js registers the service worker and shows "Updated. Tap to reload" even when a module of the app does not load,
    so: it exists, it is a CLASSIC script (no import/export, no import()), index.html loads it FIRST of all scripts with

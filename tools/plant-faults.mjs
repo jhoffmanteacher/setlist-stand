@@ -210,6 +210,13 @@ const FAULTS = [
     loop: 'filecheck j', why: 'a Windows checkout left CRLF on disk from before .gitattributes: the check passes and the hash table is made from bytes GitHub Pages will not serve'},
   {id: 'filecheck-bump-writes-from-crlf-files', file: 'tools/checks.mjs', find: "    if (crlf.length) { console.error(`not bumped: ${crlfFix(crlf)}`); process.exit(1); }\n", replace: '',
     loop: 'filecheck j', why: '--bump writes a table made from CRLF files'},
+  /* The pdf.js eval guard (2026-11-24): pdf.js 3.11.174 is older than CVE-2024-4367; the CSP has no unsafe-eval and the stand-in in js/util.js passes isEvalSupported:false. These must go red in a browser loop AND in checks.mjs. */
+  {id: 'pdfjs-stand-in-removed', file: 'js/util.js', find: 'window.pdfjsLib = Object.create(lib, {', replace: 'window.pdfjsLibStandIn = Object.create(lib, {',
+    loop: 'hygiene: CSP holds', also: ['checks'], why: 'every PDF opens through the real pdf.js with its default (eval allowed): the guard against CVE-2024-4367 is one block short'},
+  {id: 'pdfjs-eval-turned-on', file: 'js/util.js', find: 'getDocument({...opts(src), isEvalSupported:false})', replace: 'getDocument({...opts(src), isEvalSupported:true})',
+    loop: 'hygiene: CSP holds', also: ['checks'], why: 'the stand-in is there but tells pdf.js eval is allowed: the page policy is the only block left'},
+  {id: 'pdfjs-call-bypasses-stand-in', file: 'js/viewer.js', find: 'const task = pdfjsLib.getDocument({data:new Uint8Array(await blob.arrayBuffer())});', replace: 'const task = Object.getPrototypeOf(pdfjsLib).getDocument({data:new Uint8Array(await blob.arrayBuffer())});',
+    loop: 'hygiene: CSP holds', also: ['checks'], why: 'the viewer opens every chart through the real pdf.js, not the stand-in: eval is allowed for every PDF it shows'},
   {id: 'filecheck-no-log-line', file: 'sw.js', find: "c.postMessage({ type: 'ss-bad-file', file: key });", replace: 'void c;',
     loop: 'filecheck a', why: 'a stored file that fails the check is dropped without a word: the Problem log never shows it'},
   {id: 'page-turn-mid-stroke', file: 'js/viewer.js', find: 'export async function next(){\n  if(V.busy || inkBusy() ||', replace: 'export async function next(){\n  if(V.busy ||',
