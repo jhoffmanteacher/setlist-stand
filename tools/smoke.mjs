@@ -22,6 +22,7 @@ import zlib from 'node:zlib';
 import {createHash} from 'node:crypto';
 import {launchBrowser, WEBKIT} from './loops/browser.mjs';
 import {acquireSlot} from './loops/slot.mjs';
+import {tableProblem} from './loops/swtable.mjs';
 import {songAct, songActIn, answerDelete, songDelete} from './loops/songrow.mjs';
 import {answerRestore, closeRestored} from './loops/harness.mjs';
 import {setAct} from './loops/setrow.mjs';
@@ -2337,6 +2338,7 @@ const TMP = await fsp.mkdtemp(path.join(os.tmpdir(), 'setlist-smoke-'));
 process.on('exit', () => { if(!process.env.SS_KEEP_TMP && !failed) try{ fs.rmSync(TMP, {recursive: true, force: true}); }catch(e){} });   // a failed run keeps its folder (the failure screenshot is in it)
 let failed = 0, server, browser;
 try{
+  { const why = tableProblem(ROOT); if(why){ console.log('FAIL: nothing was run: ' + why); process.exit(1); } }      // a stale table keeps the worker from installing: say so
   await waitFixtures();
   server = await startServer();
   const base = `http://127.0.0.1:${server.address().port}/`;

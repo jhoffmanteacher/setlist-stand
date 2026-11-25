@@ -15,6 +15,7 @@ import {pathToFileURL} from 'node:url';
 import {launchBrowser, WEBKIT} from './loops/browser.mjs';
 import {ROOT, startServer, openSession, privatePath} from './loops/harness.mjs';
 import {acquireSlot} from './loops/slot.mjs';
+import {tableProblem} from './loops/swtable.mjs';
 
 const args = process.argv.slice(2);
 const opt = n => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
@@ -29,8 +30,9 @@ for(const f of fs.readdirSync(dir).filter(f => f.endsWith('.loop.mjs')).sort()){
 }
 if(args.includes('--list')){ for(const l of all) console.log(`${l.file}  ${l.name}${l.needs ? '  [needs ' + l.needs.join(', ') + ']' : ''}`); process.exit(0); }
 
-await acquireSlot('loops');            // one browser run at a time, and only when the Mac is not busy
 const root = opt('--root') ? path.resolve(opt('--root')) : ROOT;
+{ const why = tableProblem(root); if(why){ console.log('FAIL: nothing was run: ' + why); process.exit(1); } }      // a stale table keeps every worker from installing: say so, instead of a loop failing for no visible reason
+await acquireSlot('loops');            // one browser run at a time, and only when the Mac is not busy
 const server = await startServer({root});
 const browser = await launchBrowser();
 const o = {seed: Number(opt('--seed') || 1), case: opt('--case') == null ? null : Number(opt('--case')), cases: opt('--cases') == null ? null : Number(opt('--cases')), verbose: args.includes('--verbose'), wait: Number(opt('--wait') || 0)};

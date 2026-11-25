@@ -116,7 +116,7 @@ function hashRows(list) {
   });
 }
 // Files (repo paths) whose copy on disk differs from the copy git holds ONLY in line endings: CRLF on disk, LF in git. This is what a
-// checkout made while core.autocrlf was on leaves behind when .gitattributes (`* -text`) arrives later: git status stays clean (it does
+// checkout made while core.autocrlf was on leaves behind when .gitattributes (`* -text`) arrives later: git status can stay clean (it does
 // not read a file again while its size and time are unchanged), but a table made from these files is wrong for the bytes a commit holds
 // and GitHub Pages serves. A file git has not seen, or no git at all, is not reported.
 function crlfOnly(files) {
@@ -130,7 +130,7 @@ function crlfOnly(files) {
   }
   return out;
 }
-const crlfFix = (list) => `${list.slice(0, 6).join(', ')}${list.length > 6 ? ` and ${list.length - 6} more` : ''} have Windows line endings (CRLF) on disk but LF in git (a checkout made while core.autocrlf was on, before .gitattributes said "* -text"), so a hash table made from them would be wrong for what git commits and GitHub Pages serves. Fix: git config core.autocrlf false, then git checkout HEAD -- ${list.length > 6 ? '. (or a fresh clone)' : list.join(' ')}, then node tools/checks.mjs --bump`;
+const crlfFix = (list) => `${list.slice(0, 6).join(', ')}${list.length > 6 ? ` and ${list.length - 6} more` : ''} have Windows line endings (CRLF) on disk but LF in git (a checkout made while core.autocrlf was on, before .gitattributes said "* -text"), so a hash table made from them would be wrong for what git commits and GitHub Pages serves. Fix (nothing is lost: only the line endings differ): git config core.autocrlf false, then ${list.length > 6 ? 'make a fresh clone' : `delete ${list.join(' ')} and bring them back with git checkout -- ${list.join(' ')} (git does not rewrite a file whose size and time it already knows, so the files must be deleted first)`}, then node tools/checks.mjs --bump`;
 
 // sw.js text with its HASHES table replaced by `rows`, one entry per line, sorted (the one format; the check compares text).
 const withTable = (src, rows) => src.replace(HASHES_RE, () => `const HASHES = {\n${rows.map(([k, h]) => `  '${k}': '${h}',`).join('\n')}\n}`);
@@ -502,6 +502,8 @@ const precache = parsePrecache(swSrc);
         if (sha256Hex(fs.readFileSync(f)) !== have.get(u)) bad.push(`wrong hash for ${u}`);
       }
       for (const k of have.keys()) if (!listed.includes(k)) bad.push(`entry for ${k} is not in PRECACHE`);
+      // The worker finds an entry by the path the browser asks for, so it must be written as that plain path ('./' for the folder): './js/x.js' or a %-escape would pass every other check and then never be served from the cache.
+      for (const u of listed) if (u !== './' && new URL(u, 'https://h/b/').pathname.slice(3) !== u) bad.push(`${u} is not written as a plain path (the worker would never find it; write ${new URL(u, 'https://h/b/').pathname.slice(3)})`);
       if (!bad.length) {
         let exact = null;
         try { exact = withTable(swSrc, hashRows(listed)) === swSrc; } catch { exact = true; }
