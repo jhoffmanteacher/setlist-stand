@@ -37,7 +37,7 @@ const PINNED_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'uns
   + "manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
 // A remote URL: http(s):// in any case, or a protocol-relative //host in a string, after src=/href= or in url( ).
 const URL_RE = /https?:\/\/[^\s'"`)<>]*|(?:['"`]|\b(?:src|href)\s*=\s*['"]?|url\(\s*['"]?)\/\/[a-z0-9][^\s'"`)<>]*/gi;
-const CSP_META = /<meta\b[^>]*?\bhttp-equiv\s*=\s*(["']?)content-security-policy\1[^>]*>/gi;
+const CSP_META = /<meta\b[^>]*?(?<![\w-])http-equiv\s*=\s*(["']?)content-security-policy\1[^>]*>/gi;
 
 // Google client secret markers, built from pieces so this file does not flag itself.
 const SECRET_MARKS = ['client' + '_secret', 'GOCSPX' + '-'];
@@ -394,7 +394,7 @@ const precache = parsePrecache(swSrc);
   } else if (metas.length !== 1) {
     fail(name, metas.length ? `${metas.length} Content-Security-Policy meta tags in index.html, need exactly 1` : 'no Content-Security-Policy meta tag in index.html');
   } else {
-    const content = /\bcontent\s*=\s*(["'])([\s\S]*?)\1/i.exec(metas[0][0]);
+    const content = /(?<![\w-])content\s*=\s*(["'])([\s\S]*?)\1/i.exec(metas[0][0]);   // not data-content=
     // A CSP meta only governs what comes after it, so no script, link or style tag may come before it.
     const early = /<(script|link|style)\b/i.exec(html.slice(0, metas[0].index));
     if (!content) fail(name, 'the Content-Security-Policy meta tag has no content');
