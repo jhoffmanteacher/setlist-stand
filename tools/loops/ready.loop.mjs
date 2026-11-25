@@ -12,6 +12,8 @@
  *   c  it works only while the person does not: a tap, Annotate, a dialog and a hidden page each stop it, and it goes on after
  *   d  the limit, closing the viewer, a resize and the Two pages switch: the pictures go, and come back at the new size
  *   e  a song that will not open is left out and the rest is done; a single song gets no pass
+ *   f  a tap while a page is being drawn cancels that page
+ *   g  a crop edited while pictures are kept: the pictures of the new crop are used, never the old ones
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -52,7 +54,7 @@ const spyScript = () => {
   }).observe(document, {subtree: true, childList: true, characterData: true, attributes: true});
 };
 const fast = (page, extra = {}) => page.evaluate(async x => { const m = await import('./js/prerender.js'); Object.assign(m.TUNE, {idle: 60, tick: 30, kick: 150, hide: 700, gap: 0}, x); }, extra);
-const state = page => page.evaluate(async () => { const m = await import('./js/prerender.js'); const s = m.readyState(); return {snaps: s.snaps, bytes: s.bytes, running: s.running, live: s.live, failed: s.failed, shown: s.shown, keys: s.keys}; });
+const state = page => page.evaluate(async () => { const m = await import('./js/prerender.js'); const s = m.readyState(); return {snaps: s.snaps, bytes: s.bytes, running: s.running, live: s.live, cancels: s.cancels, drawing: s.drawing, failed: s.failed, shown: s.shown, keys: s.keys}; });
 const pdfStats = page => page.evaluate(() => ({...window.__pdf}));
 const vState = page => page.evaluate(async () => { const {V} = await import('./js/viewer.js'); return {qi: V.qi, page: V.page, per: V.per, prep: V.prep.size, doc: !!V.doc, title: document.querySelector('#vTitle').textContent, sub: document.querySelector('#vSub').textContent}; });
 async function waitFor(fn, what, ms = 20000){
@@ -118,6 +120,22 @@ async function textSet(ctx, opts){
   return s;
 }
 
+/* The page on show's kept pictures (pages 1 and 2) against the same pages drawn fresh with the song's own crop, and page 1's picture against page 2 drawn fresh. In the page, on the song showing. */
+const fidelity = page => page.evaluate(async () => {
+  const pre = await import('./js/prerender.js'), vw = await import('./js/viewer.js'), st = await import('./js/store.js'), {V} = vw;
+  const FULL = {x: 0, y: 0, w: 1, h: 1};
+  const cropKey = pn => { const c = st.cropOf(V.song, pn) || FULL; return [c.x, c.y, c.w, c.h].join(','); };
+  const key = pn => pre.readyState().keys.find(k => k.startsWith(V.id + '|' + pn + '|') && k.endsWith('|' + cropKey(pn)));      // the picture made for the crop the song has NOW
+  const small = cv => { const c = document.createElement('canvas'); c.width = 96; c.height = 76; const x = c.getContext('2d'); x.drawImage(cv, 0, 0, 96, 76); return x.getImageData(0, 0, 96, 76).data; };
+  const diff = (a, b) => { let t = 0; for(let i = 0; i < a.length; i++) t += Math.abs(a[i] - b[i]); return t / a.length; };
+  const [W, H] = key(1).split('|')[2].split('@')[0].split('x').map(Number);
+  const snap = [await pre.snapCanvas(pre.snapOf(key(1))), await pre.snapCanvas(pre.snapOf(key(2)))];
+  const fresh = [(await vw.paintPage(V.doc, 1, W, H, st.cropOf(V.song, 1) || FULL)).cv, (await vw.paintPage(V.doc, 2, W, H, st.cropOf(V.song, 2) || FULL)).cv];
+  const r = {same1: diff(small(snap[0]), small(fresh[0])), same2: diff(small(snap[1]), small(fresh[1])), cross: diff(small(snap[0]), small(fresh[1])), size: [snap[0].width, snap[0].height, fresh[0].width, fresh[0].height]};
+  for(const c of [...snap, ...fresh]) c.width = c.height = 0;
+  return r;
+});
+
 const PHOTOS = ['Photo One', 'Photo Two', 'Photo Three', 'Photo Four', 'Photo Five'];
 /* Three scanned songs of two pages (the LAST one cropped: the song next to the first is drawn by the normal prefetch before the pass starts, so only a later song shows whether the pass keeps crops right), a setlist of them, "Two pages" as the app has it (on). big: larger scans, so a page takes longer. */
 async function photoSet(ctx, opts = {}){
@@ -157,6 +175,11 @@ export const loops = [
       const d = await pdfStats(page), now = await vState(page);
       assert(d.open === 1 + now.prep, `${d.open} pdf.js documents are open, the viewer holds ${1 + now.prep} (the one showing and ${now.prep} prepared): the pass left one open`);
       assert(d.max <= 3 + 1, `up to ${d.max} documents were open at once`);
+      /* a turn later, with everything kept: the line stays away (a pass with nothing to do says nothing) */
+      const n0 = (await page.evaluate(() => window.__ready)).length;
+      await page.keyboard.press('ArrowRight'); await sleep(2500);
+      const after = (await page.evaluate(() => window.__ready)).slice(n0);
+      assert(!after.length, 'the "Ready" line came back after a turn with everything already kept: ' + JSON.stringify(after));
       assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
     } finally { await s.close(); }
   }
@@ -168,32 +191,27 @@ export const loops = [
     try{
       await play(page); await kept(page, 6);
       /* a kept page against the same page drawn fresh (the JPEG costs a little, never the page), and against ANOTHER page (so "equal" means something) */
-      const f = await page.evaluate(async () => {
-        const pre = await import('./js/prerender.js'), vw = await import('./js/viewer.js'), {V} = vw;
-        const keys = pre.readyState().keys.filter(k => k.startsWith(V.id + '|'));
-        const k1 = keys.find(k => k.split('|')[1] === '1'), k2 = keys.find(k => k.split('|')[1] === '2');
-        const [W, H] = k1.split('|')[2].split('@')[0].split('x').map(Number), FULL = {x: 0, y: 0, w: 1, h: 1};
-        const small = cv => { const c = document.createElement('canvas'); c.width = 96; c.height = 76; const x = c.getContext('2d'); x.drawImage(cv, 0, 0, 96, 76); return x.getImageData(0, 0, 96, 76).data; };
-        const diff = (a, b) => { let t = 0; for(let i = 0; i < a.length; i++) t += Math.abs(a[i] - b[i]); return t / a.length; };
-        const snap1 = await pre.snapCanvas(pre.snapOf(k1)), snap2 = await pre.snapCanvas(pre.snapOf(k2));
-        const fresh1 = await vw.paintPage(V.doc, 1, W, H, FULL), fresh2 = await vw.paintPage(V.doc, 2, W, H, FULL);
-        const r = {same1: diff(small(snap1), small(fresh1.cv)), same2: diff(small(snap2), small(fresh2.cv)), cross: diff(small(snap1), small(fresh2.cv)), size: [snap1.width, snap1.height, fresh1.cv.width, fresh1.cv.height]};
-        for(const c of [snap1, snap2, fresh1.cv, fresh2.cv]){ c.width = c.height = 0; }
-        return r;
-      });
+      const f = await fidelity(page);
       assert(f.size[0] === f.size[2] && f.size[1] === f.size[3], `a kept page is ${f.size[0]}x${f.size[1]}, the page drawn fresh ${f.size[2]}x${f.size[3]}`);
       assert(f.same1 < 4 && f.same2 < 4, `a kept page differs from the page drawn fresh by ${f.same1.toFixed(2)} and ${f.same2.toFixed(2)} (of 255) on average, want under 4`);
       assert(f.cross > 3 * Math.max(f.same1, f.same2, 1), `a kept page differs from ANOTHER page by only ${f.cross.toFixed(2)} (against ${Math.max(f.same1, f.same2).toFixed(2)} from its own): the comparison cannot tell pages apart`);
       /* the turns: forward through the songs and back; the last song has a crop, so its pages are kept cropped */
       await page.evaluate(() => { window.__pdf.renders = 0; });
       const seen = [];
-      for(const key of ['ArrowRight', 'ArrowRight', 'ArrowLeft', 'ArrowLeft']){
+      for(const key of ['ArrowRight', 'ArrowRight']){
+        await page.keyboard.press(key); await sleep(500);
+        seen.push((await vState(page)).title);
+      }
+      const d = await pdfStats(page);
+      assert(d.renders === 0, `${d.renders} pages were drawn by pdf.js during turns that every page of was already kept for`);
+      /* the last song is cropped: its kept pages are the cropped pages, equal to the pages drawn fresh with that crop */
+      const f3 = await fidelity(page);
+      assert(f3.same1 < 4 && f3.same2 < 4, `the CROPPED song's kept pages differ from the pages drawn fresh by ${f3.same1.toFixed(2)} and ${f3.same2.toFixed(2)} (of 255) on average, want under 4`);
+      for(const key of ['ArrowLeft', 'ArrowLeft']){
         await page.keyboard.press(key); await sleep(500);
         seen.push((await vState(page)).title);
       }
       assert(seen.join(' > ') === 'Photo Two > Photo Three > Photo Two > Photo One', 'the turns showed ' + seen.join(' > '));
-      const d = await pdfStats(page);
-      assert(d.renders === 0, `${d.renders} pages were drawn by pdf.js during turns that every page of was already kept for`);
       assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
     } finally { await s.close(); }
     /* the control: switched off, nothing is kept and the same turns DO draw (so the spy above sees what it should) */
@@ -249,9 +267,11 @@ export const loops = [
       await waitFor(async () => (await snaps()) >= 1, 'the pass never kept a page', 15000);
       await quiet('a tap', () => page.mouse.click(640, 400));
       await quiet('a page turn', () => page.keyboard.press('ArrowRight'));
+      await quiet('a redraw (what the Crop screen and a resize do)', () => page.evaluate(async () => (await import('./js/viewer.js')).draw()));
       await waitFor(() => page.evaluate(async () => !(await import('./js/viewer.js')).V.busy), 'the turn never finished', 10000);      // a title tap during a turn does nothing
       await stays('a dialog was open', async () => { await page.click('#vTitle'); await page.locator('.modal').waitFor(); }, async () => { await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('.modal')); });
       await stays('Annotate was on', () => page.click('#vAnn'), () => page.click('#tDone'));
+      await stays('the Crop screen was open', () => page.click('#vCrop'), async () => { await page.click('#cropCancel'); await page.waitForFunction(() => document.querySelector('#cropper').hidden); });
       await stays('the page was hidden', () => page.evaluate(() => Object.defineProperty(document, 'hidden', {configurable: true, get: () => true})), () => page.evaluate(() => { delete document.hidden; }));
       await fast(page, {idle: 60, gap: 0});
       await kept(page, 10);
@@ -321,6 +341,50 @@ export const loops = [
       await page.waitForSelector('#viewer.on #stage .sheet canvas'); await sleep(2000);
       const one = await state(page);
       assert(one.snaps === 0 && !one.running, `a single song kept ${one.snaps} pictures (running ${one.running})`);
+    } finally { await s.close(); }
+  }
+},
+{
+  name: 'ready f: a tap while a page is being drawn cancels that page',
+  async run(ctx){
+    const s = await photoSet(ctx, {big: true}), {page} = s;
+    try{
+      await fast(page, {idle: 60, kick: 100, gap: 0});
+      await play(page);
+      let cancelled = 0;
+      for(let attempt = 0; attempt < 4 && !cancelled; attempt++){
+        await waitFor(async () => (await state(page)).drawing, 'the pass never had a page under way', 15000);
+        await page.mouse.click(640, 400);
+        await sleep(300);
+        cancelled = (await state(page)).cancels;
+      }
+      assert(cancelled >= 1, 'a tap while a page was being drawn did not cancel it (pdf.js kept drawing a page nobody is waiting for)');
+      await page.evaluate(() => document.querySelector('#viewer').classList.remove('hide'));
+      await kept(page, 6);
+      assert((await state(page)).live === 0, 'a canvas is still held after the pass');
+      assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); }
+  }
+},
+{
+  name: 'ready g: a crop edited while pictures are kept: the pictures of the new crop are used, never the old ones',
+  async run(ctx){
+    const s = await photoSet(ctx), {page} = s;
+    try{
+      await play(page); await kept(page, 6);
+      /* Photo Two gets a crop, as the Crop screen would store it, and the viewer redraws (js/crop.js does both) */
+      await cropSongs(page, ['Photo Two'], {x: .25, y: .2, w: .5, h: .6});
+      await page.evaluate(async () => (await import('./js/viewer.js')).draw());
+      await waitFor(async () => { const x = await state(page); return !x.running && x.keys.filter(k => k.endsWith('|0.25,0.2,0.5,0.6')).length === 2 ? x : null; }, async () => `the pictures for the new crop were never made: ${JSON.stringify((await state(page)).keys)}`, 20000);
+      const after = await state(page);
+      assert(after.snaps === 6, `after the crop edit ${after.snaps} pictures are kept, want 6: the pictures of the old crop were not let go`);
+      await page.evaluate(() => { window.__pdf.renders = 0; });
+      await page.keyboard.press('ArrowRight'); await sleep(700);
+      assert((await vState(page)).title === 'Photo Two', 'the turn did not reach Photo Two');
+      assert((await pdfStats(page)).renders === 0, 'the turn into the song with the new crop drew with pdf.js: the pictures made for the new crop were not used');
+      const f = await fidelity(page);
+      assert(f.same1 < 4 && f.same2 < 4, `with a new crop the page on show differs from the page drawn fresh by ${f.same1.toFixed(2)} and ${f.same2.toFixed(2)} (of 255): a picture of the OLD crop was used`);
+      assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
     } finally { await s.close(); }
   }
 },

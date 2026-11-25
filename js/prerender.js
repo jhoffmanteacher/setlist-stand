@@ -31,13 +31,13 @@ export const TUNE = {idle: 700, tick: 200, kick: 1200, hide: 4000, max: MAX_BYTE
 
 const snaps = new Map();           // key -> {blob, pw, ph, cw, ch, crop, bytes}
 const failed = new Set();          // keys (or 'song:<id>') that cannot be drawn: not tried again until the next reset
-let env = null, run = 0, running = false, bytes = 0, live = 0, lastTouch = 0, inflight = null, kickT = 0, hideT = 0, shown = {done: 0, total: 0, state: 'off'};
+let env = null, run = 0, running = false, bytes = 0, live = 0, cancels = 0, lastTouch = 0, inflight = null, kickT = 0, hideT = 0, shown = {done: 0, total: 0, state: 'off'};
 
 export const readyOff = () => { try{ return localStorage.getItem('ss-ready') === '0'; }catch(e){ return false; } };
 export const snapKey = (id, pn, W, H, dpr, cr) => id + '|' + pn + '|' + W + 'x' + H + '@' + dpr + '|' + [cr.x, cr.y, cr.w, cr.h].join(',');
 export const snapOf = key => (readyOff() ? null : snaps.get(key) || null);
 /* For a loop: what is kept and how the pass stands. */
-export const readyState = () => ({snaps: snaps.size, bytes, running, live, failed: failed.size, shown: {...shown}, keys: [...snaps.keys()]});
+export const readyState = () => ({snaps: snaps.size, bytes, running, live, cancels, drawing: !!inflight, failed: failed.size, shown: {...shown}, keys: [...snaps.keys()]});
 
 /* What viewer.js hands over:
      plan()                      the pages to keep, in play order: [{id, pn, key, ...whatever paint() needs}]; [] when nothing is to be done
@@ -49,8 +49,9 @@ export function configure(e){ env = e; }
 
 /* A snapshot put back on a canvas, or null (the caller then draws the page with pdf.js as it always did). */
 export async function snapCanvas(s){
+  let cv = null;
   try{
-    const cv = document.createElement('canvas');
+    cv = document.createElement('canvas');
     cv.width = s.pw; cv.height = s.ph;
     const ctx = cv.getContext('2d');
     if(window.createImageBitmap){
@@ -65,7 +66,7 @@ export async function snapCanvas(s){
       } finally { URL.revokeObjectURL(url); }
     }
     return cv;
-  }catch(e){ return null; }
+  }catch(e){ if(cv){ release(cv); } return null; }
 }
 
 /* Something the person did: work stops at once (a page being drawn is cancelled) and waits IDLE_MS. */
@@ -105,19 +106,26 @@ const closeDoc = d => { if(d){ try{ d.destroy(); }catch(e){} } };
 async function sweep(my){
   if(!env || running || readyOff()) return;
   running = true;
-  let doc = null, docId = null;
+  let doc = null, docId = null, made = 0;       // made: pages this pass has kept (a pass with nothing to do, after a turn, says nothing)
   try{
     for(;;){
       if(my !== run) return;
       const plan = env.plan();
       if(!plan.length){ show(0, 0, 'off'); return; }
+      /* a picture the plan no longer asks for (a crop was edited, so its key changed) is let go: only what a turn can use stays in memory */
+      const wanted = new Set(plan.map(p => p.key));
+      for(const [k, v] of snaps) if(!wanted.has(k)){ snaps.delete(k); bytes -= v.bytes; }
       /* pages that cannot be drawn (a page that failed, a song that will not open) are not counted: "Ready 9 of 9" is the end */
       const bad = p => failed.has(p.key) || failed.has('song:' + p.id);
       const keys = [...new Set(plan.filter(p => !bad(p)).map(p => p.key))];
       const done = keys.filter(k => snaps.has(k)).length;
-      show(done, keys.length, 'run');
       const item = plan.find(p => !snaps.has(p.key) && !bad(p));
-      if(!item || bytes >= TUNE.max){ show(done, keys.length, 'done'); hideT = setTimeout(() => { if(my === run) show(0, 0, 'off'); }, TUNE.hide); return; }
+      if(!item || bytes >= TUNE.max){
+        if(made){ show(done, keys.length, 'done'); hideT = setTimeout(() => { if(my === run) show(0, 0, 'off'); }, TUNE.hide); }
+        else show(0, 0, 'off');
+        return;
+      }
+      show(done, keys.length, 'run');
       if(!await calm(my)) return;
       if(docId !== item.id){
         closeDoc(doc); doc = null; docId = item.id;
@@ -126,19 +134,19 @@ async function sweep(my){
         if(!doc){ failed.add('song:' + item.id); continue; }
         continue;                          // opening a big PDF takes a while: look again (plan, calm) before drawing anything
       }
-      let cv = null, cancelled = false;
+      let cv = null, cancelled = false, task = null;
       try{
-        const r = await env.paint(doc, item, t => { inflight = t; });
+        const r = await env.paint(doc, item, t => { task = inflight = t; });
         cv = r.cv; live++;
         if(my !== run) return;
         const blob = await new Promise(ok => { try{ cv.toBlob(ok, 'image/jpeg', QUALITY); }catch(e){ ok(null); } });
         if(!blob){ failed.add(item.key); }
-        else if(my === run){ snaps.set(item.key, {blob, pw: cv.width, ph: cv.height, cw: r.cw, ch: r.ch, crop: item.crop, bytes: blob.size}); bytes += blob.size; }
+        else if(my === run){ snaps.set(item.key, {blob, pw: cv.width, ph: cv.height, cw: r.cw, ch: r.ch, crop: item.crop, bytes: blob.size}); bytes += blob.size; made++; }
       }catch(e){
         /* pdf.js says a cancelled render by an exception named RenderingCancelledException: the person did something, the page is tried again */
-        if(e && e.name === 'RenderingCancelledException') cancelled = true; else failed.add(item.key);
+        if(e && e.name === 'RenderingCancelledException'){ cancelled = true; cancels++; } else failed.add(item.key);
       } finally {
-        inflight = null;
+        if(inflight === task) inflight = null;          // only this page's own task (a pass that was stopped must not clear the next pass's)
         if(cv){ release(cv); if(cv.width === 0) live--; }          // emptied at once: only then is it let go of (live counts the canvases held, for a loop)
       }
       await sleep(cancelled ? 0 : TUNE.gap);

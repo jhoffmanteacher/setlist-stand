@@ -18,7 +18,7 @@
  *   in the Problem log).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-25-1';
+const VERSION = '2026-11-25-2';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -103,7 +103,7 @@ const PRECACHE = [
    path as written in PRECACHE, so './' and 'index.html' (the same file) are two lines. */
 const HASHES = {
   './': 'f848241e7e20c422e325e112bdb15ec141264bb45b37f75a56e557110a19f0f4',
-  'css/app.css': 'e9985eb4f25990a921badc29be91c7152f6b5f4d5fe8963fb9b4656ea4311e12',
+  'css/app.css': '4869a72557c21cb60e8d3c3f0902adf4ca0ea87fc8f00a1cf393d20534a071fa',
   'icons/apple-touch-icon.png': '1dac7b957463bf6d4bb930b11c8bd93532c27bf9b35a0a0015e57456b37fbdac',
   'icons/icon-192.png': '5f615555130aa75b28a08c4b4b013f34caa525a3de92709924eeb3e9a47c63d4',
   'icons/icon-512.png': '129a3a7abca86a98195fe797d1d9c7deaf234bcdbc3fc576317f6ae3603e7b70',
@@ -138,7 +138,7 @@ const HASHES = {
   'js/newversion.js': '75187c37c570b3e9d2218920a77481d9caad8c5e47d91136ae54c35cb109daac',
   'js/nudge.js': '4ddff5db637953081e764fdabf424294de67947775ce90c803dd23d505b9af59',
   'js/pagecache.js': 'd8ca855e0fef91f0c943ca50402fcbbe6f53e1505df5d4749f351ba36582f8fd',
-  'js/prerender.js': '514316ab1dcaca23c8a4df18b72422de523bcc752a8cf4d70644a119ae480c22',
+  'js/prerender.js': '6e55f585026c09cea658af95320da6b02d8bfe83fa5fc7551d8bca019a02c0d9',
   'js/print.js': 'b27b90e8eb235ab3f93f483cbf3cb02d00250ce96b51f22ec593783c39a0a42b',
   'js/readycheck.js': '82221cdc899a677d6af9ed280c31e26bb90df08e8d6db4c477ccc71c43d06dbd',
   'js/restoreask.js': '5a455f521fb06481df08a1ac328eddb0d5f07a7cb32d26023a64ebcd23407fe6',
@@ -164,7 +164,7 @@ const HASHES = {
   'js/syncplan.js': '51bd34f6612f3428da13a11669da6a9ffe3bff6e502135c47d4f44bcad51e16d',
   'js/syncui.js': '864b7b64237c7561ad2138d50e1f6a10a95f87ff937d66af383c4ab682ebee56',
   'js/util.js': 'e65628f9474f6b30c0dfb2f7ad92528d92559abf86f4d3b9398c67e4398ebd9c',
-  'js/viewer.js': '7e1de28bd1cb26eebe6054efa376eada8203f9298581b6684d43295ace38be91',
+  'js/viewer.js': 'd19a9aa5e28d55b325692c4f2573d78b6f4285a752f28f4ef22c3905d0a03c10',
   'js/zipread.js': '5b3bb0ce54c81b1f5210970bb80ec39085c79369c8e7b75d860500d015410116',
   'manifest.webmanifest': 'd6d79b0cb0f3c45727014d36ddd0968fc41bd586129ef18b1225f296d42baa91',
   'vendor/fonts/barlow-400.ttf': 'a35caa4687f434d66453c1fe423d7074cfa9fd7ab80c19b0780f3862887d2fc9',

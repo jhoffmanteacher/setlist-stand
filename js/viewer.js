@@ -187,7 +187,7 @@ const FULL_CROP = {x:0, y:0, w:1, h:1};
 /* One page drawn into a new canvas that just fits W x H (the crop's kept part scaled up to fill): the drawing every turn and the
    background pass of js/prerender.js share, so a page kept for later is the page a turn would have drawn. onTask gets the pdf.js
    RenderTask (the background pass cancels it when the person taps). Resolves to {cv, cw, ch}; the canvas is emptied if it fails. */
-export async function paintPage(doc, pn, W, H, cr, onTask){
+export async function paintPage(doc, pn, W, H, cr, onTask, cleanup){
   const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const pg = await doc.getPage(pn);
   const v1 = pg.getViewport({scale:1});
@@ -202,21 +202,23 @@ export async function paintPage(doc, pn, W, H, cr, onTask){
     await task.promise;
   }
   catch(err){ release(cv); throw err; }
+  if(cleanup){ try{ pg.cleanup(); }catch(e){} }          // the background pass lets go of what pdf.js keeps of a big scan (decoded images) at once
   return {cv, cw, ch};
 }
 export function renderPage(pn, W, H, crop, src = V){
   const cr = crop || FULL_CROP, key = pageKey(src, pn, W, H, cr);
   const hit = V.cache.hit(key);
   if(hit) return hit;
+  const doc = src.doc, id = src.id;          // taken now: V.doc moves on when a turn changes song, and a late page must never be drawn from the next song's PDF
   const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const pr = (async () => {
     /* a page the background pass has already drawn and kept (js/prerender.js) comes back from its picture; any trouble with that and it is drawn as before */
-    const snap = src.id ? snapOf(snapKey(src.id, pn, W, H, dpr, cr)) : null;
+    const snap = id ? snapOf(snapKey(id, pn, W, H, dpr, cr)) : null;
     if(snap){
       const cv = await snapCanvas(snap);
       if(cv) return {cv, cw:snap.cw, ch:snap.ch, crop};
     }
-    const p = await paintPage(src.doc, pn, W, H, cr);
+    const p = await paintPage(doc, pn, W, H, cr);
     return {cv:p.cv, cw:p.cw, ch:p.ch, crop};
   })();
   V.cache.put(key, pr, W * H * dpr * dpr);
@@ -257,7 +259,7 @@ function readyShow(done, total, state){
   el.hidden = false;
   el.textContent = state === 'done' && done >= total ? 'All ready' : `Ready ${done} of ${total}`;
 }
-configureReady({plan: readyPlan, open: openDoc, paint: (doc, it, onTask) => paintPage(doc, it.pn, it.W, it.H, it.cr, onTask), paused: readyPaused, progress: readyShow});
+configureReady({plan: readyPlan, open: openDoc, paint: (doc, it, onTask) => paintPage(doc, it.pn, it.W, it.H, it.cr, onTask, true), paused: readyPaused, progress: readyShow});
 function drawBreak(){
   const nx = V.queue.slice(V.qi + 1).find(e => e.type === 'song'), el = document.createElement('div');
   el.className = 'breakpage';
@@ -347,12 +349,14 @@ async function goTo(qi, page){
    belongs to the page it started on, and that page must stay on the screen until the pen lifts. */
 const shown = () => !!(V.doc || V.brk || V.bad);     // a placeholder holds page 1 of 1, so a turn always moves past it
 export async function next(){
+  touchReady();                                  // a turn that changes song starts well before draw(): the background pass must already be quiet
   if(V.busy || inkBusy() || !shown()) return;
   if(!V.brk && V.page + V.per <= V.n){ V.page += V.per; draw(); }
   else if(V.qi < V.queue.length - 1) await goTo(V.qi + 1, 1);
   else toast(V.queue.length > 1 ? 'End of set' : 'Last page');
 }
 export async function prev(){
+  touchReady();
   if(V.busy || inkBusy() || !shown()) return;
   if(!V.brk && V.page > 1){ V.page = Math.max(1, V.page - V.per); draw(); }
   else if(V.qi > 0) await goTo(V.qi - 1, 'last');
