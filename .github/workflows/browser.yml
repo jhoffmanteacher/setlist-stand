@@ -6,6 +6,8 @@
 # Every tool runs through tools/ci/run-and-annotate.mjs, which puts the failure and the last lines of the output into
 # the job's annotations (readable without logging in) and keeps the whole output as an artifact.
 # Pushing a branch named ci-try/<anything> runs this workflow too.
+# The closed loops stop themselves after 50 minutes (--deadline; the job itself may run 60). They took 34 of the former 35 on 2026-11-24,
+# so a few new loops pushed the run past it and a red "stopped by --deadline" hid whether anything failed.
 name: Browser tests
 
 on:
@@ -70,7 +72,7 @@ jobs:
       - name: Python helper for the loops that make test PDFs
         run: python3 -m pip install --user --break-system-packages pypdf==6.21.4
       - name: node tools/loops.mjs
-        run: node tools/ci/run-and-annotate.mjs --title "closed loops" --log "$RUNNER_TEMP/ci-out/loops.log" --summary '^(PASS|FAIL|SKIP|all |[0-9]+ of)' --deadline 35 -- node tools/loops.mjs
+        run: node tools/ci/run-and-annotate.mjs --title "closed loops" --log "$RUNNER_TEMP/ci-out/loops.log" --summary '^(PASS|FAIL|SKIP|all |[0-9]+ of)' --deadline 50 -- node tools/loops.mjs
       - name: Keep the output
         if: ${{ failure() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
