@@ -5,6 +5,9 @@
  *   caffeinate -i node tools/page-turn-timing.mjs --label before [--root <dir>] [--turns 20]
  *   caffeinate -i node tools/page-turn-timing.mjs --photo --label before --turns 8      (photo charts against text charts)
  *   caffeinate -i node tools/page-turn-timing.mjs --library --label before --turns 8    (two songs from the private backup)
+ *   caffeinate -i node tools/page-turn-timing.mjs --setlist --label a [--songs 8] [--pages 2] [--pace 800] [--lead 3000] [--ready on|off]
+ *       (a person playing a setlist of short photo charts and turning every --pace ms, never waiting for the prefetch;
+ *        every turn is 'inside' a song or 'across' into the next; --ready off sets localStorage['ss-ready']='0' before the app loads)
  *
  * Setup: Chromium 1280x800, deviceScaleFactor 2, CPU throttled 4x (CDP Emulation.setCPUThrottlingRate), one page,
  * service worker blocked (it takes no part in a page turn). Four text-only PDFs of 24 pages are generated with the
@@ -56,6 +59,8 @@ const opt = (name, def) => { const i = args.indexOf('--' + name); return i >= 0 
 const root = path.resolve(opt('root', ROOT)), label = opt('label', 'run'), TURNS = +opt('turns', 20);
 const OUT = path.join(SCRATCH, `timing-${label}.json`);
 const PHOTO = args.includes('--photo'), LIBRARY = args.includes('--library');
+const SETLIST = args.includes('--setlist');
+const SONGS = +opt('songs', 8), SPAGES = +opt('pages', 2), PACE = +opt('pace', 800), LEAD = +opt('lead', 3000), READY = opt('ready', 'on');
 const DWELL = opt('dwell', '') ? opt('dwell', '').split(',') : [];     // --dwell prep,0,500,1000: turns made before the prefetch is waited for
 
 /* ---------- the one function that reads the cache (runs in the page) ---------- */
@@ -266,6 +271,69 @@ async function compare(page, context, work, errors){
   if(errors.length) process.exitCode = 1;
 }
 
+/* ---------- setlist mode (--setlist): a quick player turning through a whole setlist of photo charts ---------- */
+async function setlistMode(page, context, work, errors){
+  assert(READY === 'on' || READY === 'off', '--ready must be on or off');
+  const names = Array.from({length: SONGS}, (_, i) => `Photo Set ${String(i + 1).padStart(2, '0')}`);
+  const files = await makePhotoPdfs(page, work, names.map(n => ({file: n, label: n})), {pages: SPAGES});
+  await page.setInputFiles('#file', files);
+  await page.waitForFunction(n => document.querySelectorAll('#libList [data-open]').length === n, SONGS, {timeout: 120000});
+  const titles = await page.evaluate(async () => (await import('./js/store.js')).state.songs.map(s => s.title));
+  const order = names.map(n => { const x = titles.find(v => v.toLowerCase().replace(/\W+/g, '') === n.toLowerCase().replace(/\W+/g, '')); assert(x, 'no title for ' + n + ' in ' + JSON.stringify(titles)); return x; });
+  await page.click('#tSets');
+  await page.click('#view [data-newset]');
+  await page.locator('.modal input[type=text]').fill('Timing set');
+  await page.click('.modal [data-ok]');
+  await page.waitForFunction(() => document.querySelector('#view h2')?.textContent === 'Timing set');
+  for(let i = 0; i < names.length; i++){          // one at a time, so the order is the order of the names
+    await page.click('#view [data-addto]');
+    await page.locator('.modal .pick').waitFor();
+    await page.locator('.modal .pick label', {hasText: new RegExp('^\\s*' + order[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$')}).locator('input').check();
+    await page.click('.modal [data-ok]');
+    await page.waitForFunction(n => document.querySelectorAll('#items > li.row').length === n, i + 1);
+  }
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
+  await page.click('#view [data-play]');
+  const play0 = Date.now();
+  await page.waitForSelector('#viewer.on #stage .sheet canvas');
+  if((await page.getAttribute('#v2up', 'aria-pressed')) === 'true') await page.click('#v2up');
+  await page.waitForFunction(() => document.querySelectorAll('#stage .sheet').length === 1);
+  await page.evaluate(INSTALL);
+  await sleep(Math.max(0, LEAD - (Date.now() - play0)));
+  const turns = [], t0 = Date.now();
+  let last = Date.now(), k = 1, p = 1;
+  while(!(k === SONGS && p === SPAGES)){
+    const across = p === SPAGES, nk = across ? k + 1 : k, np = across ? 1 : p + 1;
+    const armed = page.evaluate(e => window.__arm(e), {sub: `^Song ${nk} of ${SONGS} · Page ${np} of ${SPAGES}$`});
+    await sleep(30);
+    const wait = last + PACE - Date.now();           // a turn that took longer than the pace is finished first (the arm is one turn at a time)
+    if(wait > 0) await sleep(wait);
+    last = Date.now();
+    await page.mouse.move(1280 * 0.85, 400); await page.mouse.down(); await page.mouse.up();
+    const r = await armed;
+    turns.push({kind: across ? 'across' : 'inside', ms: Math.round(r.ms * 10) / 10, song: nk, page: np});
+    k = nk; p = np;
+  }
+  const seconds = Math.round((Date.now() - t0) / 1000);
+  const pad = (s, n) => String(s).padEnd(n), lpad = (s, n) => String(s).padStart(n);
+  const rows = ['inside', 'across'].map(kind => { const s = stat(turns.filter(t => t.kind === kind).map(t => t.ms)); return {kind, n: s.n, s}; }).filter(r => r.n);
+  const f = x => String(Math.round(x));
+  const slow = [...turns].sort((a, b) => b.ms - a.ms).slice(0, 5);
+  const lines = [`Page-turn timing (setlist mode), label "${label}", root ${root}`,
+    `Chromium 1280x800 @2x, CPU 4x, ready ${READY}, ${SONGS} songs x ${SPAGES} pages, pace ${PACE} ms, lead ${LEAD} ms, ${seconds} s`,
+    '', pad('kind', 9) + lpad('n', 4) + lpad('median ms', 11) + lpad('p90 ms', 9) + lpad('worst ms', 10) + lpad('best ms', 9),
+    ...rows.map(r => { const v = turns.filter(t => t.kind === r.kind).map(t => t.ms).sort((a, b) => a - b); const p90 = v[Math.min(v.length - 1, Math.ceil(v.length * 0.9) - 1)];
+      r.p90 = p90; return pad(r.kind, 9) + lpad(r.n, 4) + lpad(f(r.s.median), 11) + lpad(f(p90), 9) + lpad(f(r.s.worst), 10) + lpad(f(r.s.best), 9); }),
+    '', '5 slowest turns:', ...slow.map(t => `  ${lpad(f(t.ms), 6)} ms  ${t.kind}  song ${t.song}, page ${t.page}`),
+    '', errors.length ? 'PAGE ERRORS: ' + errors.join(' | ') : 'No page errors.'];
+  console.log(lines.join('\n'));
+  fs.writeFileSync(OUT, JSON.stringify({label, root, mode: 'setlist', when: new Date().toISOString(), ready: READY, songs: SONGS, pages: SPAGES, pace: PACE, lead: LEAD,
+    summary: rows.map(r => ({kind: r.kind, n: r.n, median_ms: Math.round(r.s.median), p90_ms: Math.round(r.p90), worst_ms: Math.round(r.s.worst), best_ms: Math.round(r.s.best)})), turns, errors}, null, 2));
+  console.log('JSON: ' + OUT);
+  if(errors.length) process.exitCode = 1;
+}
+
 /* ---------- main ---------- */
 const turnTypes = {};
 const peak = {pixels: 0, entries: 0};
@@ -280,6 +348,7 @@ async function main(){
     srv = await startServer({root});
     browser = await launchBrowser();
     const context = await browser.newContext({viewport: {width: 1280, height: 800}, deviceScaleFactor: 2, serviceWorkers: 'block'});
+    if(SETLIST && READY === 'off') await context.addInitScript(() => { try{ localStorage.setItem('ss-ready', '0'); }catch(e){} });
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -287,6 +356,7 @@ async function main(){
     await page.goto(srv.base + 'index.html');
     await page.waitForSelector('#libList, #view');
     await page.waitForFunction(() => !document.querySelector('#view')?.textContent.includes('Loading'), null, {timeout: 10000}).catch(() => {});
+    if(SETLIST){ await setlistMode(page, context, work, errors); fs.rmSync(work, {recursive: true, force: true}); return; }
     if(PHOTO || LIBRARY){ await compare(page, context, work, errors); fs.rmSync(work, {recursive: true, force: true}); return; }
     const pdfs = await makePdfs(work);
 

@@ -3,6 +3,7 @@ import {get, getInkPages, songById, cropOf} from './store.js';
 import {openCropper} from './crop.js';
 import {awakeOpen, awakeClose, initAwake} from './awake.js';
 import {PageCache, release} from './pagecache.js';
+import {configure as configureReady, kick as kickReady, touch as touchReady, stopReady, snapKey, snapOf, snapCanvas, readyOff} from './prerender.js';
 import {initBackNav} from './backnav.js';
 import {paint, setAnnot, widthMenu, inkBusy, inkReset, inkPointerDown, inkPointerMove, inkPointerUp, inkPointerCancel} from './ink.js';
 import {jumpList} from './songjump.js';
@@ -21,6 +22,7 @@ try{ V.two = localStorage.getItem('ss-two') !== '0'; }catch(e){}
 /* entries: [{type:'song', id} | {type:'break', id, name}] */
 export async function openViewer(entries, qi, page = 1){
   if(!entries.some(e => e.type === 'song')) return;
+  stopReady();                                // pages kept for an earlier queue go
   prune([]); V.queue = entries; V.hist = [];
   jumpable(entries.length > 1);
   viewer.classList.add('on'); viewer.classList.remove('hide');
@@ -40,6 +42,7 @@ export function closeViewer(){
   V.tok++; V.dt++; V.brk = null; V.bad = false; V.hist = []; gest = null;
   if(V.doc){ V.doc.destroy(); V.doc = null; }
   prune([]);                                  // songs prepared for a turn that never came: closed, their pages released
+  stopReady();                                // the pages drawn ahead for the setlist (js/prerender.js) go too
   V.cache.clear(); setStage();
   document.body.style.overflow = '';
   document.body.classList.remove('playing');
@@ -181,26 +184,80 @@ let tagN = 0;
 const tagOf = doc => { if(!tags.has(doc)) tags.set(doc, 'd' + ++tagN); return tags.get(doc); };
 const pageKey = (src, pn, W, H, cr) => tagOf(src.doc) + ':' + pn + ':' + W + 'x' + H + ':' + [cr.x, cr.y, cr.w, cr.h].join(',');
 const FULL_CROP = {x:0, y:0, w:1, h:1};
+/* One page drawn into a new canvas that just fits W x H (the crop's kept part scaled up to fill): the drawing every turn and the
+   background pass of js/prerender.js share, so a page kept for later is the page a turn would have drawn. onTask gets the pdf.js
+   RenderTask (the background pass cancels it when the person taps). Resolves to {cv, cw, ch}; the canvas is emptied if it fails. */
+export async function paintPage(doc, pn, W, H, cr, onTask){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const pg = await doc.getPage(pn);
+  const v1 = pg.getViewport({scale:1});
+  const sc = Math.min(W / (v1.width * cr.w), H / (v1.height * cr.h));
+  const cw = Math.floor(v1.width * cr.w * sc), ch = Math.floor(v1.height * cr.h * sc);
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+  const vp = pg.getViewport({scale:sc * dpr});
+  try{
+    const task = pg.render({canvasContext:cv.getContext('2d'), viewport:vp, transform:[1, 0, 0, 1, -cr.x * vp.width, -cr.y * vp.height]});
+    if(onTask) onTask(task);
+    await task.promise;
+  }
+  catch(err){ release(cv); throw err; }
+  return {cv, cw, ch};
+}
 export function renderPage(pn, W, H, crop, src = V){
   const cr = crop || FULL_CROP, key = pageKey(src, pn, W, H, cr);
   const hit = V.cache.hit(key);
   if(hit) return hit;
-  const doc = src.doc, dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
   const pr = (async () => {
-    const pg = await doc.getPage(pn);
-    const v1 = pg.getViewport({scale:1});
-    const sc = Math.min(W / (v1.width * cr.w), H / (v1.height * cr.h));
-    const cw = Math.floor(v1.width * cr.w * sc), ch = Math.floor(v1.height * cr.h * sc);
-    const cv = document.createElement('canvas');
-    cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
-    const vp = pg.getViewport({scale:sc * dpr});
-    try{ await pg.render({canvasContext:cv.getContext('2d'), viewport:vp, transform:[1, 0, 0, 1, -cr.x * vp.width, -cr.y * vp.height]}).promise; }
-    catch(err){ release(cv); throw err; }
-    return {cv, cw, ch, crop};
+    /* a page the background pass has already drawn and kept (js/prerender.js) comes back from its picture; any trouble with that and it is drawn as before */
+    const snap = src.id ? snapOf(snapKey(src.id, pn, W, H, dpr, cr)) : null;
+    if(snap){
+      const cv = await snapCanvas(snap);
+      if(cv) return {cv, cw:snap.cw, ch:snap.ch, crop};
+    }
+    const p = await paintPage(src.doc, pn, W, H, cr);
+    return {cv:p.cv, cw:p.cw, ch:p.ch, crop};
   })();
   V.cache.put(key, pr, W * H * dpr * dpr);
   return pr;
 }
+/* ---------- the whole setlist, ready (js/prerender.js) ----------
+   readyPlan(): every page of every song of a setlist (a queue of more than one song), as {id, pn, W, H, cr, crop, key}, in the order a
+   person will meet them: the rest of the song showing, then each later song, then (for going back) the pages before this one and the
+   earlier songs, last page first. Sizes are the ones a turn uses (perFor / stageSize per song), so the keys are the keys renderPage
+   asks for. paused(): the person is doing something. */
+function readyPlan(){
+  if(readyOff() || !viewer.classList.contains('on') || V.queue.filter(e => e.type === 'song').length < 2) return [];
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5), out = [];
+  const song = qi => { const e = V.queue[qi]; return e && e.type === 'song' ? songById(e.id) : null; };
+  const add = (qi, pns) => {
+    const e = V.queue[qi], s = song(qi); if(!s) return;
+    const n = qi === V.qi && V.n ? V.n : Math.max(1, s.pages || 1), per = perFor(n), {W, H} = stageSize(per);
+    for(const pn of pns(n)){ const crop = cropOf(s, pn), cr = crop || FULL_CROP; out.push({id:e.id, pn, W, H, cr, crop, key:snapKey(e.id, pn, W, H, dpr, cr)}); }
+  };
+  const up = (a, b) => { const r = []; for(let i = a; i <= b; i++) r.push(i); return r; };          // a, a+1 ... b (none when a > b)
+  const down = (a, b) => { const r = []; for(let i = a; i >= b; i--) r.push(i); return r; };        // a, a-1 ... b (none when a < b)
+  if(V.brk){                                  // on a break page: the songs after it, then the songs before it
+    for(let qi = V.qi + 1; qi < V.queue.length; qi++) add(qi, n => up(1, n));
+    for(let qi = V.qi - 1; qi >= 0; qi--) add(qi, n => down(n, 1));
+    return out;
+  }
+  add(V.qi, n => up(Math.min(V.page, n), n));
+  for(let qi = V.qi + 1; qi < V.queue.length; qi++) add(qi, n => up(1, n));
+  add(V.qi, n => down(Math.min(V.page, n) - 1, 1));
+  for(let qi = V.qi - 1; qi >= 0; qi--) add(qi, n => down(n, 1));
+  return out;
+}
+const readyPaused = () => !viewer.classList.contains('on') || V.busy || inkBusy() || V.annot || document.hidden || !!document.querySelector('.modal') || !$('#cropper').hidden;
+/* "Ready 7 of 25" in the top bar beside the page line; "All ready" for a few seconds at the end. */
+function readyShow(done, total, state){
+  const el = $('#vReady'); if(!el) return;
+  if(state === 'off' || !total){ el.hidden = true; el.textContent = ''; return; }
+  el.hidden = false;
+  el.textContent = state === 'done' && done >= total ? 'All ready' : `Ready ${done} of ${total}`;
+}
+configureReady({plan: readyPlan, open: openDoc, paint: (doc, it, onTask) => paintPage(doc, it.pn, it.W, it.H, it.cr, onTask), paused: readyPaused, progress: readyShow});
 function drawBreak(){
   const nx = V.queue.slice(V.qi + 1).find(e => e.type === 'song'), el = document.createElement('div');
   el.className = 'breakpage';
@@ -227,6 +284,7 @@ function drawBad(){
   prepare(nextSong(V.qi), 'first'); prepare(prevSong(V.qi), 'last');
 }
 export async function draw(){
+  touchReady(); kickReady();                    // a draw is the person acting: the background pass waits, then goes on (js/prerender.js)
   /* V.dt first, break or not: a render still running for the page just left (its document is kept open now) must find
      V.dt changed and never paint over the break page */
   const dt = ++V.dt;
@@ -323,6 +381,7 @@ let gest = null;
    a palm), turns no page and does not show or hide the bars. */
 export const TAP_MS = 500;
 stage.addEventListener('pointerdown', e => {
+  touchReady();
   if(inkPointerDown(e)) return;
   if(gest && !e.isPrimary && Date.now() - gest.t < 2000) return;
   gest = {id:e.pointerId, x:e.clientX, y:e.clientY, t:Date.now(), ts:e.timeStamp};
@@ -353,7 +412,7 @@ export function initViewer(){
   $('#vCrop').onclick = () => openCropper();
   $('#vPrev').onclick = prev;
   $('#vNext').onclick = next;
-  $('#v2up').onclick = () => { V.two = !V.two; try{ localStorage.setItem('ss-two', V.two ? '1' : '0'); }catch(e){} V.cache.clear(); draw(); };
+  $('#v2up').onclick = () => { V.two = !V.two; try{ localStorage.setItem('ss-two', V.two ? '1' : '0'); }catch(e){} stopReady(); V.cache.clear(); draw(); };
   /* An iPad app opened from the Home Screen icon (navigator.standalone, an iOS-only flag) already fills the screen and the
      browser refuses the Full screen call there, so the button would only say "not available": leave it out. */
   if(navigator.standalone === true) $('#vFull').hidden = true;
@@ -381,5 +440,5 @@ export function initViewer(){
     else if(k === 'Escape'){ if(!$('#wdMenu').hidden) widthMenu(false); else if(V.annot) setAnnot(false); else closeViewer(); }   // one layer at a time (back means this too: js/backnav.js)
   });
   let rt;
-  addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if(viewer.classList.contains('on')){ V.cache.clear(); draw(); } }, 150); });
+  addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if(viewer.classList.contains('on')){ stopReady(); V.cache.clear(); draw(); } }, 150); });
 }

@@ -15,7 +15,7 @@ An installable web app (PWA) for a teacher and gigging musician who plays PDF ch
 - `js/`, one job per file, named for it:
   - Core: `util` (dialogs, toasts, pdf.js wrapper), `store` (IndexedDB), `saving` (`commit()`, `once()`), `names`, `importname`, `errors`, `nudge`, `backnav`, `main`
   - Library and setlists: `library`, `copysong`, `azstrip`, `collections`, `setlists`, `gigdate`, `gigui`, `setlisttext`, `menubox`
-  - Viewer: `viewer`, `pagecache`, `awake`, `ink`, `crop`
+  - Viewer: `viewer`, `pagecache`, `prerender`, `awake`, `ink`, `crop`
   - Output and backup: `print`, `downloadall`, `backup`, `restoreplan`, `restoreask`, `zipread`, `deleteops`
   - Split and share: `songlist`, `songpdf`, `split`, `sharepack`, `share`, `shareimport`, `newversion`, `chartfile`, `chartupdate`
   - Google Drive: `driveconfig`, `googleauth`, `drive`, `driveops`, `syncui`, `sync`, `syncplan`, `syncapply`, `syncmarks`, `syncink`, `syncmerge`, `syncdialogs`, `drivebackup`

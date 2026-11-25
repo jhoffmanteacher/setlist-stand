@@ -18,7 +18,7 @@
  *   in the Problem log).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-24-2';
+const VERSION = '2026-11-25-1';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -47,6 +47,7 @@ const PRECACHE = [
   'js/viewer.js',
   'js/backnav.js',
   'js/pagecache.js',
+  'js/prerender.js',
   'js/awake.js',
   'js/ink.js',
   'js/print.js',
@@ -101,13 +102,13 @@ const PRECACHE = [
    (VERSION and this table together); never edit by hand. tools/checks.mjs fails when it is not exactly right. Keyed by the
    path as written in PRECACHE, so './' and 'index.html' (the same file) are two lines. */
 const HASHES = {
-  './': 'bff81272750d52b83efdd867ad90fb7594a0245c85dea47cd08f50801bce66ae',
-  'css/app.css': 'e80668d564d1b0e9898ff0640b507dbda35ce49c81e4a0d654a04d40e4fcc83a',
+  './': 'f848241e7e20c422e325e112bdb15ec141264bb45b37f75a56e557110a19f0f4',
+  'css/app.css': 'e9985eb4f25990a921badc29be91c7152f6b5f4d5fe8963fb9b4656ea4311e12',
   'icons/apple-touch-icon.png': '1dac7b957463bf6d4bb930b11c8bd93532c27bf9b35a0a0015e57456b37fbdac',
   'icons/icon-192.png': '5f615555130aa75b28a08c4b4b013f34caa525a3de92709924eeb3e9a47c63d4',
   'icons/icon-512.png': '129a3a7abca86a98195fe797d1d9c7deaf234bcdbc3fc576317f6ae3603e7b70',
   'icons/icon-maskable-512.png': 'ff45c7bcc7aa9818416f4efd011453a62ecd42134be2af854a8b9cf5c34fddfc',
-  'index.html': 'bff81272750d52b83efdd867ad90fb7594a0245c85dea47cd08f50801bce66ae',
+  'index.html': 'f848241e7e20c422e325e112bdb15ec141264bb45b37f75a56e557110a19f0f4',
   'js/awake.js': '9a88125cf759c41d88900888af4a432574643d302da843301273756d3230e20d',
   'js/azstrip.js': '59ed96b60694ab504c163f9aaf8fac0cdee5554b54cb23b1249404c59a0d1e2f',
   'js/backnav.js': 'd39acc3113a466b40a2ddbd4174b62e7ffc3233bd79db8bf4aadfccc2f754d41',
@@ -137,6 +138,7 @@ const HASHES = {
   'js/newversion.js': '75187c37c570b3e9d2218920a77481d9caad8c5e47d91136ae54c35cb109daac',
   'js/nudge.js': '4ddff5db637953081e764fdabf424294de67947775ce90c803dd23d505b9af59',
   'js/pagecache.js': 'd8ca855e0fef91f0c943ca50402fcbbe6f53e1505df5d4749f351ba36582f8fd',
+  'js/prerender.js': '514316ab1dcaca23c8a4df18b72422de523bcc752a8cf4d70644a119ae480c22',
   'js/print.js': 'b27b90e8eb235ab3f93f483cbf3cb02d00250ce96b51f22ec593783c39a0a42b',
   'js/readycheck.js': '82221cdc899a677d6af9ed280c31e26bb90df08e8d6db4c477ccc71c43d06dbd',
   'js/restoreask.js': '5a455f521fb06481df08a1ac328eddb0d5f07a7cb32d26023a64ebcd23407fe6',
@@ -162,7 +164,7 @@ const HASHES = {
   'js/syncplan.js': '51bd34f6612f3428da13a11669da6a9ffe3bff6e502135c47d4f44bcad51e16d',
   'js/syncui.js': '864b7b64237c7561ad2138d50e1f6a10a95f87ff937d66af383c4ab682ebee56',
   'js/util.js': 'e65628f9474f6b30c0dfb2f7ad92528d92559abf86f4d3b9398c67e4398ebd9c',
-  'js/viewer.js': '02a824146f001bcf40bdebd59e988b3869428f3ff03d53ae727e8148edc5c7b1',
+  'js/viewer.js': '7e1de28bd1cb26eebe6054efa376eada8203f9298581b6684d43295ace38be91',
   'js/zipread.js': '5b3bb0ce54c81b1f5210970bb80ec39085c79369c8e7b75d860500d015410116',
   'manifest.webmanifest': 'd6d79b0cb0f3c45727014d36ddd0968fc41bd586129ef18b1225f296d42baa91',
   'vendor/fonts/barlow-400.ttf': 'a35caa4687f434d66453c1fe423d7074cfa9fd7ab80c19b0780f3862887d2fc9',

@@ -91,6 +91,8 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 .ttl{flex:1 1 160px;overflow:hidden}
 .ttl b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:17px}
 .ttl span{font-size:13px;color:#aeaba3}
+.ttl #vReady{margin-left:10px;color:#9ec99e}
+.ttl #vReady::before{content:"\00B7\00A0\00A0"}
 #tools{bottom:0;justify-content:center}
 #viewer.hide #vtop{opacity:0;pointer-events:none}
 .sw{width:44px;padding:0;display:grid;place-items:center}

@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-25: Play a setlist, and every page is ready
+- When you tap Play on a setlist the first song opens at once, and the app draws every other page of the setlist in the background (one page at a time, only while you are not touching the screen), so a turn onto a big scanned chart no longer waits. A small "Ready 7 of 25" shows beside the page line while it works and "All ready" when it is done. It stops for the pen, a box, a page turn or when the app is in the background, keeps nothing on disk, and a song opened on its own is left as it was.
+
 ## 2026-11-24: The app checks its own stored files
 - Setlist Stand now checks every file of its offline copy before it uses it. Other websites on the same address (the guitar and English Intensive sites) share the place where the offline copy is kept, so a mistake in one of them could have put its own code into this app. A changed or damaged file is now thrown out and never run; the real one is fetched again the next time the app is online. Nothing new appears on screen. Library → Problem log (it shows once it has a line) names a file that was thrown out.
 - With no internet, a file that fails the check is missing until the app has been online once, so the app may not open until then. Open it with internet and leave it on the Library for a minute. This is the same fix as when another site deletes the offline copy.
