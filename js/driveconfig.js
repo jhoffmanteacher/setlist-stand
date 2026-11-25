@@ -1,6 +1,7 @@
 /* The ONE place that holds this app's Google Client ID and Google's addresses. tools/checks.mjs lets these exact
    addresses appear here and nowhere else in the app, so a new host cannot slip in unseen. The Content-Security-Policy in
-   index.html lets the page send data requests to https://www.googleapis.com only (connect-src); the sign-in is the page
+   index.html lets the page send data requests to DRIVE_API + '/' and UPLOAD_API + '/' only (connect-src: two paths, not the
+   whole host; tools/checks.mjs fails when the policy's two Google sources are not exactly these two); the sign-in is the page
    navigating to AUTH_URL, which a CSP does not govern. No script is ever loaded from Google.
 
    CLIENT_ID is public (it is sent in the address of every sign-in). There is no client secret and there never is one

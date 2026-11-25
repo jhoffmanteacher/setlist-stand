@@ -5,11 +5,13 @@
 <!-- Content Security Policy: only this site's own files run or load; nothing from any other host, no eval.
      style-src 'unsafe-inline': the app and pdf.js set style="" attributes (colour swatches, crop box, page sizes).
      img-src/connect-src blob: data:: downloads and PDF bytes travel as blob: URLs. connect-src also lets the page send
-     DATA requests (never scripts) to https://www.googleapis.com, the Google Drive connection (js/driveconfig.js); the
+     DATA requests (never scripts) to the two Google Drive paths the app uses, https://www.googleapis.com/drive/v3/ and
+     https://www.googleapis.com/upload/drive/v3/ (DRIVE_API and UPLOAD_API in js/driveconfig.js, which tools/checks.mjs holds
+     them to; the rest of that host is closed; a path only governs the first request, a redirect is checked by host); the
      Google sign-in is the page navigating to Google, which a CSP does not govern. worker-src blob: lets pdf.js
      fall back to a blob worker. pdf.js runs with isEvalSupported:false (js/util.js), so it never needs 'unsafe-eval'.
      frame-ancestors cannot be set from a meta tag. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: data: https://www.googleapis.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: data: https://www.googleapis.com/drive/v3/ https://www.googleapis.com/upload/drive/v3/; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Setlist Stand</title>

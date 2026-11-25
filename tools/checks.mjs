@@ -33,7 +33,7 @@ const ALLOWED_URLS = {
 // The Content-Security-Policy index.html must carry, exactly (order of directives and of sources is ignored).
 // Loosening the CSP needs Jonathan's OK; when he gives it, change this pinned policy in the same commit.
 const PINNED_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
-  + "font-src 'self'; connect-src 'self' blob: data: https://www.googleapis.com; worker-src 'self' blob:; "
+  + "font-src 'self'; connect-src 'self' blob: data: https://www.googleapis.com/drive/v3/ https://www.googleapis.com/upload/drive/v3/; worker-src 'self' blob:; "
   + "manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
 // A remote URL: http(s):// in any case, or a protocol-relative //host in a string, after src=/href= or in url( ).
 const URL_RE = /https?:\/\/[^\s'"`)<>]*|(?:['"`]|\b(?:src|href)\s*=\s*['"]?|url\(\s*['"]?)\/\/[a-z0-9][^\s'"`)<>]*/gi;
@@ -400,8 +400,17 @@ const precache = parsePrecache(swSrc);
     if (!content) fail(name, 'the Content-Security-Policy meta tag has no content');
     else {
       const diff = cspDiff(parseCsp(content[2]), parseCsp(PINNED_CSP));
+      /* The two Google sources of connect-src must be exactly DRIVE_API + '/' and UPLOAD_API + '/' as js/driveconfig.js holds them (the app
+         sends nothing to Google but under those two paths, js/drive.js call()): change one place and this fails until the other follows. */
+      const cfg = exists('js/driveconfig.js') ? tryStrip(stripJsComments, read('js/driveconfig.js'))[0] : null;
+      const constOf = (n) => (cfg && new RegExp(`export\\s+const\\s+${n}\\s*=\\s*'([^']+)'`).exec(cfg) || [])[1];
+      const wantG = [constOf('DRIVE_API'), constOf('UPLOAD_API')].map((x) => (x ? `${x}/` : null));
+      const gotG = [...(parseCsp(content[2]).dirs.get('connect-src') || [])].filter((x) => /^[a-z][a-z0-9+.-]*:\/\//i.test(x));
+      const gMismatch = wantG.includes(null) || gotG.length !== wantG.length || wantG.some((x) => !gotG.includes(x));
       if (early) fail(name, `<${early[1].toLowerCase()}> on line ${lineOf(html, early.index)} comes before the Content-Security-Policy meta tag (line ${lineOf(html, metas[0].index)}), which only covers what follows it`);
-      else diff.length ? fail(name, `differs from the pinned policy in tools/checks.mjs: ${diff.join('; ')}`) : pass(name);
+      else if (diff.length) fail(name, `differs from the pinned policy in tools/checks.mjs: ${diff.join('; ')}`);
+      else if (gMismatch) fail(name, `the policy's Google sources (${gotG.join(' ') || 'none'}) are not exactly DRIVE_API + '/' and UPLOAD_API + '/' from js/driveconfig.js (${wantG.map((x) => x || 'not found').join(' ')})`);
+      else pass(name);
     }
   }
 }

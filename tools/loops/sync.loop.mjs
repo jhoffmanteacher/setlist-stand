@@ -19,7 +19,7 @@ import {installFakeGoogle} from './fake-google.mjs';
 const CLIENT_ID = '553752641676-d3mb2enmv622rpl2bjlfvqpfe7922h18.apps.googleusercontent.com';
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
-const POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: data: https://www.googleapis.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
+const POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: data: https://www.googleapis.com/drive/v3/ https://www.googleapis.com/upload/drive/v3/; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const FOLDER = 'application/vnd.google-apps.folder';
 const toGoogle = u => /^https:\/\/(accounts\.google\.com|www\.googleapis\.com)([/?#]|$)/.test(u);
 const until = (fn, what, ms, step) => untilRaw(async () => fn(), what, ms, step);      // site-copy's until() wants a promise from fn
@@ -628,7 +628,7 @@ async function loopCsp(ctx){
     const served = await page.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content);
     assert(served === POLICY, 'the Content-Security-Policy is not the agreed one:\n  served  ' + served + '\n  agreed  ' + POLICY);
     const cs = served.split(';').map(x => x.trim()).find(x => x.startsWith('connect-src'));
-    assert(cs === "connect-src 'self' blob: data: https://www.googleapis.com", 'connect-src is ' + cs);
+    assert(cs === "connect-src 'self' blob: data: https://www.googleapis.com/drive/v3/ https://www.googleapis.com/upload/drive/v3/", 'connect-src is ' + cs);
     /* the browser really enforces it: Drive's address is allowed, the sign-in address and any other host are not */
     const tryFetch = url => page.evaluate(async url => {
       let blocked = false; const on = e => { blocked = true; };
@@ -639,6 +639,11 @@ async function loopCsp(ctx){
     assert(await tryFetch('https://example.com/x') === true, 'a request to another host was not blocked by the policy');
     assert(await tryFetch('https://accounts.google.com/o/oauth2/v2/auth') === true, 'a data request to the sign-in address was not blocked');
     assert(await tryFetch('https://www.googleapis.com/drive/v3/about') === false, 'a request to Drive was blocked by the policy');
+    assert(await tryFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable') === false, 'a request to Drive\'s upload address was blocked by the policy');
+    /* the rest of Google's API host is closed (2026-11-24): only the two Drive paths are open */
+    assert(await tryFetch('https://www.googleapis.com/storage/v1/b') === true, 'a request to another path on www.googleapis.com (storage) was not blocked by the policy');
+    assert(await tryFetch('https://www.googleapis.com/auth/drive.file') === true, 'a request to the OAuth scope path on www.googleapis.com was not blocked by the policy');
+    assert(await tryFetch('https://www.googleapis.com/') === true, 'a request to the root of www.googleapis.com was not blocked by the policy');
     /* the sources: Google's addresses live in js/driveconfig.js only; no client secret; the worker never touches Google */
     const root = ctx.root, files = [...fs.readdirSync(path.join(root, 'js')).map(f => 'js/' + f), 'sw.js', 'css/app.css', 'manifest.webmanifest'];
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '').replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');

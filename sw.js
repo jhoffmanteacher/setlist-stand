@@ -18,7 +18,7 @@
  *   in the Problem log).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-24-1';
+const VERSION = '2026-11-24-2';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -101,13 +101,13 @@ const PRECACHE = [
    (VERSION and this table together); never edit by hand. tools/checks.mjs fails when it is not exactly right. Keyed by the
    path as written in PRECACHE, so './' and 'index.html' (the same file) are two lines. */
 const HASHES = {
-  './': 'fee91e84bd6f6ba4b3984da1201f1ee3c3bdb8c34f187e7804167e2b09bfced4',
+  './': 'bff81272750d52b83efdd867ad90fb7594a0245c85dea47cd08f50801bce66ae',
   'css/app.css': 'e80668d564d1b0e9898ff0640b507dbda35ce49c81e4a0d654a04d40e4fcc83a',
   'icons/apple-touch-icon.png': '1dac7b957463bf6d4bb930b11c8bd93532c27bf9b35a0a0015e57456b37fbdac',
   'icons/icon-192.png': '5f615555130aa75b28a08c4b4b013f34caa525a3de92709924eeb3e9a47c63d4',
   'icons/icon-512.png': '129a3a7abca86a98195fe797d1d9c7deaf234bcdbc3fc576317f6ae3603e7b70',
   'icons/icon-maskable-512.png': 'ff45c7bcc7aa9818416f4efd011453a62ecd42134be2af854a8b9cf5c34fddfc',
-  'index.html': 'fee91e84bd6f6ba4b3984da1201f1ee3c3bdb8c34f187e7804167e2b09bfced4',
+  'index.html': 'bff81272750d52b83efdd867ad90fb7594a0245c85dea47cd08f50801bce66ae',
   'js/awake.js': '9a88125cf759c41d88900888af4a432574643d302da843301273756d3230e20d',
   'js/azstrip.js': '59ed96b60694ab504c163f9aaf8fac0cdee5554b54cb23b1249404c59a0d1e2f',
   'js/backnav.js': 'd39acc3113a466b40a2ddbd4174b62e7ffc3233bd79db8bf4aadfccc2f754d41',
@@ -122,7 +122,7 @@ const HASHES = {
   'js/downloadall.js': '270012db61c7177c3cd136a8a5399fa41d1089852956ecf2bd8a06c5531ff6ab',
   'js/drive.js': 'bfe322dfb07d8514f6852ac6399707a9be864af53857a57737ed0e04c5931f6b',
   'js/drivebackup.js': '22b243900ef2488cf793cb6bdc3a4a3740f1161021f8c66851cbdd4b1e36276d',
-  'js/driveconfig.js': 'dd551c9e799bf0c6b3c06985dc2c873016eacd38968c17ce46fde50fe9c3d04a',
+  'js/driveconfig.js': 'cab5dc2d27a2336e6ca84066706ac1801963ebabce24b28ef2ce9da25114b0b8',
   'js/driveops.js': 'a504bbdc449df5b63238505b6d811c0cf7167f60e9b87305056bb0f256431c5a',
   'js/errors.js': '9c19efa808c9dda8bbde23c50d5d4b8bec9b07b4ae6996f2df65013775013aae',
   'js/gigdate.js': '1b95c203e30c661ca6b9ff5e8b844249b66f63097d335092c014bb80762dff9b',
