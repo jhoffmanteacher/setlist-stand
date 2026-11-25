@@ -12,11 +12,11 @@
    before it asks pdf.js. Nothing is written to storage: the pictures live in memory, for as long as the viewer is open and the
    window keeps its size, and are never part of a backup, a share package or a sync. The PDF and the marks are never touched.
 
-   MANNERS. It only works while the person is not: nothing within IDLE_MS of a tap, a turn or a key, never while a pen stroke is
+   MANNERS. It only works while the person is not: nothing within TUNE.idle of a tap, a turn or a key, never while a pen stroke is
    open, Annotate or the Crop screen or a dialog is up, the page is hidden, or a turn is under way; a page being drawn when a tap
    arrives is cancelled (pdf.js RenderTask.cancel) and tried again later. One pdf.js document is open at a time (the song being
    done) and is closed when the next song starts. A page that will not draw, or a song that will not open, is left out and the
-   pass goes on. All the pictures together stop at MAX_BYTES. `localStorage` `ss-ready` = '0' switches the whole thing off
+   pass goes on. All the pictures together stop at TUNE.max (MAX_BYTES). `localStorage` `ss-ready` = '0' switches the whole thing off
    (a loop that measures the old behaviour, or Jonathan if it ever misbehaves).
 
    This file knows nothing about pdf.js or the viewer: viewer.js hands over what it needs (configure()). */
@@ -136,7 +136,11 @@ async function sweep(my){
       }
       let cv = null, cancelled = false, task = null;
       try{
-        const r = await env.paint(doc, item, t => { task = inflight = t; });
+        const r = await env.paint(doc, item, t => {
+          task = inflight = t;
+          /* a tap (or a stop) that came while the page was still being fetched from the document: cancel at once, nothing is waiting for it */
+          if(my !== run || Date.now() - lastTouch < TUNE.idle){ try{ t.cancel(); }catch(e){} }
+        });
         cv = r.cv; live++;
         if(my !== run) return;
         const blob = await new Promise(ok => { try{ cv.toBlob(ok, 'image/jpeg', QUALITY); }catch(e){ ok(null); } });

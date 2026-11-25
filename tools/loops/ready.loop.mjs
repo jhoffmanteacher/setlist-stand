@@ -14,6 +14,7 @@
  *   e  a song that will not open is left out and the rest is done; a single song gets no pass
  *   f  a tap while a page is being drawn cancels that page
  *   g  a crop edited while pictures are kept: the pictures of the new crop are used, never the old ones
+ *   h  on a retina screen (deviceScaleFactor 2) the kept pages are the right size, and the page on the stage after a turn is the page drawn fresh
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -103,8 +104,8 @@ async function makeSet(page, name, titles, brk = 0){
   }
 }
 const play = async page => { await page.click('#view [data-play]'); await page.waitForSelector('#viewer.on #stage .sheet canvas'); await page.evaluate(() => document.querySelector('#viewer').classList.remove('hide')); };
-async function session(ctx, {off = false, viewport} = {}){
-  const s = await ctx.session({serviceWorkers: 'block', ...(viewport ? {viewport} : {})});
+async function session(ctx, {off = false, viewport, dsf} = {}){
+  const s = await ctx.session({serviceWorkers: 'block', ...(viewport ? {viewport} : {}), ...(dsf ? {deviceScaleFactor: dsf} : {})});
   await s.page.addInitScript(spyScript);
   if(off) await s.page.addInitScript(() => { try{ localStorage.setItem('ss-ready', '0'); }catch(e){} });
   return s;
@@ -136,6 +137,21 @@ const fidelity = page => page.evaluate(async () => {
   return r;
 });
 
+/* The page on the stage against the same page drawn fresh (same size, same crop), and its CSS size against the canvas size / pixel ratio. In the page, on the song showing. */
+const stageMatches = page => page.evaluate(async () => {
+  const pre = await import('./js/prerender.js'), vw = await import('./js/viewer.js'), st = await import('./js/store.js'), {V} = vw;
+  const FULL = {x: 0, y: 0, w: 1, h: 1}, c = st.cropOf(V.song, V.page) || FULL, suffix = [c.x, c.y, c.w, c.h].join(',');
+  const key = pre.readyState().keys.find(k => k.startsWith(V.id + '|' + V.page + '|') && k.endsWith('|' + suffix));
+  const [W, H] = key.split('|')[2].split('@')[0].split('x').map(Number), dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const small = cv => { const x = document.createElement('canvas'); x.width = 96; x.height = 76; const g = x.getContext('2d'); g.drawImage(cv, 0, 0, 96, 76); return g.getImageData(0, 0, 96, 76).data; };
+  const diff = (a, b) => { let t = 0; for(let i = 0; i < a.length; i++) t += Math.abs(a[i] - b[i]); return t / a.length; };
+  const cv = document.querySelector('#stage .sheet canvas:not(.ink)'), sheet = cv.parentElement;
+  const fresh = await vw.paintPage(V.doc, V.page, W, H, c);
+  const r = {diff: diff(small(cv), small(fresh.cv)), cssW: parseFloat(sheet.style.width), canvasW: cv.width, freshW: fresh.cv.width, dpr};
+  fresh.cv.width = fresh.cv.height = 0;
+  return r;
+});
+
 const PHOTOS = ['Photo One', 'Photo Two', 'Photo Three', 'Photo Four', 'Photo Five'];
 /* Three scanned songs of two pages (the LAST one cropped: the song next to the first is drawn by the normal prefetch before the pass starts, so only a later song shows whether the pass keeps crops right), a setlist of them, "Two pages" as the app has it (on). big: larger scans, so a page takes longer. */
 async function photoSet(ctx, opts = {}){
@@ -161,6 +177,9 @@ export const loops = [
       assert(st.snaps === 9, `the pass kept ${st.snaps} pages, want 9 (three songs of three pages)`);
       assert(st.bytes > 0 && st.failed === 0, `bytes ${st.bytes}, failed ${st.failed}`);
       assert(st.live === 0, `the pass still holds ${st.live} canvases once it is done (each is emptied the moment its picture is made)`);
+      /* the order the pages were kept in: the rest of the song showing, then each later song, page by page */
+      const order = await page.evaluate(async () => { const st = await import('./js/store.js'), m = await import('./js/prerender.js'); return m.readyState().keys.map(k => { const [id, pn] = k.split('|'); return st.state.songs.find(x => x.id === id).title.split(' ')[0] + ' ' + pn; }); });
+      assert(order.join() === 'Alpha 1,Alpha 2,Alpha 3,Bravo 1,Bravo 2,Bravo 3,Charlie 1,Charlie 2,Charlie 3', 'the pages were kept in this order: ' + order.join());
       /* the line */
       await waitFor(async () => (await page.evaluate(() => window.__ready)).slice(-1)[0] === '', 'the "Ready" line never went away', 8000);
       const said = await page.evaluate(() => window.__ready);
@@ -204,6 +223,8 @@ export const loops = [
       }
       const d = await pdfStats(page);
       assert(d.renders === 0, `${d.renders} pages were drawn by pdf.js during turns that every page of was already kept for`);
+      const sm = await stageMatches(page);
+      assert(sm.diff < 4 && Math.abs(sm.cssW - sm.canvasW / sm.dpr) <= 1.5, `the page on the stage after the turns differs from the page drawn fresh by ${sm.diff.toFixed(2)} (of 255) and is ${sm.cssW} CSS px wide for a ${sm.canvasW}px canvas at ${sm.dpr}x`);
       /* the last song is cropped: its kept pages are the cropped pages, equal to the pages drawn fresh with that crop */
       const f3 = await fidelity(page);
       assert(f3.same1 < 4 && f3.same2 < 4, `the CROPPED song's kept pages differ from the pages drawn fresh by ${f3.same1.toFixed(2)} and ${f3.same2.toFixed(2)} (of 255) on average, want under 4`);
@@ -270,6 +291,7 @@ export const loops = [
       await quiet('a redraw (what the Crop screen and a resize do)', () => page.evaluate(async () => (await import('./js/viewer.js')).draw()));
       await waitFor(() => page.evaluate(async () => !(await import('./js/viewer.js')).V.busy), 'the turn never finished', 10000);      // a title tap during a turn does nothing
       await stays('a dialog was open', async () => { await page.click('#vTitle'); await page.locator('.modal').waitFor(); }, async () => { await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('.modal')); });
+      await stays('a turn was under way', () => page.evaluate(async () => { (await import('./js/viewer.js')).V.busy = true; }), () => page.evaluate(async () => { (await import('./js/viewer.js')).V.busy = false; }));
       await stays('Annotate was on', () => page.click('#vAnn'), () => page.click('#tDone'));
       await stays('the Crop screen was open', () => page.click('#vCrop'), async () => { await page.click('#cropCancel'); await page.waitForFunction(() => document.querySelector('#cropper').hidden); });
       await stays('the page was hidden', () => page.evaluate(() => Object.defineProperty(document, 'hidden', {configurable: true, get: () => true})), () => page.evaluate(() => { delete document.hidden; }));
@@ -345,12 +367,20 @@ export const loops = [
   }
 },
 {
-  name: 'ready f: a tap while a page is being drawn cancels that page',
+  name: 'ready f: the pass never draws while the viewer is drawing, and a tap while a page is being drawn cancels that page',
   async run(ctx){
-    const s = await photoSet(ctx, {big: true}), {page} = s;
+    const s = await photoSet(ctx, {big: true, songs: 5}), {page} = s;
     try{
       await fast(page, {idle: 60, kick: 100, gap: 0});
       await play(page);
+      /* the viewer's own pages (the one showing, the spread ahead, the next song) are drawn first; the pass waits for them */
+      const overlap = await page.evaluate(async () => {
+        const {V} = await import('./js/viewer.js'), pre = await import('./js/prerender.js');
+        let hit = 0, looks = 0; const end = Date.now() + 2500;
+        while(Date.now() < end){ looks++; const own = [...V.cache.keys()].some(k => !V.cache.settled.has(k)); if(pre.readyState().drawing && own) hit++; await new Promise(r => setTimeout(r, 8)); }
+        return {hit, looks};
+      });
+      assert(overlap.hit === 0, `the pass was drawing a page while the viewer was drawing its own, ${overlap.hit} times in ${overlap.looks} looks`);
       let cancelled = 0;
       for(let attempt = 0; attempt < 4 && !cancelled; attempt++){
         await waitFor(async () => (await state(page)).drawing, 'the pass never had a page under way', 15000);
@@ -360,7 +390,7 @@ export const loops = [
       }
       assert(cancelled >= 1, 'a tap while a page was being drawn did not cancel it (pdf.js kept drawing a page nobody is waiting for)');
       await page.evaluate(() => document.querySelector('#viewer').classList.remove('hide'));
-      await kept(page, 6);
+      await kept(page, 10);
       assert((await state(page)).live === 0, 'a canvas is still held after the pass');
       assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
     } finally { await s.close(); }
@@ -384,6 +414,29 @@ export const loops = [
       assert((await pdfStats(page)).renders === 0, 'the turn into the song with the new crop drew with pdf.js: the pictures made for the new crop were not used');
       const f = await fidelity(page);
       assert(f.same1 < 4 && f.same2 < 4, `with a new crop the page on show differs from the page drawn fresh by ${f.same1.toFixed(2)} and ${f.same2.toFixed(2)} (of 255): a picture of the OLD crop was used`);
+      assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
+    } finally { await s.close(); }
+  }
+},
+{
+  name: 'ready h: on a retina screen the kept pages are the right size and the page on the stage after a turn is the page drawn fresh',
+  async run(ctx){
+    const s = await photoSet(ctx, {dsf: 2}), {page} = s;
+    try{
+      await play(page); await kept(page, 6);
+      const f = await fidelity(page);
+      assert(f.size[0] === f.size[2] && f.size[1] === f.size[3], `at 2x a kept page is ${f.size[0]}x${f.size[1]}, the page drawn fresh ${f.size[2]}x${f.size[3]}`);
+      assert(f.same1 < 4 && f.same2 < 4, `at 2x a kept page differs from the page drawn fresh by ${f.same1.toFixed(2)} and ${f.same2.toFixed(2)} (of 255)`);
+      await page.evaluate(() => { window.__pdf.renders = 0; });
+      for(const t of ['Photo Two', 'Photo Three']){
+        await page.keyboard.press('ArrowRight'); await sleep(600);
+        assert((await vState(page)).title === t, 'the turn did not reach ' + t);
+        const sm = await stageMatches(page);
+        assert(sm.dpr === 2, 'test setup: the pixel ratio is ' + sm.dpr);
+        assert(sm.canvasW === sm.freshW, `${t}: the canvas on the stage is ${sm.canvasW}px wide, drawn fresh ${sm.freshW}px`);
+        assert(Math.abs(sm.cssW - sm.canvasW / 2) <= 1.5, `${t}: the page is ${sm.cssW} CSS px wide for a ${sm.canvasW}px canvas at 2x (a kept page's size taken for its CSS size)`);
+        assert(sm.diff < 4, `${t}: the page on the stage differs from the page drawn fresh by ${sm.diff.toFixed(2)} (of 255)`);
+      }
       assert(s.errors.length === 0, 'page errors: ' + s.errors.join(' | '));
     } finally { await s.close(); }
   }

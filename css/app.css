@@ -88,7 +88,7 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 .chrome button{background:#2a2c33;border-color:#3a3d45;color:#eeeae2}
 .chrome button[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:#fff}
 #vtop{top:0}
-.ttl{flex:1 1 160px;overflow:hidden;white-space:nowrap}
+.ttl{flex:1 1 160px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .ttl b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:17px}
 .ttl span{font-size:13px;color:#aeaba3}
 .ttl #vReady{margin-left:10px;color:#9ec99e}

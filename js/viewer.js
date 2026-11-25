@@ -251,7 +251,8 @@ function readyPlan(){
   for(let qi = V.qi - 1; qi >= 0; qi--) add(qi, n => down(n, 1));
   return out;
 }
-const readyPaused = () => !viewer.classList.contains('on') || V.busy || inkBusy() || V.annot || document.hidden || !!document.querySelector('.modal') || !$('#cropper').hidden;
+const readyPaused = () => !viewer.classList.contains('on') || V.busy || inkBusy() || V.annot || document.hidden || !!document.querySelector('.modal') || !$('#cropper').hidden
+  || [...V.cache.keys()].some(k => !V.cache.settled.has(k));        // the viewer's own drawing (the page showing, the spread ahead, a song being readied) goes first: two big scans at once cost memory and slow both
 /* "Ready 7 of 25" in the top bar beside the page line; "All ready" for a few seconds at the end. */
 function readyShow(done, total, state){
   const el = $('#vReady'); if(!el) return;

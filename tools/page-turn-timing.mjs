@@ -121,8 +121,8 @@ const INSTALL = () => {
       if(!cv || cv === old || !re.test(sub.textContent)) return;
       if(painted(cv)) finish(resolve, {ms: now - t0, painted: true});     // a blank canvas keeps the clock running
     };
-    const up = () => {
-      t0 = performance.now(); old = stage.querySelector('.sheet canvas:not(.ink)');
+    const up = (e) => {
+      t0 = e.timeStamp; old = stage.querySelector('.sheet canvas:not(.ink)');
       obs = new MutationObserver(check); obs.observe(stage, {childList: true, subtree: true}); obs.observe(sub, {childList: true, characterData: true, subtree: true});
       check();
     };
