@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-27: An older iPad no longer says the screen stays on
+- On an iPad or iPhone with a system older than 18.4, an app opened from the Home Screen is allowed to ask for the screen to stay on, and the screen dims anyway. The screen button now shows that this tablet may dim, and the first song you open says to set Auto-Lock to Never in Settings. Other tablets, and newer iPads, work as before.
+
 ## 2026-11-25: Setlist Stand is now ChartShark
 - **New name.** The app is called ChartShark everywhere you see it: the home screen, the page title, the messages, the privacy page and the files it saves ("... - ChartShark share.zip", "Setlists - ChartShark.zip").
 - **New icon.** A chord chart page with a red shark fin rising through it.

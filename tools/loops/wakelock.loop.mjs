@@ -5,7 +5,8 @@
  * system's 'release' event, and can refuse (mode 'reject') or not exist at all (mode 'missing'). What is closed
  * here: what the app PRODUCED (its requests and releases, the button's aria-pressed, data-state and labels, the
  * saved `ss-awake` preference, the toasts it showed, the boxes of the top bar) is read back and compared with what
- * the fake says really happened.
+ * the fake says really happened. An iPad Home Screen app is stood in for by setting `navigator.standalone` and taking
+ * away or giving `Iterator.prototype.map` (Safari 18.4); the real dimming is only seen on a real iPad.
  */
 import path from 'node:path';
 import {FIX, assert, sleep} from './harness.mjs';
@@ -291,9 +292,53 @@ async function blockedStorageLoop(ctx){
   } finally { await s.close(); }
 }
 
+/* ---------- (e) a Home Screen app before iPadOS 18.4 is given a lock that does nothing: never say "stays on" ---------- */
+async function homeScreenLoop(ctx){
+  /* standalone: what only iOS sets; newer: Iterator.prototype.map, which Safari got in 18.4; works: the lock can be trusted */
+  for(const c of [
+    {what: 'a Home Screen app before 18.4', standalone: true, newer: false, works: false},
+    {what: 'a Home Screen app on 18.4 or newer', standalone: true, newer: true, works: true},
+    {what: 'an older browser tab', standalone: false, newer: false, works: true},
+  ]){
+    const s = await ctx.session();
+    try{
+      const {page} = s;
+      await stub(page, 'ok');
+      await page.addInitScript(c => {
+        Object.defineProperty(navigator, 'standalone', {configurable: true, value: c.standalone});
+        const proto = globalThis.Iterator && globalThis.Iterator.prototype;
+        if(!c.newer){ if(proto) delete proto.map; }
+        else if(!proto) globalThis.Iterator = {prototype: {map(){}}};
+        else if(!proto.map) proto.map = function(){};
+      }, c);
+      await s.goto();
+      await addSong(page);
+      assert(await page.evaluate(() => typeof globalThis.Iterator?.prototype?.map === 'function') === c.newer, `${c.what}: the test did not set up the browser it meant to`);
+      await open(page);
+      if(c.works){
+        await inState(page, 'held', 'true');
+        assert((await wl(page)).held === 1, `${c.what}: no screen lock: ` + JSON.stringify(await wl(page)));
+        assert(!(await toasts(page)).length, `${c.what}: a toast although the lock works: ` + (await toasts(page)).join(' | '));
+      }else{
+        await inState(page, 'dim', 'false');
+        await waitFor(async () => (await toasts(page)).length >= 1, `${c.what}: nothing said the screen may dim`);
+        assert((await toasts(page)).join('|') === MAY_DIM, `${c.what}: toast: ` + (await toasts(page)).join(' | '));
+        assert(await tap(page) === 'Screen can dim', `${c.what}: toast after turning off`);
+        assert(await tap(page) === MAY_DIM, `${c.what}: turning it on must not say "Screen stays on"`);
+        await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+        await sleep(500);
+        await inState(page, 'dim', 'false');
+        assert((await wl(page)).requests === 0, `${c.what}: a lock was asked for: ` + JSON.stringify(await wl(page)));
+      }
+      assert(!s.errors.length, `${c.what}: page errors: ` + s.errors.join(' | '));
+    } finally { await s.close(); }
+  }
+}
+
 export const loops = [
   {name: 'wakelock: the lock follows the viewer, the preference and the button; a system release shows; bar layout', run: lockLoop},
   {name: 'wakelock: the choice holds when localStorage is blocked', run: blockedStorageLoop},
   {name: 'wakelock: a refused lock shows as not held, with one toast per page load', run: rejectLoop},
   {name: 'wakelock: no navigator.wakeLock shows as not held', run: missingLoop},
+  {name: 'wakelock: a Home Screen app before iPadOS 18.4 never says the screen stays on', run: homeScreenLoop},
 ];

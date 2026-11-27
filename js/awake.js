@@ -5,7 +5,8 @@ import {$, toast} from './util.js';
      held       the browser gave us the lock                -> aria-pressed true
      off        the preference is off                      -> aria-pressed false
      dim        the preference is on but there is no lock  -> aria-pressed false, amber, "may dim"
-   (no navigator.wakeLock, the request was refused, or the system took the lock back: the sentinel's 'release' event) */
+   (no navigator.wakeLock, the request was refused, the system took the lock back: the sentinel's 'release' event, or a Home
+                                                          Screen app that would be given a lock which does nothing) */
 const KEY = 'ss-awake';
 const MAY_DIM = 'This tablet may dim the screen. Set Auto-Lock to Never in Settings.';
 let sentinel = null, pending = null, isOpen = false, warned = false;
@@ -14,6 +15,10 @@ let chosen = null;
 
 const wanted = () => { if(chosen !== null) return chosen; try{ return localStorage.getItem(KEY) !== '0'; }catch(e){ return true; } };
 const state = () => sentinel ? 'held' : wanted() ? 'dim' : 'off';
+/* A Home Screen app on iOS or iPadOS before 18.4 is given the lock and the screen dims anyway (seen on Jonathan's iPad,
+   17.7.11, 2026-11-27; Safari 18.4 fixed it). Without reading the user agent: only iOS sets `navigator.standalone`, and
+   Safari got `Iterator.prototype.map` in that same 18.4. */
+const lockIgnored = () => navigator.standalone === true && typeof globalThis.Iterator?.prototype?.map !== 'function';
 
 function render(){
   const b = $('#vAwake'); if(!b) return;
@@ -32,7 +37,7 @@ function acquire(){
 }
 async function ask(){
   let got = null;
-  try{ got = await navigator.wakeLock.request('screen'); }catch(e){}      // missing, refused, or the page is hidden
+  if(!lockIgnored()) try{ got = await navigator.wakeLock.request('screen'); }catch(e){}      // missing, refused, or the page is hidden
   if(got && (!isOpen || !wanted())){ try{ got.release(); }catch(e){} got = null; }   // closed or switched off while we waited
   if(got){
     sentinel = got;

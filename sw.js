@@ -18,7 +18,7 @@
  *   in the Problem log).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-25-4';
+const VERSION = '2026-11-27-1';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -109,7 +109,7 @@ const HASHES = {
   'icons/icon-512.png': 'f8b571ad44241adf748fef5fd47cc1aeb87bc4a2a08317a7178c819a2d1b106a',
   'icons/icon-maskable-512.png': '5c54bb1736fc0d4941b24b85aed9e9f1729e23f70bf6806903e06b58775ea4be',
   'index.html': 'a8ca1c4cfb69060ad7dd00fcdfc89b8618b2c84121cf9220fc1549ea2e1ed289',
-  'js/awake.js': '9a88125cf759c41d88900888af4a432574643d302da843301273756d3230e20d',
+  'js/awake.js': '5e2c189dbaf850421b76a1a8dafc1143d22903913832c0ec93875ff7a7277563',
   'js/azstrip.js': '59ed96b60694ab504c163f9aaf8fac0cdee5554b54cb23b1249404c59a0d1e2f',
   'js/backnav.js': 'd39acc3113a466b40a2ddbd4174b62e7ffc3233bd79db8bf4aadfccc2f754d41',
   'js/backup.js': 'b099a28400ba895bb5cf8089728f0c5926835d965030c31f0798c5fb3b536698',
