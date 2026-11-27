@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-27: Backup files are named ChartShark
+- A new backup file is named `ChartShark-backup-<date>-<time>.zip`, from Back up everything and from the weekly copy in Google Drive. Backups made earlier keep their `setlist-stand-backup-...` names and still restore; Drive still tidies them up with the rest.
+
 ## 2026-11-27: An older iPad no longer says the screen stays on
 - On an iPad or iPhone with a system older than 18.4, an app opened from the Home Screen is allowed to ask for the screen to stay on, and the screen dims anyway. The screen button now shows that this tablet may dim, and the first song you open says to set Auto-Lock to Never in Settings. Other tablets, and newer iPads, work as before.
 

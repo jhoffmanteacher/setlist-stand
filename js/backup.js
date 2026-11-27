@@ -12,11 +12,11 @@ import {askRestore, restoredText, showRestored} from './restoreask.js';
    per-record checks below (ID_RE, LIMITS, okId, okText, okPage) do not depend on it. */
 export const BACKUP_VERSION = 3;
 export const LAST_BACKUP = 'ss-last-backup';     // localStorage: time (ms) of the last backup that was saved
-/* The file name of a backup made at time t: the LOCAL date and time, "setlist-stand-backup-2026-11-23-2115.zip" (the UTC date
+/* The file name of a backup made at time t: the LOCAL date and time, "ChartShark-backup-2026-11-23-2115.zip" (the UTC date
    named an evening backup in California for tomorrow). Restore takes any .zip, so only people read this name. */
 export function backupName(t){
   const d = new Date(t), two = n => String(n).padStart(2, '0');
-  return `setlist-stand-backup-${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.zip`;
+  return `ChartShark-backup-${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.zip`;
 }
 /* A backup must always restore. Restore is strict (every live song has its PDF, and the PDF matches the recorded hash), so
    each song's hash is computed here from the PDF actually stored, and a live song with no stored PDF is left out (and counted

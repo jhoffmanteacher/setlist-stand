@@ -41,7 +41,7 @@ Review rules for marks (2026-11-22, an independent review of the first build): a
 
 ## The backup copy and the reminder (2026-11-23)
 
-Backup copy in Drive (`js/drivebackup.js`): after a FINISHED sync (after `ss-last-sync` is written, never when the run was full, stopped or failed), a weekly copy of the whole library is sent to a marked `Backups` sub-folder (mark `{setlistStand:'backups'}`, made at the first copy, never listed by `listLibrary`). The file is `setlist-stand-backup-YYYY-MM-DD.zip`, exactly `makeBackup()`'s blob, properties `{k:'backup', t:<ms when packing began>}`.
+Backup copy in Drive (`js/drivebackup.js`): after a FINISHED sync (after `ss-last-sync` is written, never when the run was full, stopped or failed), a weekly copy of the whole library is sent to a marked `Backups` sub-folder (mark `{setlistStand:'backups'}`, made at the first copy, never listed by `listLibrary`). The file is `ChartShark-backup-YYYY-MM-DD-HHMM.zip`, exactly `makeBackup()`'s blob, properties `{k:'backup', t:<ms when packing began>}`.
 - Due when the newest marked copy's `createdTime` and this tablet's `ss-drive-backup` (per tablet, never synced) are both 7 or more calendar days old; this tablet's own fresh note means no request at all; an empty library makes none; over `limits.maxBytes` (150 MB, as Download all) none.
 - After the send, `ss-last-backup` is set to the time packing began (a copy counts as a backup). The last 4 are kept; older marked files go to the Drive bin (`trashed:true`); unmarked files and files outside the folder are never touched.
 - Stop, a full Drive and any error end only the copy, and the report says which. `driveBackup()` never throws.

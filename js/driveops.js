@@ -6,7 +6,7 @@
      Charts                          one PDF per song: name "<title>.pdf", properties {k:'pdf', id:<song id>, h:<sha-256 hex>}
      Library data (do not edit)      one JSON file per record: name "<kind>-<id>.json", the record itself as the content,
                                      properties {k:<kind>, id, u:<updated>, c:<canonical hash>, d:'1' for a deletion marker}
-     Backups                         the backup copies (js/drivebackup.js): "setlist-stand-backup-<date>.zip", properties {k:'backup', t:<ms when packing began>}.
+     Backups                         the backup copies (js/drivebackup.js): "ChartShark-backup-<date>.zip", properties {k:'backup', t:<ms when packing began>}.
                                      Made at the first copy; NEVER listed by listLibrary, so a sync never reads, merges, counts or sweeps it.
      Marks (do not edit)             one JSON file per ink page (Part 3): name "ink-<song id>-<page>.json" (inkFileName in
                                      js/syncink.js), the page record {updated, strokes} as the content, properties

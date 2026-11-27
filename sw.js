@@ -18,7 +18,7 @@
  *   in the Problem log).
  * - All URLs are relative because the app is served from /setlist-stand/.
  */
-const VERSION = '2026-11-27-1';
+const VERSION = '2026-11-27-2';
 const CACHE = `setlist-stand-${VERSION}`;
 
 const PRECACHE = [
@@ -112,7 +112,7 @@ const HASHES = {
   'js/awake.js': '5e2c189dbaf850421b76a1a8dafc1143d22903913832c0ec93875ff7a7277563',
   'js/azstrip.js': '59ed96b60694ab504c163f9aaf8fac0cdee5554b54cb23b1249404c59a0d1e2f',
   'js/backnav.js': 'd39acc3113a466b40a2ddbd4174b62e7ffc3233bd79db8bf4aadfccc2f754d41',
-  'js/backup.js': 'b099a28400ba895bb5cf8089728f0c5926835d965030c31f0798c5fb3b536698',
+  'js/backup.js': '0e4b842385c321e225893531c8013a3c44b9af700bb9498ee1dbf7d695a813b7',
   'js/boot.js': 'e41f709777a3ebae56f696518c4888fa0df1375d0832d2aed75384fd3e35f1e1',
   'js/chartfile.js': 'cf4161021caf3b43a9812c65482f0aeb0747215abee0209bb44df85da5277e6b',
   'js/chartupdate.js': '7db054ba665254e72f66a004786116806f728390e1fab7f97630db1f7abf5f93',
@@ -124,7 +124,7 @@ const HASHES = {
   'js/drive.js': '25261083d1bc431f9865de4f01bc666c7abf88f478f91b01c7568c4d14ba8afd',
   'js/drivebackup.js': '22b243900ef2488cf793cb6bdc3a4a3740f1161021f8c66851cbdd4b1e36276d',
   'js/driveconfig.js': '40d2d34a011e08376794c6b50996c4ce05df8d379f1432620296e6277347bea0',
-  'js/driveops.js': 'afae1163a786c08b4347e5165a8648876e36500b9b2b8144d52a7e6dfe03420c',
+  'js/driveops.js': '3dd3ffd266171dabaa7d298ac157d5538d6ce19215a17e4638b48e6afc9b8120',
   'js/errors.js': '55ee81614f4a40dbb33e74c8e2c900918b764489e4c27ba375c2c48413b6fd7a',
   'js/gigdate.js': '1b95c203e30c661ca6b9ff5e8b844249b66f63097d335092c014bb80762dff9b',
   'js/gigui.js': 'fc3c11f3aa50020c98a37ab045174991e74507e2ec8c63171da02d5160235b8e',

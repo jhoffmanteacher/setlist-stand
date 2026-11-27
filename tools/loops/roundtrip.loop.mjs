@@ -773,9 +773,9 @@ async function loopBackupName(ctx){
     /* the expected name, worked out in Node from the zone's own calendar (a path of its own, not the app's) */
     const local = ms => {
       const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).formatToParts(new Date(ms)).map(x => [x.type, x.value]));
-      return `setlist-stand-backup-${p.year}-${p.month}-${p.day}-${p.hour}${p.minute}.zip`;
+      return `ChartShark-backup-${p.year}-${p.month}-${p.day}-${p.hour}${p.minute}.zip`;
     };
-    const cases = [['2026-11-24T05:15:30Z', 'setlist-stand-backup-2026-11-23-2115.zip'], ['2026-11-24T08:05:00Z', 'setlist-stand-backup-2026-11-24-0005.zip'], ['2026-07-04T06:59:59Z', 'setlist-stand-backup-2026-07-03-2359.zip']];
+    const cases = [['2026-11-24T05:15:30Z', 'ChartShark-backup-2026-11-23-2115.zip'], ['2026-11-24T08:05:00Z', 'ChartShark-backup-2026-11-24-0005.zip'], ['2026-07-04T06:59:59Z', 'ChartShark-backup-2026-07-03-2359.zip']];
     for(const [iso, la] of cases){
       await s.page.clock.setFixedTime(new Date(iso));
       const {name, file} = await backupNow(s.page);

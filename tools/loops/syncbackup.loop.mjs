@@ -22,7 +22,7 @@ const finished = (r, what) => assert(r.state === 'finished', `${what}: the sync 
 const noErrors = (...ts) => { for(const t of ts){ const e = pageErrors(t); assert(!e.length, `${t.name}: page errors: ${e.join(' | ')}`); } };
 const ls = (t, k) => t.page.evaluate(k => localStorage.getItem(k), k);
 const setLs = (t, k, v) => t.page.evaluate(([k, v]) => v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v), [k, v]);
-const SAVED = /Saved a backup copy in your Google Drive \((setlist-stand-backup-\d{4}-\d{2}-\d{2}-\d{4}\.zip), (\d+) MB\)\. The last 4 are kept in the Backups folder\./;
+const SAVED = /Saved a backup copy in your Google Drive \((ChartShark-backup-\d{4}-\d{2}-\d{2}-\d{4}\.zip), (\d+) MB\)\. The last 4 are kept in the Backups folder\./;
 const uploads = (t, from) => t.google.requests.slice(from).filter(e => e.by === t.name && e.kind === 'upload');
 const copies = g => readDrive(g).backups;
 /* The stand-in dates a file with the real clock; in these cases the tablet's clock is moved on. Real Drive's clock and the tablet's agree, so the newest
@@ -64,9 +64,9 @@ async function loopFirst(ctx){
     const mine = await JSZip.loadAsync(fs.readFileSync(bk.file)), theirs = await JSZip.loadAsync(d.backups[0].bytes);
     /* named like Back up everything's file: the LOCAL date and time the packing began (the minute can have moved on by the time Back up everything ran) */
     const two = n => String(n).padStart(2, '0'), began = new Date(d.backups[0].t);
-    const localName = `setlist-stand-backup-${began.getFullYear()}-${two(began.getMonth() + 1)}-${two(began.getDate())}-${two(began.getHours())}${two(began.getMinutes())}.zip`;
+    const localName = `ChartShark-backup-${began.getFullYear()}-${two(began.getMonth() + 1)}-${two(began.getDate())}-${two(began.getHours())}${two(began.getMinutes())}.zip`;
     assert(d.backups[0].name === localName, `the copy is named ${d.backups[0].name}, the local date and time it began at give ${localName}`);
-    assert(/^setlist-stand-backup-\d{4}-\d\d-\d\d-\d{4}\.zip$/.test(bk.name) && bk.name.slice(0, -9) === localName.slice(0, -9), `the copy is named ${d.backups[0].name}, Back up everything names its file ${bk.name}`);
+    assert(/^ChartShark-backup-\d{4}-\d\d-\d\d-\d{4}\.zip$/.test(bk.name) && bk.name.slice(0, -9) === localName.slice(0, -9), `the copy is named ${d.backups[0].name}, Back up everything names its file ${bk.name}`);
     const strip = async z => { const j = JSON.parse(await z.file('library.json').async('string')); delete j.saved; return j; };
     const dj = diff(await strip(theirs), await strip(mine));
     assert(!dj.length, 'library.json of the copy in Drive differs from the one Back up everything makes: ' + dj.join(' | '));
@@ -148,8 +148,8 @@ async function loopKeep(ctx){
     const g = A.google, d0 = readDrive(g);
     /* things that look a little like copies but are not ours to tidy */
     const unmarkedInBackups = g.addFile({name: 'my own notes.zip', mimeType: 'application/zip', parents: [d0.backupFolder.id], content: 'not a backup'});
-    const markedInCharts = g.addFile({name: 'setlist-stand-backup-2020-01-01.zip', mimeType: 'application/zip', parents: [d0.charts.id], appProperties: {k: 'backup', t: '1577836800000'}, content: 'strays in Charts'});
-    const unmarkedInHome = g.addFile({name: 'setlist-stand-backup-2019-01-01.zip', mimeType: 'application/zip', parents: [d0.home.id], content: 'in the home folder'});
+    const markedInCharts = g.addFile({name: 'ChartShark-backup-2020-01-01.zip', mimeType: 'application/zip', parents: [d0.charts.id], appProperties: {k: 'backup', t: '1577836800000'}, content: 'strays in Charts'});
+    const unmarkedInHome = g.addFile({name: 'ChartShark-backup-2019-01-01.zip', mimeType: 'application/zip', parents: [d0.home.id], content: 'in the home folder'});
     const names = [];
     for(let i = 1; i <= 5; i++){
       await setClock(A, i * 8 * DAY);
@@ -320,7 +320,7 @@ async function loopDue(ctx){
     const g = A.google, ago = d => new Date(Date.now() - d * DAY).toISOString();
     const home = readDrive(g).home.id;
     const folder = g.addFile({name: 'Backups', mimeType: FOLDER, parents: [home], appProperties: {setlistStand: 'backups'}});
-    const hand = (days) => g.addFile({name: 'setlist-stand-backup-2026-01-01.zip', mimeType: 'application/zip', parents: [folder], appProperties: {k: 'backup', t: String(Date.now() - days * DAY)}, content: 'an earlier copy', createdTime: ago(days)});
+    const hand = (days) => g.addFile({name: 'ChartShark-backup-2026-01-01.zip', mimeType: 'application/zip', parents: [folder], appProperties: {k: 'backup', t: String(Date.now() - days * DAY)}, content: 'an earlier copy', createdTime: ago(days)});
     const step = async (what, want) => {
       const r = await syncTap(A); finished(r, what);
       assert(SAVED.test(r.text) === want, `${what}: ${want ? 'a copy was due and none was made' : 'a copy was made though none was due'}: ${r.text}`);

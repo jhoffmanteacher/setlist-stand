@@ -77,7 +77,7 @@ export const loops = [
     await tab('sets'); await shown('Setlists tab after a change', /^Changes since your last backup \(today\)\./);
     /* its own button makes a backup, and then it is gone */
     const dl2 = await download(page, () => page.click('#libNudge [data-backupnow]'));
-    assert(/^setlist-stand-backup-.*\.zip$/.test(dl2.name), 'reminder button download name: ' + dl2.name);
+    assert(/^ChartShark-backup-.*\.zip$/.test(dl2.name), 'reminder button download name: ' + dl2.name);
     await gone('after "Back up now"');
     /* a new setlist is a change too */
     await page.click('#view [data-newset]');

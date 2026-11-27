@@ -1,6 +1,6 @@
 # ChartShark
 
-Formerly Setlist Stand (renamed 2026-11-25). The web address and backup file names still say "setlist-stand" so existing libraries and backups keep working. A Google Drive folder made before the rename is still called "Setlist Stand" until you rename it; the app finds it either way.
+Formerly Setlist Stand (renamed 2026-11-25). The web address still says "setlist-stand" so existing libraries keep working. Backup files made since 2026-11-27 are named "ChartShark-backup-..."; older backups still restore. A Google Drive folder made before the rename is still called "Setlist Stand" until you rename it; the app finds it either way.
 
 A music stand for your tablet. Keep your PDF charts in one library, build setlists for a gig, and play them full screen with page turns, pen and highlighter marks, and two pages side by side in landscape.
 
